@@ -1,0 +1,10 @@
+{
+  "name": "compet-server-manager",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "dependencies": {
+    "argon2": "^0.44.0",
+    "zod": "^4.4.1"
+  }
+}

@@ -1,0 +1,47 @@
+{
+  "name": "compet-server-core",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "pwsh -NoProfile -File scripts/clean-server-build.ps1 && tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json",
+    "manager:dev": "electron-vite dev",
+    "manager:build": "electron-vite build",
+    "manager:preview": "electron-vite preview",
+    "player:dev": "electron-vite dev --config electron.player.vite.config.ts",
+    "player:build": "electron-vite build --config electron.player.vite.config.ts",
+    "player:preview": "electron-vite preview --config electron.player.vite.config.ts",
+    "package:server": "npm run build && npm run manager:build && pwsh -NoProfile -File scripts/package-server.ps1",
+    "package:client": "npm run player:build && pwsh -NoProfile -File scripts/package-client.ps1",
+    "package:zip": "npm run package:server && npm run package:client"
+  },
+  "dependencies": {
+    "@ant-design/icons": "^6.2.2",
+    "@fastify/websocket": "^11.2.0",
+    "antd": "^6.3.7",
+    "argon2": "^0.44.0",
+    "fastify": "^5.8.5",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "selfsigned": "^5.5.0",
+    "zod": "^4.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@types/selfsigned": "^2.0.4",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^41.4.0",
+    "electron-vite": "^5.0.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.3",
+    "vite": "^7.3.2",
+    "ws": "^8.20.0"
+  }
+}

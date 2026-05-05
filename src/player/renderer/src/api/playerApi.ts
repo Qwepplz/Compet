@@ -1,0 +1,79 @@
+import type {
+  PlayerFriendListDto,
+  PlayerFriendRequestDto,
+  PlayerFriendSearchResultDto,
+  PlayerLiveMatchStateDto,
+  PlayerMatchmakingStateDto,
+  PlayerPartyDto,
+  PlayerPartyInvitationDto,
+  PlayerRealtimeEvent,
+  PlayerRealtimeSnapshotDto,
+  PlayerRealtimeStatusDto,
+} from "../../../shared/types.js";
+
+export interface PlayerRealtimeApi {
+  refreshRealtimeSnapshot(): Promise<PlayerRealtimeSnapshotDto>;
+  onRealtimeEvent(listener: (event: PlayerRealtimeEvent) => void): () => void;
+  onRealtimeStatus(listener: (status: PlayerRealtimeStatusDto) => void): () => void;
+  onRealtimeSnapshot(listener: (snapshot: PlayerRealtimeSnapshotDto) => void): () => void;
+}
+
+export interface PlayerSavedLoginApi {
+  loadSavedLogin(): Promise<{ baseUrl: string; username?: string; password?: string } | null>;
+}
+
+export interface PlayerFriendsApi {
+  searchFriends(query: string): Promise<PlayerFriendSearchResultDto[]>;
+  listFriends(): Promise<PlayerFriendListDto>;
+  sendFriendRequest(accountId: string): Promise<PlayerFriendRequestDto>;
+  acceptFriendRequest(requestId: string): Promise<PlayerFriendListDto>;
+  declineFriendRequest(requestId: string): Promise<void>;
+}
+
+export interface PlayerPartyApi {
+  getParty(): Promise<PlayerPartyDto | null>;
+  createParty(): Promise<PlayerPartyDto>;
+  inviteToParty(accountId: string): Promise<PlayerPartyInvitationDto>;
+  acceptPartyInvite(invitationId: string): Promise<PlayerPartyDto>;
+  declinePartyInvite(invitationId: string): Promise<void>;
+  leaveParty(): Promise<void>;
+  startPartyMatchmaking(): Promise<PlayerLiveMatchStateDto>;
+}
+
+export interface PlayerMatchRoomApi {
+  getMatchmakingState(): Promise<PlayerMatchmakingStateDto>;
+  acceptReady(): Promise<PlayerLiveMatchStateDto>;
+  declineReady(): Promise<PlayerLiveMatchStateDto>;
+  applyVeto(roomId: string, action: "ban" | "pick", map: string): Promise<PlayerLiveMatchStateDto>;
+  copyText(text: string): Promise<void>;
+}
+
+export type PlayerApiWithRealtime = Window["playerApi"] & Partial<PlayerRealtimeApi>;
+export type PlayerApiWithSavedLogin = Window["playerApi"] & Partial<PlayerSavedLoginApi>;
+export type PlayerApiWithFriends = Window["playerApi"] & Partial<PlayerFriendsApi>;
+export type PlayerApiWithParty = Window["playerApi"] & Partial<PlayerPartyApi>;
+export type PlayerApiWithMatchRoom = Window["playerApi"] & Partial<PlayerMatchRoomApi>;
+
+function hasMethods(api: Window["playerApi"], methods: Array<keyof PlayerRealtimeApi | keyof PlayerSavedLoginApi | keyof PlayerFriendsApi | keyof PlayerPartyApi | keyof PlayerMatchRoomApi>): boolean {
+  return methods.every((method) => typeof (api as Record<string, unknown>)[method] === "function");
+}
+
+export function hasSavedLoginApi(api: Window["playerApi"]): api is PlayerApiWithSavedLogin {
+  return hasMethods(api, ["loadSavedLogin"]);
+}
+
+export function hasRealtimeApi(api: Window["playerApi"]): api is PlayerApiWithRealtime {
+  return hasMethods(api, ["refreshRealtimeSnapshot", "onRealtimeEvent", "onRealtimeStatus", "onRealtimeSnapshot"]);
+}
+
+export function hasFriendsApi(api: Window["playerApi"]): api is PlayerApiWithFriends {
+  return hasMethods(api, ["searchFriends", "listFriends", "sendFriendRequest", "acceptFriendRequest", "declineFriendRequest"]);
+}
+
+export function hasPartyApi(api: Window["playerApi"]): api is PlayerApiWithParty {
+  return hasMethods(api, ["getParty", "createParty", "inviteToParty", "acceptPartyInvite", "declinePartyInvite", "leaveParty", "startPartyMatchmaking"]);
+}
+
+export function hasMatchRoomApi(api: Window["playerApi"]): api is PlayerApiWithMatchRoom {
+  return hasMethods(api, ["getMatchmakingState", "acceptReady", "declineReady", "applyVeto", "copyText"]);
+}

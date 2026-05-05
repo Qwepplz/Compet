@@ -1,0 +1,863 @@
+import { randomUUID } from "node:crypto";
+import type { AccountService } from "../accounts/accountService.js";
+import type { BotCatalog } from "../bots/botCatalog.js";
+import type { FriendListDto } from "../friends/friendService.js";
+import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
+import type { MatchConnectInfo } from "../game/matchExecutor.js";
+import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
+import type { MatchRecordStore } from "../records/matchRecordStore.js";
+import { assignTeams } from "./teamAssignment.js";
+import type { MatchParticipant, MatchPlan } from "./types.js";
+import {
+  MatchmakingStore,
+  type MatchRoomReadyState,
+  type MatchRoomRecord,
+  type PartyInvitationRecord,
+  type PartyRecord,
+  type QueueEntry,
+} from "./matchmakingStore.js";
+import {
+  applyVetoAction,
+  applyVetoTimeout,
+  createVetoState,
+  normalizeVetoState,
+  toPublicVetoState,
+  type PublicVetoState,
+  type VetoAction,
+  type VetoHistoryEntry,
+} from "./vetoService.js";
+
+const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "de_vertigo", "de_ancient", "de_anubis"];
+const MAX_PARTY_HUMANS = 10;
+const READY_TIMEOUT_MS = 60_000;
+type ReadyTimeoutHandle = ReturnType<typeof setTimeout>;
+type ReadyTimeoutScheduler = (handler: () => void, timeoutMs: number) => ReadyTimeoutHandle;
+type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
+
+export type PartyInvitationDto = PartyInvitationRecord;
+
+export interface SteamProfileResolverPort {
+  resolveMany(steam64s: string[]): Promise<Map<string, { personaName: string; avatarUrl?: string }>>;
+}
+
+export interface MatchExecutorPort {
+  prepare(plan: MatchPlan): Promise<MatchConnectInfo>;
+}
+
+export interface MatchmakingServiceDeps {
+  store: MatchmakingStore;
+  accounts: AccountService;
+  friends?: { listFriends(accountId: string): Promise<FriendListDto> };
+  botCatalog: BotCatalog;
+  executor?: MatchExecutorPort;
+  records?: Pick<MatchRecordStore, "saveMatchPlan" | "saveStatus" | "appendEvent">;
+  events?: { publish(event: RealtimeEvent): void };
+  steamProfiles?: SteamProfileResolverPort;
+  mapPool?: string[];
+  now?: () => string;
+  idFactory?: () => string;
+  random?: () => number;
+  setTimeout?: ReadyTimeoutScheduler;
+  clearTimeout?: ReadyTimeoutCanceler;
+  unrefReadyTimeouts?: boolean;
+}
+
+export interface PublicMatchRoomRecord {
+  id: string;
+  phase: MatchRoomRecord["phase"];
+  teamA: MatchRoomRecord["teamA"];
+  teamB: MatchRoomRecord["teamB"];
+  humanAccountIds?: string[];
+  botParticipantIds?: string[];
+  ready?: MatchRoomReadyState[];
+  readyDeadlineAt?: string;
+  partyId?: string;
+  veto?: PublicVetoState;
+  connect?: MatchConnectInfo;
+  createdAt: string;
+}
+
+export class MatchmakingService {
+  private readonly now: () => string;
+  private readonly idFactory: () => string;
+  private readonly random?: () => number;
+  private readonly setTimeoutFn: ReadyTimeoutScheduler;
+  private readonly clearTimeoutFn: ReadyTimeoutCanceler;
+  private readonly unrefReadyTimeouts: boolean;
+  private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
+  private readonly vetoTimeouts = new Map<string, ReadyTimeoutHandle>();
+  private mutationQueue: Promise<unknown> = Promise.resolve();
+
+  constructor(private readonly deps: MatchmakingServiceDeps) {
+    this.now = deps.now ?? (() => new Date().toISOString());
+    this.idFactory = deps.idFactory ?? randomUUID;
+    this.random = deps.random;
+    this.setTimeoutFn = deps.setTimeout ?? setTimeout;
+    this.clearTimeoutFn = deps.clearTimeout ?? clearTimeout;
+    this.unrefReadyTimeouts = deps.unrefReadyTimeouts ?? true;
+  }
+  createParty(ownerAccountId: string): Promise<PartyRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(ownerAccountId);
+      const parties = await this.deps.store.listParties();
+      const existing = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
+      if (existing) return existing;
+      const now = this.now();
+      const party: PartyRecord = {
+        id: this.idFactory(),
+        ownerAccountId,
+        memberAccountIds: [ownerAccountId],
+        createdAt: now,
+        updatedAt: now,
+        status: "open",
+      };
+
+      await this.deps.store.saveParties([...parties, party]);
+      await this.expirePendingInvitationsForAccount(ownerAccountId);
+      await this.emitPartyUpdated(party);
+      return party;
+    });
+  }
+
+  async getPartyForAccount(accountId: string): Promise<PartyRecord | undefined> {
+    await this.requireAccount(accountId);
+    const parties = await this.deps.store.listParties();
+    return parties.find((party) => party.memberAccountIds.includes(accountId));
+  }
+
+  joinParty(partyId: string, accountId: string): Promise<PartyRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(accountId);
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.id === partyId);
+      if (!party) throw new Error(`party not found: ${partyId}`);
+      this.requireOpenParty(party);
+      if (party.memberAccountIds.includes(accountId)) return party;
+      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(accountId))) {
+        throw new Error("account is already in another party");
+      }
+      const invitations = await this.deps.store.listInvitations();
+      const invitation = invitations.find(
+        (candidate) => candidate.partyId === partyId && candidate.toAccountId === accountId && candidate.status === "pending",
+      );
+      if (!invitation) throw new Error("party invitation required");
+      if (party.memberAccountIds.length >= MAX_PARTY_HUMANS) throw new Error("party is full");
+
+      const resolvedAt = this.now();
+      const updated = { ...party, memberAccountIds: [...party.memberAccountIds, accountId], updatedAt: resolvedAt };
+      const resolvedInvitations = this.resolveAcceptedInvitationAndExpireOthers(invitations, invitation, resolvedAt);
+      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === partyId ? updated : candidate)));
+      await this.deps.store.saveInvitations(resolvedInvitations);
+      await this.emitResolvedInvitations(invitations, resolvedInvitations);
+      await this.emitPartyUpdated(updated);
+      return updated;
+    });
+  }
+
+  leaveParty(accountId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.memberAccountIds.includes(accountId));
+      if (!party) return;
+      this.requireOpenParty(party);
+
+      const remainingMemberIds = party.memberAccountIds.filter((memberId) => memberId !== accountId);
+      const ownerLeft = party.ownerAccountId === accountId;
+      const nextParty: PartyRecord | undefined = remainingMemberIds.length > 0
+        ? {
+            ...party,
+            ownerAccountId: ownerLeft ? remainingMemberIds[0]! : party.ownerAccountId,
+            memberAccountIds: remainingMemberIds,
+            updatedAt: this.now(),
+          }
+        : undefined;
+      const updated = nextParty
+        ? parties.map((candidate) => (candidate.id === party.id ? nextParty : candidate))
+        : parties.filter((candidate) => candidate.id !== party.id);
+
+      await this.deps.store.saveParties(updated);
+      if (ownerLeft) await this.expirePendingInvitationsForParty(party.id);
+      await this.emit({ type: "party_updated", accountIds: [accountId, ...remainingMemberIds], party: nextParty ?? null });
+    });
+  }
+
+  inviteToParty(ownerAccountId: string, toAccountId: string): Promise<PartyInvitationDto> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(toAccountId);
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
+      if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
+      if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
+      this.requireOpenParty(party);
+      if (party.memberAccountIds.length >= MAX_PARTY_HUMANS) throw new Error("party is full");
+      if (party.memberAccountIds.includes(toAccountId)) throw new Error("account is already a party member");
+      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(toAccountId))) {
+        throw new Error("account is already in another party");
+      }
+      const invitations = await this.deps.store.listInvitations();
+      if (invitations.some((candidate) => candidate.partyId === party.id && candidate.toAccountId === toAccountId && candidate.status === "pending")) {
+        throw new Error("party invitation already pending");
+      }
+
+      const friendList = await this.deps.friends?.listFriends(ownerAccountId);
+      const friend = friendList?.friends.find((candidate) => candidate.accountId === toAccountId);
+      if (!friend) throw new Error("party invite target is not a friend");
+      if (!friend.online) throw new Error("party invite target is offline");
+
+      const invitation: PartyInvitationRecord = {
+        id: this.idFactory(),
+        partyId: party.id,
+        fromAccountId: ownerAccountId,
+        toAccountId,
+        status: "pending",
+        createdAt: this.now(),
+      };
+      await this.deps.store.saveInvitations([...invitations, invitation]);
+      await this.emit({ type: "party_invite_received", accountIds: [ownerAccountId, toAccountId], invitation });
+      return invitation;
+    });
+  }
+
+  acceptPartyInvite(accountId: string, invitationId: string): Promise<PartyRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(accountId);
+      const invitations = await this.deps.store.listInvitations();
+      const invitation = this.findInvitation(invitations, invitationId);
+      if (invitation.toAccountId !== accountId) throw new Error("party invitation does not belong to account");
+      if (invitation.status !== "pending") throw new Error("party invitation is not pending");
+
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.id === invitation.partyId);
+      if (!party) throw new Error(`party not found: ${invitation.partyId}`);
+      this.requireOpenParty(party);
+      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(accountId))) {
+        throw new Error("account is already in another party");
+      }
+      if (!party.memberAccountIds.includes(accountId) && party.memberAccountIds.length >= MAX_PARTY_HUMANS) throw new Error("party is full");
+
+      const resolvedAt = this.now();
+      const updated = party.memberAccountIds.includes(accountId)
+        ? { ...party, updatedAt: resolvedAt }
+        : { ...party, memberAccountIds: [...party.memberAccountIds, accountId], updatedAt: resolvedAt };
+      const resolvedInvitations = this.resolveAcceptedInvitationAndExpireOthers(invitations, invitation, resolvedAt);
+      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updated : candidate)));
+      await this.deps.store.saveInvitations(resolvedInvitations);
+      await this.emitResolvedInvitations(invitations, resolvedInvitations);
+      await this.emitPartyUpdated(updated);
+      return updated;
+    });
+  }
+
+  declinePartyInvite(accountId: string, invitationId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(accountId);
+      const invitations = await this.deps.store.listInvitations();
+      const invitation = this.findInvitation(invitations, invitationId);
+      if (invitation.toAccountId !== accountId) throw new Error("party invitation does not belong to account");
+      if (invitation.status !== "pending") throw new Error("party invitation is not pending");
+
+      const resolvedInvitation: PartyInvitationRecord = { ...invitation, status: "declined", resolvedAt: this.now() };
+      await this.deps.store.saveInvitations(
+        invitations.map((candidate) => (candidate.id === invitation.id ? resolvedInvitation : candidate)),
+      );
+      await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation: resolvedInvitation });
+    });
+  }
+
+  startPartyMatchmaking(ownerAccountId: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireMatchmakingAccount(ownerAccountId);
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
+      if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
+      if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
+      this.requireOpenParty(party);
+      await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
+
+      const startedAt = this.now();
+      const humans = await Promise.all(party.memberAccountIds.map((accountId) => this.toHumanParticipant(accountId)));
+      const teams = assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, random: this.random });
+      const participants = [...teams.teamA.participants, ...teams.teamB.participants];
+      const room: MatchRoomRecord = {
+        id: this.idFactory(),
+        phase: "ready",
+        teamA: teams.teamA,
+        teamB: teams.teamB,
+        humanAccountIds: humans.map((participant) => participant.accountId ?? participant.id),
+        botParticipantIds: participants.filter((participant) => participant.kind === "bot").map((participant) => participant.id),
+        ready: this.buildReadyStates(humans),
+        readyDeadlineAt: this.buildReadyDeadlineAt(startedAt),
+        partyId: party.id,
+        createdAt: startedAt,
+      };
+      const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, updatedAt: startedAt };
+      const rooms = [...(await this.deps.store.listRooms()), room];
+
+      await this.deps.store.saveRooms(rooms);
+      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+      this.scheduleReadyTimeout(room);
+      await this.expirePendingInvitationsForParty(party.id);
+      await this.emitPartyUpdated(updatedParty);
+      await this.emit({ type: "match_room_created", matchId: room.id, accountIds: this.roomAudience(room), room: this.toPublicRoom(room) }, room.id);
+      await this.emit(this.toReadyEvent("ready_check_started", room));
+      await this.emit(this.toReadyEvent("ready_check_updated", room));
+      return this.toPublicRoom(room);
+    });
+  }
+
+  enqueue(input: { accountId: string; partyId?: string }): Promise<QueueEntry[]> {
+    return this.enqueueMutation(async () => {
+      await this.requireMatchmakingAccount(input.accountId);
+      if (input.partyId) throw new Error("party matchmaking must be started by owner");
+      const parties = await this.deps.store.listParties();
+      if (parties.some((party) => party.memberAccountIds.includes(input.accountId))) {
+        throw new Error("party matchmaking must be started by owner");
+      }
+
+      const queue = await this.deps.store.listQueue();
+      const queuedAccountIds = new Set(queue.map((entry) => entry.accountId));
+      const added = queuedAccountIds.has(input.accountId) ? [] : [{ accountId: input.accountId, queuedAt: this.now() }];
+      const updated = [...queue, ...added];
+
+      await this.deps.store.saveQueue(updated);
+      await this.emit({
+        type: "queue_updated",
+        accountIds: [input.accountId],
+        queue: updated.filter((entry) => entry.accountId === input.accountId),
+      });
+      return updated;
+    });
+  }
+  cancelQueue(accountId: string): Promise<QueueEntry[]> {
+    return this.enqueueMutation(async () => {
+      const updated = (await this.deps.store.listQueue()).filter((entry) => entry.accountId !== accountId);
+      await this.deps.store.saveQueue(updated);
+      await this.emit({ type: "queue_updated", accountIds: [accountId], queue: [] });
+      return updated;
+    });
+  }
+
+  acceptReady(accountId: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(accountId);
+      const rooms = await this.deps.store.listRooms();
+      const room = this.findReadyRoomForAccount(rooms, accountId);
+      if (!room) throw new Error(`ready room not found for account: ${accountId}`);
+
+      const acceptedAt = this.now();
+      const ready = (room.ready ?? []).map((entry) => {
+        if (entry.accountId !== accountId) return entry;
+        if (entry.ready) return entry;
+        return { ...entry, ready: true, respondedAt: acceptedAt };
+      });
+      const updatedReadyRoom: MatchRoomRecord = { ...room, ready };
+      const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? updatedReadyRoom : candidate));
+      await this.deps.store.saveRooms(updatedRooms);
+      await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
+
+      if (ready.some((entry) => !entry.ready)) {
+        return this.toPublicRoom(updatedReadyRoom);
+      }
+
+      this.clearReadyTimeout(room.id);
+      const initialVeto = this.createInitialVetoState(updatedReadyRoom);
+      const matchRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "map_banpick", veto: initialVeto };
+      const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? matchRoom : candidate));
+      const audience = this.roomAudience(matchRoom);
+      await this.deps.store.saveRooms(finalizedRooms);
+      this.scheduleVetoTimeout(matchRoom);
+      await this.emit({ type: "match_room_created", matchId: matchRoom.id, accountIds: audience, room: this.toPublicRoom(matchRoom) }, matchRoom.id);
+      await this.emit({ type: "teams_assigned", matchId: matchRoom.id, accountIds: audience, teamA: matchRoom.teamA, teamB: matchRoom.teamB }, matchRoom.id);
+      await this.emit({ type: "veto_started", matchId: matchRoom.id, accountIds: audience, veto: toPublicVetoState(initialVeto)! }, matchRoom.id);
+      return initialVeto.finalMap ? this.toPublicRoom(await this.saveRoomAfterVeto(finalizedRooms, matchRoom)) : this.toPublicRoom(matchRoom);
+    });
+  }
+
+  declineReady(accountId: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(accountId);
+      const rooms = await this.deps.store.listRooms();
+      const room = this.findReadyRoomForAccount(rooms, accountId);
+      if (!room) throw new Error(`ready room not found for account: ${accountId}`);
+      return this.toPublicRoom(await this.failReadyRoom(rooms, room, "ready declined"));
+    });
+  }
+
+  expireReady(roomId: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === roomId && candidate.phase === "ready");
+      if (!room) throw new Error(`ready room not found: ${roomId}`);
+      return this.toPublicRoom(await this.failReadyRoom(rooms, room, "ready timed out"));
+    });
+  }
+
+  async getState(accountId: string): Promise<{
+    queue: QueueEntry[];
+    rooms: PublicMatchRoomRecord[];
+    party: PartyRecord | null;
+    partyInvitations: PartyInvitationDto[];
+    room: PublicMatchRoomRecord | null;
+  }> {
+    const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
+    const rooms = (await this.deps.store.listRooms())
+      .filter((room) => this.roomHasAccount(room, accountId))
+      .filter((room) => !isTerminalMatchPhase(room.phase))
+      .map((room) => this.toPublicRoom(room));
+    const party = (await this.deps.store.listParties()).find((candidate) => candidate.memberAccountIds.includes(accountId)) ?? null;
+    const partyInvitations = (await this.deps.store.listInvitations()).filter(
+      (invitation) => invitation.toAccountId === accountId && invitation.status === "pending",
+    );
+    return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms) };
+  }
+
+  applyVeto(input: { roomId: string; accountId: string; action: VetoAction; map: string }): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(input.accountId);
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === input.roomId);
+      if (!room) throw new Error(`room not found: ${input.roomId}`);
+
+      const started = !room.veto;
+      const veto = normalizeVetoState(room.veto ?? this.createInitialVetoState(room));
+      const previousHistoryLength = veto.history.length;
+      const updatedVeto = applyVetoAction(veto, { action: input.action, map: input.map, actorAccountId: input.accountId, now: this.now() });
+      const updated: MatchRoomRecord = { ...room, phase: "map_banpick", veto: updatedVeto };
+
+      if (started) {
+        await this.emit({ type: "veto_started", matchId: room.id, accountIds: this.roomAudience(room), veto: toPublicVetoState(veto)! }, room.id);
+      }
+      await this.emitVetoHistory(room.id, previousHistoryLength, updatedVeto.history, this.roomAudience(updated), toPublicVetoState(updatedVeto)!);
+      return this.toPublicRoom(await this.saveRoomAfterVeto(rooms, updated));
+    });
+  }
+
+  applyVetoTimeoutsUntilFinal(roomId: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === roomId);
+      if (!room) throw new Error(`room not found: ${roomId}`);
+
+      const started = !room.veto;
+      const veto = normalizeVetoState(room.veto ?? this.createInitialVetoState(room));
+      const previousHistoryLength = veto.history.length;
+      let updated: MatchRoomRecord = { ...room, phase: "map_banpick", veto };
+      while (updated.veto?.current) {
+        if (updated.veto.current.actorType === "human") {
+          break;
+        }
+        const timeoutAt = new Date(Date.parse(updated.veto.current.deadlineAt) + 1).toISOString();
+        updated = { ...updated, phase: "map_banpick", veto: applyVetoTimeout(updated.veto, { now: timeoutAt, random: this.random }) };
+      }
+
+      if (started) {
+        await this.emit({ type: "veto_started", matchId: room.id, accountIds: this.roomAudience(room), veto: toPublicVetoState(veto)! }, room.id);
+      }
+      await this.emitVetoHistory(room.id, previousHistoryLength, updated.veto?.history ?? [], this.roomAudience(updated), toPublicVetoState(updated.veto));
+      return this.toPublicRoom(await this.saveRoomAfterVeto(rooms, updated));
+    });
+  }
+
+  completeMatchFromServerExit(matchId: string, exitInfo: GameServerExitInfo): Promise<PublicMatchRoomRecord | undefined> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === matchId);
+      if (!room) return undefined;
+      if (!isServerManagedPhase(room.phase)) return this.toPublicRoom(room);
+
+      const completedAt = this.now();
+      const completed: MatchRoomRecord = { ...room, phase: "completed" };
+      await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));
+      await this.deps.records?.saveStatus(matchId, { phase: "completed", completedAt, serverExit: exitInfo });
+      await this.unlockPartyForRoom(completed, completedAt);
+      await this.emit({ type: "match_completed", matchId, accountIds: this.roomAudience(completed) }, matchId);
+      return this.toPublicRoom(completed);
+    });
+  }
+
+  completeServerManagedRoomsFromServerUnavailable(exitInfo: GameServerExitInfo): Promise<PublicMatchRoomRecord[]> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const targets = rooms.filter((room) => isServerManagedPhase(room.phase));
+      if (targets.length === 0) return [];
+
+      const completedAt = this.now();
+      const completedById = new Map(targets.map((room) => [room.id, { ...room, phase: "completed" as const }]));
+      await this.deps.store.saveRooms(rooms.map((room) => completedById.get(room.id) ?? room));
+
+      for (const completed of completedById.values()) {
+        await this.deps.records?.saveStatus(completed.id, { phase: "completed", completedAt, serverExit: exitInfo });
+        await this.unlockPartyForRoom(completed, completedAt);
+        await this.emit({ type: "match_completed", matchId: completed.id, accountIds: this.roomAudience(completed) }, completed.id);
+      }
+
+      return [...completedById.values()].map((room) => this.toPublicRoom(room));
+    });
+  }
+
+  private expireVeto(roomId: string, timeoutAt: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === roomId);
+      if (!room?.veto?.current) throw new Error(`veto room not found: ${roomId}`);
+
+      const veto = normalizeVetoState(room.veto);
+      const previousHistoryLength = veto.history.length;
+      const updatedVeto = applyVetoTimeout(veto, { now: timeoutAt, random: this.random });
+      const updated: MatchRoomRecord = { ...room, phase: "map_banpick", veto: updatedVeto };
+
+      await this.emitVetoHistory(room.id, previousHistoryLength, updatedVeto.history, this.roomAudience(updated), toPublicVetoState(updatedVeto)!);
+      return this.toPublicRoom(await this.saveRoomAfterVeto(rooms, updated));
+    });
+  }
+
+  private findInvitation(invitations: PartyInvitationRecord[], invitationId: string): PartyInvitationRecord {
+    const invitation = invitations.find((candidate) => candidate.id === invitationId);
+    if (!invitation) throw new Error(`party invitation not found: ${invitationId}`);
+    return invitation;
+  }
+
+  private requireOpenParty(party: PartyRecord): void {
+    if ((party.status ?? "open") !== "open") throw new Error("party is not open");
+  }
+
+  private async emitPartyUpdated(party: PartyRecord): Promise<void> {
+    await this.emit({ type: "party_updated", accountIds: party.memberAccountIds, party });
+  }
+
+  private resolveAcceptedInvitationAndExpireOthers(
+    invitations: PartyInvitationRecord[],
+    accepted: PartyInvitationRecord,
+    resolvedAt: string,
+  ): PartyInvitationRecord[] {
+    return invitations.map((invitation) => {
+      if (invitation.id === accepted.id) return { ...invitation, status: "accepted", resolvedAt };
+      if (invitation.toAccountId === accepted.toAccountId && invitation.status === "pending") {
+        return { ...invitation, status: "expired", resolvedAt };
+      }
+      return invitation;
+    });
+  }
+
+  private async emitResolvedInvitations(
+    previous: PartyInvitationRecord[],
+    next: PartyInvitationRecord[],
+  ): Promise<void> {
+    for (const invitation of next) {
+      const previousInvitation = previous.find((candidate) => candidate.id === invitation.id);
+      if (previousInvitation?.status === "pending" && invitation.status !== "pending") {
+        await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation });
+      }
+    }
+  }
+
+  private async expirePendingInvitationsForAccount(accountId: string): Promise<void> {
+    const invitations = await this.deps.store.listInvitations();
+    const resolvedAt = this.now();
+    const resolvedInvitations = invitations.map((invitation) =>
+      invitation.toAccountId === accountId && invitation.status === "pending"
+        ? { ...invitation, status: "expired" as const, resolvedAt }
+        : invitation,
+    );
+    await this.deps.store.saveInvitations(resolvedInvitations);
+    await this.emitResolvedInvitations(invitations, resolvedInvitations);
+  }
+
+  private async expirePendingInvitationsForParty(partyId: string): Promise<void> {
+    const invitations = await this.deps.store.listInvitations();
+    const resolvedAt = this.now();
+    const expired = invitations
+      .filter((invitation) => invitation.partyId === partyId && invitation.status === "pending")
+      .map((invitation): PartyInvitationRecord => ({ ...invitation, status: "expired", resolvedAt }));
+    if (expired.length === 0) return;
+
+    const expiredById = new Map(expired.map((invitation) => [invitation.id, invitation]));
+    await this.deps.store.saveInvitations(invitations.map((invitation) => expiredById.get(invitation.id) ?? invitation));
+    for (const invitation of expired) {
+      await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation });
+    }
+  }
+
+  private enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
+    const next = this.mutationQueue.then(run, run);
+    this.mutationQueue = next.catch(() => undefined);
+    return next;
+  }
+
+  private createInitialVetoState(room: MatchRoomRecord) {
+    return createVetoState({
+      matchId: room.id,
+      mapPool: this.deps.mapPool ?? DEFAULT_MAP_POOL,
+      teamA: room.teamA,
+      teamB: room.teamB,
+      now: this.now(),
+      random: this.random,
+    });
+  }
+
+  private async emit(event: RealtimeEvent, matchId?: string): Promise<void> {
+    if (matchId) {
+      await this.deps.records?.appendEvent(matchId, { ...event, at: this.now() });
+    }
+    this.deps.events?.publish(event);
+  }
+
+  private async emitVetoHistory(
+    matchId: string,
+    previousHistoryLength: number,
+    history: VetoHistoryEntry[],
+    accountIds: string[],
+    veto: PublicVetoState | undefined,
+  ): Promise<void> {
+    for (const entry of history.slice(previousHistoryLength)) {
+      await this.emit({ type: entry.action === "pick" ? "map_picked" : "map_banned", matchId, accountIds, entry, veto }, matchId);
+    }
+  }
+
+  private async saveRoomAfterVeto(rooms: MatchRoomRecord[], room: MatchRoomRecord): Promise<MatchRoomRecord> {
+    if (!room.veto?.finalMap) {
+      await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? room : candidate)));
+      this.scheduleVetoTimeout(room);
+      return room;
+    }
+
+    this.clearVetoTimeout(room.id);
+    const preparing: MatchRoomRecord = { ...room, phase: "server_prepare", connect: undefined };
+    await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? preparing : candidate)));
+    await this.emit({ type: "server_preparing", matchId: room.id, accountIds: this.roomAudience(preparing) }, room.id);
+
+    const plan = this.buildMatchPlan(preparing, room.veto.finalMap);
+    await this.deps.records?.saveMatchPlan(plan);
+
+    if (!this.deps.executor) {
+      return preparing;
+    }
+
+    try {
+      const connect = await this.deps.executor.prepare(plan);
+      const latestRooms = await this.deps.store.listRooms();
+      const latestRoom = latestRooms.find((candidate) => candidate.id === room.id) ?? preparing;
+      if (!isServerManagedPhase(latestRoom.phase)) return latestRoom;
+
+      const roomsToSave = latestRooms.some((candidate) => candidate.id === room.id) ? latestRooms : rooms;
+      const connected: MatchRoomRecord = { ...latestRoom, phase: "connect", connect };
+      await this.deps.store.saveRooms(roomsToSave.map((candidate) => (candidate.id === room.id ? connected : candidate)));
+      await this.deps.records?.saveStatus(room.id, { phase: "connect", connect });
+      await this.emit({ type: "connect_ready", matchId: room.id, accountIds: this.roomAudience(connected), connect }, room.id);
+      return connected;
+    } catch (error) {
+      const failed: MatchRoomRecord = { ...preparing, phase: "failed" };
+      const failure = error instanceof Error ? error.message : String(error);
+      const failedAt = this.now();
+      await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? failed : candidate)));
+      await this.deps.records?.saveStatus(room.id, { phase: "failed", error: failure });
+      await this.unlockPartyForRoom(failed, failedAt);
+      await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(room), error: failure }, room.id);
+      return failed;
+    }
+  }
+
+  private buildMatchPlan(room: MatchRoomRecord, map: string): MatchPlan {
+    return {
+      id: room.id,
+      phase: "server_prepare",
+      map,
+      teamA: room.teamA,
+      teamB: room.teamB,
+      connectPassword: `match_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
+      createdAt: this.now(),
+    };
+  }
+
+  private async requireAccount(accountId: string): Promise<void> {
+    if (!(await this.deps.accounts.getById(accountId))) throw new Error(`account not found: ${accountId}`);
+  }
+
+  private async requireMatchmakingAccount(accountId: string): Promise<void> {
+    const account = await this.deps.accounts.getById(accountId);
+    if (!account) throw new Error(`account not found: ${accountId}`);
+    if (!account.steam64.trim()) throw new Error("steam64 required for matchmaking");
+  }
+
+  private async toHumanParticipant(accountId: string): Promise<MatchParticipant> {
+    const account = await this.deps.accounts.getById(accountId);
+    if (!account) throw new Error(`account not found: ${accountId}`);
+    const steam64 = account.steam64.trim();
+    if (!steam64) throw new Error("steam64 required for matchmaking");
+
+    let steamProfile: { personaName: string; avatarUrl?: string } | undefined;
+    try {
+      steamProfile = (await this.deps.steamProfiles?.resolveMany([steam64]))?.get(steam64);
+    } catch {
+      steamProfile = undefined;
+    }
+    const steamPersonaName = steamProfile?.personaName.trim() || undefined;
+    const accountDisplayName = account.displayName.trim();
+
+    return {
+      id: account.id,
+      kind: "human",
+      displayName: steamPersonaName ?? (accountDisplayName || steam64),
+      steam64,
+      accountId: account.id,
+      steamPersonaName,
+      steamAvatarUrl: steamProfile?.avatarUrl,
+    };
+  }
+
+  private buildReadyStates(humans: MatchParticipant[]): MatchRoomReadyState[] {
+    return humans.map((participant) => ({ accountId: participant.accountId ?? participant.id, ready: false }));
+  }
+
+  private buildReadyDeadlineAt(createdAt: string): string {
+    return new Date(Date.parse(createdAt) + READY_TIMEOUT_MS).toISOString();
+  }
+
+  private scheduleReadyTimeout(room: MatchRoomRecord): void {
+    if (room.phase !== "ready") return;
+
+    this.clearReadyTimeout(room.id);
+    const timeout = this.setTimeoutFn(() => {
+      void this.expireReady(room.id).catch(() => undefined);
+    }, READY_TIMEOUT_MS);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.readyTimeouts.set(room.id, timeout);
+  }
+
+  private scheduleVetoTimeout(room: MatchRoomRecord): void {
+    const current = room.veto?.current;
+    if (!current) {
+      this.clearVetoTimeout(room.id);
+      return;
+    }
+
+    this.clearVetoTimeout(room.id);
+    const timeoutMs = Math.max(0, Date.parse(current.deadlineAt) - Date.parse(this.now()) + 1);
+    const timeoutAt = new Date(Date.parse(current.deadlineAt) + 1).toISOString();
+    const timeout = this.setTimeoutFn(() => {
+      void this.expireVeto(room.id, timeoutAt).catch(() => undefined);
+    }, timeoutMs);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.vetoTimeouts.set(room.id, timeout);
+  }
+
+  private clearReadyTimeout(roomId: string): void {
+    const timeout = this.readyTimeouts.get(roomId);
+    if (!timeout) return;
+    this.clearTimeoutFn(timeout);
+    this.readyTimeouts.delete(roomId);
+  }
+
+  private clearVetoTimeout(roomId: string): void {
+    const timeout = this.vetoTimeouts.get(roomId);
+    if (!timeout) return;
+    this.clearTimeoutFn(timeout);
+    this.vetoTimeouts.delete(roomId);
+  }
+
+  private humanParticipantsForRoom(room: MatchRoomRecord): MatchParticipant[] {
+    const audience = new Set(this.roomAudience(room));
+    return [...room.teamA.participants, ...room.teamB.participants].filter(
+      (participant): participant is MatchParticipant => participant.kind === "human" && !!participant.accountId && audience.has(participant.accountId),
+    );
+  }
+
+  private roomAudience(room: MatchRoomRecord): string[] {
+    if (room.humanAccountIds && room.humanAccountIds.length > 0) return room.humanAccountIds;
+    if (room.ready && room.ready.length > 0) return room.ready.map((entry) => entry.accountId);
+    return [...room.teamA.participants, ...room.teamB.participants]
+      .filter((participant) => participant.kind === "human" && participant.accountId)
+      .map((participant) => participant.accountId as string);
+  }
+
+  private toPublicRoom(room: MatchRoomRecord): PublicMatchRoomRecord {
+    return {
+      id: room.id,
+      phase: room.phase,
+      teamA: {
+        ...room.teamA,
+        participants: room.teamA.participants.slice(),
+      },
+      teamB: {
+        ...room.teamB,
+        participants: room.teamB.participants.slice(),
+      },
+      humanAccountIds: room.humanAccountIds?.slice(),
+      botParticipantIds: room.botParticipantIds?.slice(),
+      ready: room.ready?.map((entry) => ({ ...entry })),
+      readyDeadlineAt: room.readyDeadlineAt,
+      partyId: room.partyId,
+      veto: toPublicVetoState(room.veto),
+      connect: room.connect ? { ...room.connect } : undefined,
+      createdAt: room.createdAt,
+    };
+  }
+
+  private toReadyEvent(type: "ready_check_started" | "ready_check_updated", room: MatchRoomRecord): RealtimeEvent {
+    return {
+      type,
+      matchId: room.id,
+      roomId: room.id,
+      accountIds: this.roomAudience(room),
+      deadlineAt: room.readyDeadlineAt ?? room.createdAt,
+      ready: room.ready ?? this.buildReadyStates(this.humanParticipantsForRoom(room)),
+      humanParticipants: this.humanParticipantsForRoom(room),
+    };
+  }
+
+  private findReadyRoomForAccount(rooms: MatchRoomRecord[], accountId: string): MatchRoomRecord | undefined {
+    return rooms.find((room) => room.phase === "ready" && this.roomAudience(room).includes(accountId));
+  }
+
+  private findCurrentRoom<T extends { phase: string }>(rooms: T[]): T | null {
+    return [...rooms].reverse().find((room) => !isTerminalMatchPhase(room.phase)) ?? null;
+  }
+
+  private async failReadyRoom(rooms: MatchRoomRecord[], room: MatchRoomRecord, reason: string): Promise<MatchRoomRecord> {
+    const failedAt = this.now();
+    const failedRoom: MatchRoomRecord = { ...room, phase: "failed" };
+    this.clearReadyTimeout(room.id);
+    const updatedRooms = rooms.filter((candidate) => candidate.id !== room.id);
+    await this.deps.store.saveRooms(updatedRooms);
+
+    if (room.partyId) {
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.id === room.partyId);
+      if (party) {
+        const updatedParty: PartyRecord = { ...party, status: "open", lockedMatchId: undefined, updatedAt: failedAt };
+        await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+        await this.emitPartyUpdated(updatedParty);
+      }
+    }
+
+    await this.emit(this.toReadyEvent("ready_check_updated", failedRoom));
+    await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason });
+    return failedRoom;
+  }
+
+  private async unlockPartyForRoom(room: MatchRoomRecord, updatedAt: string): Promise<void> {
+    if (!room.partyId) return;
+    const parties = await this.deps.store.listParties();
+    const party = parties.find((candidate) => candidate.id === room.partyId);
+    if (!party) return;
+    if (party.lockedMatchId && party.lockedMatchId !== room.id) return;
+    if ((party.status ?? "open") === "open" && !party.lockedMatchId) return;
+
+    const updatedParty: PartyRecord = { ...party, status: "open", lockedMatchId: undefined, updatedAt };
+    await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+    await this.emitPartyUpdated(updatedParty);
+  }
+
+  private roomHasAccount(room: MatchRoomRecord, accountId: string): boolean {
+    if (this.roomAudience(room).includes(accountId)) return true;
+    return [...room.teamA.participants, ...room.teamB.participants].some((participant) => participant.accountId === accountId);
+  }
+}
+
+function isServerManagedPhase(phase: MatchRoomRecord["phase"]): boolean {
+  return phase === "server_prepare" || phase === "connect" || phase === "live";
+}
+
+function isTerminalMatchPhase(phase: string): boolean {
+  return phase === "completed" || phase === "failed";
+}

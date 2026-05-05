@@ -1,0 +1,242 @@
+import { Button, Modal } from "antd";
+import { useState } from "react";
+import type { AccountView } from "../../../../manager/shared/types.js";
+import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto, PlayerPartyInvitationDto } from "../../../shared/types.js";
+import { SteamAvatar } from "../components/SteamAvatar.js";
+import { playerAccountLabel } from "../playerDisplay.js";
+
+interface HomePageProps {
+  account: AccountView | null;
+  baseUrl: string;
+  friends: PlayerFriendListDto;
+  party: PlayerPartyDto | null;
+  partyInvitations: PlayerPartyInvitationDto[];
+  queueSize: number;
+  roomCount: number;
+  onInviteFriend?: (accountId: string) => Promise<void>;
+  onAcceptPartyInvite?: (invitationId: string) => Promise<void>;
+  onDeclinePartyInvite?: (invitationId: string) => Promise<void>;
+  onStartMatchmaking?: () => Promise<void>;
+}
+
+function memberLabel(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): string {
+  if (accountId === account?.id) {
+    return playerAccountLabel(account);
+  }
+  const friend = friends.friends.find((entry) => entry.accountId === accountId);
+  return friend?.steamPersonaName ?? friend?.displayName ?? "玩家";
+}
+
+function slotAccountId(index: number, account: AccountView | null, party: PlayerPartyDto | null): string | null {
+  if (index === 2) return account?.id ?? null;
+  const otherMemberIds = party?.memberAccountIds.filter((memberId) => memberId !== account?.id).slice(0, 4) ?? [];
+  const memberIndex = index < 2 ? index : index - 1;
+  return otherMemberIds[memberIndex] ?? null;
+}
+
+function canInviteFriend(friend: PlayerFriendDto, party: PlayerPartyDto | null, account: AccountView | null): boolean {
+  if (!friend.online) return false;
+  if (friend.accountId === account?.id) return false;
+  return !(party?.memberAccountIds.includes(friend.accountId) ?? false);
+}
+
+export function HomePage({
+  account,
+  baseUrl,
+  friends,
+  party,
+  partyInvitations,
+  queueSize,
+  roomCount,
+  onInviteFriend,
+  onAcceptPartyInvite,
+  onDeclinePartyInvite,
+  onStartMatchmaking,
+}: HomePageProps) {
+  const [inviteOpen, setInviteOpen] = useState(false);
+  const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
+  const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
+  const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
+  const hasSteamBinding = Boolean(account?.steam64?.trim());
+  const accountName = playerAccountLabel(account);
+  const primaryDisabled = !hasSteamBinding || !canStart;
+
+  async function inviteFriend(accountId: string) {
+    if (!onInviteFriend) return;
+    setBusyInviteId(accountId);
+    try {
+      await onInviteFriend(accountId);
+      setInviteOpen(false);
+    } finally {
+      setBusyInviteId(null);
+    }
+  }
+
+  async function acceptPartyInvitation(invitationId: string) {
+    if (!onAcceptPartyInvite) return;
+    setBusyPartyInvitationId(invitationId);
+    try {
+      await onAcceptPartyInvite(invitationId);
+    } finally {
+      setBusyPartyInvitationId(null);
+    }
+  }
+
+  async function declinePartyInvitation(invitationId: string) {
+    if (!onDeclinePartyInvite) return;
+    setBusyPartyInvitationId(invitationId);
+    try {
+      await onDeclinePartyInvite(invitationId);
+    } finally {
+      setBusyPartyInvitationId(null);
+    }
+  }
+
+  return (
+    <div className="faceit-play">
+      <h2 className="player-sr-only">作战中心</h2>
+      <div className="faceit-play-hero">
+        <div className="faceit-player-identity">
+          <SteamAvatar className="faceit-rank-ring" avatarUrl={account?.steamAvatarUrl} label={accountName} />
+          <div>
+            <h1>{accountName}</h1>
+            <p>{hasSteamBinding ? `Steam64 ${account?.steam64}` : "未绑定 Steam64，不能进入匹配队列"}</p>
+          </div>
+        </div>
+
+        <div className="faceit-match-summary">
+          <span>匹配队列</span>
+          <strong>5v5 · BO1</strong>
+          <p>Ready check、地图禁选和进服信息会在匹配成功后进入比赛房间。</p>
+        </div>
+
+        <div className="faceit-match-summary faceit-match-summary--compact">
+          <span>当前连接</span>
+          <strong>{baseUrl}</strong>
+          <p>服务端只负责匹配和下发 connect 信息。</p>
+        </div>
+      </div>
+
+      {partyInvitations.length > 0 ? (
+        <div className="faceit-invite-list" aria-label="待处理队伍邀请">
+          {partyInvitations.map((invitation) => {
+            const fromLabel = memberLabel(invitation.fromAccountId, account, friends);
+            return (
+              <div className="faceit-invite-row" key={invitation.id}>
+                <SteamAvatar label={fromLabel} />
+                <div className="faceit-invite-main">
+                  <strong>{fromLabel}</strong>
+                  <span>邀请你加入队伍</span>
+                </div>
+                <div className="player-social-row-actions">
+                  <Button
+                    size="small"
+                    type="primary"
+                    onClick={() => void acceptPartyInvitation(invitation.id)}
+                    loading={busyPartyInvitationId === invitation.id}
+                    disabled={!onAcceptPartyInvite}
+                  >
+                    接受
+                  </Button>
+                  <Button
+                    size="small"
+                    onClick={() => void declinePartyInvitation(invitation.id)}
+                    loading={busyPartyInvitationId === invitation.id}
+                    disabled={!onDeclinePartyInvite}
+                  >
+                    拒绝
+                  </Button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      ) : null}
+
+      <div className="faceit-party-stage">
+        {[0, 1, 2, 3, 4].map((index) => {
+          const memberId = slotAccountId(index, account, party);
+          const label = memberId ? memberLabel(memberId, account, friends) : "";
+          const isSelf = index === 2;
+          return label ? (
+            <div className={`faceit-party-slot ${isSelf ? "faceit-party-slot--self" : ""}`} key={index}>
+              {isSelf ? (
+                <SteamAvatar avatarUrl={account?.steamAvatarUrl} label={accountName} />
+              ) : (
+                <SteamAvatar label={label} />
+              )}
+              <strong>{label}</strong>
+              <span>{isSelf ? (hasSteamBinding ? "已绑定 Steam" : "未绑定 Steam") : "队伍成员"}</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              className="faceit-party-slot"
+              aria-label="邀请好友"
+              onClick={() => setInviteOpen(true)}
+              disabled={!onInviteFriend}
+              key={index}
+            >
+              <span className="faceit-plus">+</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <Modal
+        centered
+        footer={null}
+        open={inviteOpen}
+        title="邀请好友"
+        className="faceit-invite-modal"
+        onCancel={() => setInviteOpen(false)}
+      >
+        <div className="faceit-invite-list">
+          {friends.friends.length > 0 ? (
+            friends.friends.map((friend) => {
+              const label = friend.displayName || "玩家";
+              const inviteEnabled = Boolean(onInviteFriend && canInviteFriend(friend, party, account));
+              return (
+                <div className="faceit-invite-row" key={friend.friendshipId}>
+                  <SteamAvatar label={label} />
+                  <div className="faceit-invite-main">
+                    <strong>{label}</strong>
+                    <span>{friend.online ? "在线" : "离线"}</span>
+                  </div>
+                  <Button
+                    aria-label={`邀请 ${label}`}
+                    type="primary"
+                    onClick={() => void inviteFriend(friend.accountId)}
+                    loading={busyInviteId === friend.accountId}
+                    disabled={!inviteEnabled}
+                  >
+                    邀请
+                  </Button>
+                </div>
+              );
+            })
+          ) : (
+            <div className="player-empty">暂无好友。</div>
+          )}
+        </div>
+      </Modal>
+
+      <div className="faceit-queue-bar">
+        <div className="faceit-queue-tabs">
+          <strong>匹配</strong>
+          <span>队列 {queueSize}</span>
+          <span>房间 {roomCount}</span>
+        </div>
+        {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
+        <Button
+          type="primary"
+          className="faceit-main-cta"
+          onClick={() => void onStartMatchmaking?.()}
+          disabled={primaryDisabled}
+        >
+          匹配比赛
+        </Button>
+      </div>
+    </div>
+  );
+}
