@@ -23,13 +23,19 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
   deps: WebSocketDeps,
 ): Promise<void> {
   app.get<{ Querystring: WebSocketQuery }>("/ws", { websocket: true }, (socket, request) => {
-    const accountPromise = authorizeWebSocket(request.query.token, deps).catch(() => undefined);
+    const token = request.query.token;
+    const accountPromise = authorizeWebSocket(token, deps).catch(() => undefined);
     let unsubscribe: (() => void) | undefined;
+    let authorizationCheck: ReturnType<typeof setInterval> | undefined;
     let registeredAccountId: string | undefined;
     const cleanup = () => {
       if (registeredAccountId && deps.presence) {
         publishPresenceUpdated("disconnect", deps, deps.presence.unregister(registeredAccountId));
         registeredAccountId = undefined;
+      }
+      if (authorizationCheck) {
+        clearInterval(authorizationCheck);
+        authorizationCheck = undefined;
       }
       unsubscribe?.();
       unsubscribe = undefined;
@@ -51,6 +57,11 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       }
 
       if (socket.readyState !== SOCKET_OPEN) return;
+      authorizationCheck = setInterval(() => {
+        void authorizeWebSocket(token, deps).then((currentAccount) => {
+          if (!currentAccount || currentAccount.id !== account.id) closeUnauthorized(socket);
+        }).catch(() => closeUnauthorized(socket));
+      }, 5_000);
       if (deps.events) {
         unsubscribe = deps.events.subscribe((event) => {
           if (shouldSendEventToAccount(event, account.id)) sendJson(socket, event);
@@ -76,7 +87,7 @@ async function authorizeWebSocket(
   if (!verified) return undefined;
 
   const account = await deps.accounts.getById(verified.accountId);
-  if (!account || !account.enabled) return undefined;
+  if (!account || !account.enabled || account.mustChangePassword || account.role !== "player") return undefined;
   return account;
 }
 

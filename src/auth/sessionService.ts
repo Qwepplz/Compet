@@ -17,29 +17,28 @@ export class SessionService {
     return crypto.createHash("sha256").update(token).digest("hex");
   }
 
-  async createSession(accountId: string): Promise<{ token: string; session: SessionRecord }> {
+  async createSession(accountId: string, options: { rejectExistingActive?: boolean } = {}): Promise<{ token: string; session: SessionRecord }> {
     const token = crypto.randomBytes(32).toString("base64url");
     const now = new Date();
+    const nowIso = now.toISOString();
     const expires = new Date(now.getTime() + this.ttlMinutes * 60_000);
     const session: SessionRecord = {
       id: crypto.randomUUID(),
       accountId,
       tokenHash: this.hashToken(token),
-      createdAt: now.toISOString(),
+      createdAt: nowIso,
       expiresAt: expires.toISOString(),
       revokedAt: null,
-      lastSeenAt: now.toISOString(),
+      lastSeenAt: nowIso,
     };
-    await this.repository.upsert(session);
+    if (options.rejectExistingActive) await this.repository.insertIfNoActiveForAccount(session, nowIso);
+    else await this.repository.replaceActiveForAccount(session, nowIso);
     return { token, session };
   }
 
   async verifyToken(token: string): Promise<VerifiedSession | undefined> {
     const tokenHash = this.hashToken(token);
-    const session = await this.repository.updateByTokenHash(tokenHash, (current) => {
-      if (current.revokedAt || Date.parse(current.expiresAt) <= Date.now()) return undefined;
-      return { ...current, lastSeenAt: new Date().toISOString() };
-    });
+    const session = await this.repository.updateActiveUniqueByTokenHash(tokenHash, new Date().toISOString());
     if (!session) return undefined;
     return { sessionId: session.id, accountId: session.accountId, expiresAt: session.expiresAt };
   }

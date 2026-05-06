@@ -15,9 +15,6 @@ export function BootstrapPage({ onSubmit }: { onSubmit: (input: BootstrapAdminIn
           <Form.Item name="password" label="密码" rules={[{ required: true, min: 8, message: "请输入至少 8 位密码" }]}> 
             <Input.Password autoComplete="new-password" />
           </Form.Item>
-          <Form.Item name="displayName" label="显示名">
-            <Input autoComplete="name" />
-          </Form.Item>
           <Button type="primary" htmlType="submit" block>
             创建并启动服务
           </Button>

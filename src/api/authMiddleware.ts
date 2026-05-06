@@ -29,3 +29,8 @@ export function requireAdmin(request: FastifyRequest<any, any>): void {
   requirePasswordChangeComplete(request);
   if (request.auth?.account.role !== "admin") throw forbidden("Admin role required");
 }
+
+export function requirePlayer(request: FastifyRequest<any, any>): void {
+  requirePasswordChangeComplete(request);
+  if (request.auth?.account.role !== "player") throw forbidden("Player account required");
+}

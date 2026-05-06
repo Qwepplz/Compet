@@ -11,6 +11,10 @@ export interface LoginResult {
   expiresAt: string;
 }
 
+export interface LoginOptions {
+  requireAdmin?: boolean;
+}
+
 export class AuthService {
   constructor(
     private readonly accounts: AccountService,
@@ -18,7 +22,7 @@ export class AuthService {
     private readonly limiter: InMemoryLoginRateLimiter,
   ) {}
 
-  async login(username: string, password: string, ip: string): Promise<LoginResult> {
+  async login(username: string, password: string, ip: string, options: LoginOptions = {}): Promise<LoginResult> {
     this.limiter.check(username, ip);
     const account = await this.accounts.getByUsername(username);
     if (!account || !(await verifyPassword(account.passwordHash, password))) {
@@ -26,9 +30,11 @@ export class AuthService {
       throw new Error("invalid username or password");
     }
     if (!account.enabled) throw new Error("account disabled");
+    if (options.requireAdmin && account.role !== "admin") throw new Error("admin account required");
+    if (!options.requireAdmin && account.role === "admin") throw new Error("admin account cannot use client login");
     this.limiter.clear(username, ip);
     const updatedAccount = await this.accounts.markLogin(account.id);
-    const { token, session } = await this.sessions.createSession(account.id);
+    const { token, session } = await this.sessions.createSession(account.id, { rejectExistingActive: !options.requireAdmin });
     return {
       token,
       sessionId: session.id,

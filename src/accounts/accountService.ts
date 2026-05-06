@@ -6,17 +6,15 @@ import type { JsonAccountRepository } from "./accountRepository.js";
 export interface CreateAccountInput {
   username: string;
   password: string;
-  displayName: string;
   role: AccountRole;
-  steam64: string;
+  steam64?: string;
   mustChangePassword: boolean;
+  displayName?: string;
 }
 
 export interface UpdateAccountInput {
-  displayName?: string;
   steam64?: string;
   enabled?: boolean;
-  role?: AccountRole;
 }
 
 function normalizeSteam64(role: AccountRole, steam64: string | undefined): string {
@@ -54,7 +52,7 @@ export class AccountService {
       return this.repository.upsert({
         id: crypto.randomUUID(),
         username: input.username,
-        displayName: input.displayName,
+        displayName: input.displayName?.trim() || input.username,
         steam64: normalizeSteam64(input.role, input.steam64),
         role: input.role,
         enabled: true,
@@ -71,13 +69,11 @@ export class AccountService {
     return this.enqueueMutation(async () => {
       const account = await this.repository.findById(id);
       if (!account) throw new Error("account not found");
-      const nextRole = input.role ?? account.role;
       const nextSteam64 = Object.prototype.hasOwnProperty.call(input, "steam64") ? input.steam64 : account.steam64;
       return this.repository.upsert({
         ...account,
         ...input,
-        role: nextRole,
-        steam64: normalizeSteam64(nextRole, nextSteam64),
+        steam64: normalizeSteam64(account.role, nextSteam64),
         updatedAt: new Date().toISOString(),
       });
     });
@@ -93,6 +89,16 @@ export class AccountService {
         mustChangePassword: true,
         updatedAt: new Date().toISOString(),
       });
+    });
+  }
+
+  async deleteAccount(id: string): Promise<AccountRecord> {
+    return this.enqueueMutation(async () => {
+      const account = await this.repository.findById(id);
+      if (!account) throw new Error("account not found");
+      if (account.role === "admin") throw new Error("admin account cannot be deleted");
+      await this.repository.deleteById(id);
+      return account;
     });
   }
 

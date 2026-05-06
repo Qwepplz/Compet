@@ -44,4 +44,14 @@ export class JsonAccountRepository {
       return account;
     });
   }
+
+  async deleteById(id: string): Promise<boolean> {
+    return this.enqueueWrite(async () => {
+      const accounts = await this.list();
+      const next = accounts.filter((account) => account.id !== id);
+      if (next.length === accounts.length) return false;
+      await this.saveAll(next);
+      return true;
+    });
+  }
 }

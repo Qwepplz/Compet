@@ -8,7 +8,7 @@ import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import type { VetoAction } from "../matchmaking/vetoService.js";
-import { authenticateRequest, requireAdmin, requirePasswordChangeComplete } from "./authMiddleware.js";
+import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unauthorized } from "./httpErrors.js";
 
 export interface RouteDeps {
@@ -34,9 +34,8 @@ function readStringField(payload: unknown, field: string): string {
   return value;
 }
 
-const roleSchema = z.enum(["admin", "player"]);
-const createAccountSchema = z.object({ username: z.string().min(1), password: z.string().min(8), displayName: z.string().min(1), steam64: z.string().default(""), role: roleSchema.default("player") });
-const patchAccountSchema = z.object({ displayName: z.string().min(1).optional(), steam64: z.string().optional(), enabled: z.boolean().optional(), role: roleSchema.optional() });
+const createAccountSchema = z.object({ username: z.string().min(1), password: z.string().min(8), steam64: z.string().default("") });
+const patchAccountSchema = z.object({ steam64: z.string().optional(), enabled: z.boolean().optional() });
 const passwordSchema = z.object({ password: z.string().min(8) });
 const accountIdParamsSchema = z.object({ id: z.string().min(1) });
 const partyJoinSchema = z.object({ partyId: z.string().min(1) });
@@ -49,6 +48,7 @@ const vetoSchema = z.object({ action: z.enum(["ban", "pick"]), map: z.string().m
 function mapAccountServiceError(error: unknown): never {
   if (error instanceof Error && error.message === "account not found") throw notFound();
   if (error instanceof Error && error.message === "username already exists") throw conflict("Username already exists");
+  if (error instanceof Error && error.message === "admin account cannot be deleted") throw forbidden("Cannot delete the server admin account");
   throw error;
 }
 
@@ -128,6 +128,18 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     try {
       const result = await deps.auth.login(username, password, request.ip);
       return { token: result.token, expiresAt: result.expiresAt, account: publicAccount(result.account) };
+    } catch (error) {
+      if (error instanceof Error && error.message === "account already logged in") throw conflict("Account already logged in");
+      throw unauthorized("Invalid username or password");
+    }
+  });
+
+  app.post("/auth/manager-login", async (request) => {
+    const username = readStringField(request.body, "username");
+    const password = readStringField(request.body, "password");
+    try {
+      const result = await deps.auth.login(username, password, request.ip, { requireAdmin: true });
+      return { token: result.token, expiresAt: result.expiresAt, account: publicAccount(result.account) };
     } catch {
       throw unauthorized("Invalid username or password");
     }
@@ -162,7 +174,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requireAdmin(request);
     const input = createAccountSchema.parse(request.body);
     try {
-      const account = await deps.accounts.createAccount({ ...input, mustChangePassword: false });
+      const account = await deps.accounts.createAccount({ ...input, role: "player", mustChangePassword: false });
       return reply.status(201).send({ account: publicAccount(account) });
     } catch (error) {
       mapAccountServiceError(error);
@@ -174,7 +186,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requireAdmin(request);
     const { id } = accountIdParamsSchema.parse(request.params);
     const input = patchAccountSchema.parse(request.body);
-    if (id === auth.account.id && (input.enabled === false || input.role === "player")) throw forbidden("Cannot disable or demote current admin");
+    if (id === auth.account.id && input.enabled === false) throw forbidden("Cannot disable current admin");
     try {
       return { account: publicAccount(await deps.accounts.updateAccount(id, input)) };
     } catch (error) {
@@ -194,22 +206,29 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     }
   });
 
-  app.post("/admin/accounts/:id/revoke-sessions", async (request) => {
-    await authenticateRequest(request, deps);
+  app.delete("/admin/accounts/:id", async (request, reply) => {
+    const auth = await authenticateRequest(request, deps);
     requireAdmin(request);
     const { id } = accountIdParamsSchema.parse(request.params);
-    return { revoked: await deps.sessions.revokeSessionsForAccount(id) };
+    if (id === auth.account.id) throw forbidden("Cannot delete current admin");
+    try {
+      await deps.accounts.deleteAccount(id);
+      await deps.sessions.revokeSessionsForAccount(id);
+      return reply.status(204).send();
+    } catch (error) {
+      mapAccountServiceError(error);
+    }
   });
 
   app.get("/me", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     return publicAccount(auth.account);
   });
 
   app.get("/friends/search", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const friends = requireFriends(deps);
     const { q } = friendSearchQuerySchema.parse(request.query ?? {});
     try {
@@ -221,7 +240,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.get("/friends", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const friends = requireFriends(deps);
     try {
       return await friends.listFriends(auth.account.id);
@@ -232,7 +251,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/friends/requests", async (request, reply) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const friends = requireFriends(deps);
     const { accountId } = friendRequestSchema.parse(request.body);
     try {
@@ -244,7 +263,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/friends/requests/:id/accept", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const friends = requireFriends(deps);
     const { id } = accountIdParamsSchema.parse(request.params);
     try {
@@ -256,7 +275,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/friends/requests/:id/decline", async (request, reply) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const friends = requireFriends(deps);
     const { id } = accountIdParamsSchema.parse(request.params);
     try {
@@ -269,7 +288,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.get("/party", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       return { party: (await matchmaking.getPartyForAccount(auth.account.id)) ?? null };
@@ -280,7 +299,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/party/create", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       return { party: await matchmaking.createParty(auth.account.id) };
@@ -291,7 +310,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/party/invite", async (request, reply) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     const { accountId } = friendRequestSchema.parse(request.body);
     try {
@@ -303,7 +322,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/party/invitations/:id/accept", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     const { id } = accountIdParamsSchema.parse(request.params);
     try {
@@ -315,7 +334,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/party/invitations/:id/decline", async (request, reply) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     const { id } = accountIdParamsSchema.parse(request.params);
     try {
@@ -328,7 +347,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/party/matchmaking/start", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       return { room: await matchmaking.startPartyMatchmaking(auth.account.id) };
@@ -339,7 +358,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/party/join", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     const { partyId } = partyJoinSchema.parse(request.body);
     try {
@@ -353,7 +372,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/party/leave", async (request, reply) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       await matchmaking.leaveParty(auth.account.id);
@@ -365,7 +384,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/matchmaking/queue", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     const { partyId } = queueSchema.parse(request.body ?? {});
     try {
@@ -377,7 +396,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/matchmaking/ready", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       return { room: await matchmaking.acceptReady(auth.account.id) };
@@ -388,7 +407,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/matchmaking/ready/decline", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       return { room: await matchmaking.declineReady(auth.account.id) };
@@ -399,7 +418,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/matchmaking/cancel", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       return { queue: await matchmaking.cancelQueue(auth.account.id) };
@@ -410,7 +429,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.get("/matchmaking/state", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
       return await matchmaking.getState(auth.account.id);
@@ -421,7 +440,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
 
   app.post("/match-room/:id/veto", async (request) => {
     const auth = await authenticateRequest(request, deps);
-    requirePasswordChangeComplete(request);
+    requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     const { id } = matchRoomParamsSchema.parse(request.params);
     const input = vetoSchema.parse(request.body);

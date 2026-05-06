@@ -79,7 +79,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
   ipcMain.handle("accounts:create", (_event, input) => deps.getApiClient().createAccount(input));
   ipcMain.handle("accounts:update", (_event, id, input) => deps.getApiClient().updateAccount(id, input));
   ipcMain.handle("accounts:resetPassword", (_event, id, password) => deps.getApiClient().resetPassword(id, password));
-  ipcMain.handle("accounts:revokeSessions", (_event, id) => deps.getApiClient().revokeSessions(id));
+  ipcMain.handle("accounts:delete", (_event, id) => deps.getApiClient().deleteAccount(id));
   ipcMain.handle("logs:recent", () => deps.logStore.recent());
   ipcMain.handle("logs:listFiles", () => deps.logStore.listFiles());
   ipcMain.handle("logs:readFile", (_event, name: string) => deps.logStore.readFile(name));

@@ -8,7 +8,6 @@ export async function writeBootstrapAdminFile(dataDir: string, input: BootstrapA
   const payload = {
     username: input.username,
     password: input.password,
-    display_name: input.displayName ?? input.username,
   };
   await writeFile(filePath, JSON.stringify(payload, null, 2), { encoding: "utf8", flag: "wx" });
   return filePath;

@@ -20,7 +20,7 @@ export const accountApi = {
   create: (input: CreateAccountInput) => window.managerApi.createAccount(input) as Promise<AccountView>,
   update: (id: string, input: UpdateAccountInput) => window.managerApi.updateAccount(id, input) as Promise<AccountView>,
   resetPassword: (id: string, password: string) => window.managerApi.resetPassword(id, password) as Promise<AccountView>,
-  revokeSessions: (id: string) => window.managerApi.revokeSessions(id) as Promise<{ revoked: number }>,
+  delete: (id: string) => window.managerApi.deleteAccount(id) as Promise<void>,
 };
 
 export const logApi = {

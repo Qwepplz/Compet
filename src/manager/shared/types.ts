@@ -42,7 +42,6 @@ export interface DiagnosticResult {
 export interface BootstrapAdminInput {
   username: string;
   password: string;
-  displayName?: string;
 }
 
 export interface LoginResult {
@@ -73,14 +72,10 @@ export interface AccountView {
 export interface CreateAccountInput {
   username: string;
   password: string;
-  displayName?: string;
   steam64?: string;
-  role: AccountRole;
 }
 
 export interface UpdateAccountInput {
-  displayName?: string;
   steam64?: string;
-  role?: AccountRole;
   enabled?: boolean;
 }

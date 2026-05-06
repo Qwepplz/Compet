@@ -1,16 +1,14 @@
-import { Button, Form, Input, Modal, Select, Space, Switch, Table, message } from "antd";
+import { Button, Form, Input, Modal, Space, Switch, Table, message } from "antd";
 import type { TableProps } from "antd";
 import { useEffect, useRef, useState } from "react";
-import type { AccountRole, AccountView, CreateAccountInput, UpdateAccountInput } from "../../../shared/types.js";
+import type { AccountView, CreateAccountInput, UpdateAccountInput } from "../../../shared/types.js";
 import { accountApi } from "../api/managerApi.js";
 
 interface AccountFormValues {
   id?: string;
   username: string;
   password?: string;
-  displayName?: string;
   steam64?: string;
-  role: AccountRole;
 }
 
 export function AccountsPage() {
@@ -21,12 +19,11 @@ export function AccountsPage() {
   const [isEditing, setIsEditing] = useState(false);
   const [updatingIds, setUpdatingIds] = useState<Set<string>>(new Set());
   const [resettingIds, setResettingIds] = useState<Set<string>>(new Set());
-  const [revokingIds, setRevokingIds] = useState<Set<string>>(new Set());
+  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const updatingIdsRef = useRef<Set<string>>(new Set());
   const resettingIdsRef = useRef<Set<string>>(new Set());
-  const revokingIdsRef = useRef<Set<string>>(new Set());
+  const deletingIdsRef = useRef<Set<string>>(new Set());
   const [form] = Form.useForm<AccountFormValues>();
-  const role = Form.useWatch("role", form);
 
   async function refresh() {
     setLoading(true);
@@ -67,23 +64,21 @@ export function AccountsPage() {
     setResettingIds(new Set(resettingIdsRef.current));
   }
 
-  function beginRevoking(id: string) {
-    if (revokingIdsRef.current.has(id)) return false;
-    revokingIdsRef.current.add(id);
-    setRevokingIds(new Set(revokingIdsRef.current));
+  function beginDeleting(id: string) {
+    if (deletingIdsRef.current.has(id)) return false;
+    deletingIdsRef.current.add(id);
+    setDeletingIds(new Set(deletingIdsRef.current));
     return true;
   }
 
-  function endRevoking(id: string) {
-    revokingIdsRef.current.delete(id);
-    setRevokingIds(new Set(revokingIdsRef.current));
+  function endDeleting(id: string) {
+    deletingIdsRef.current.delete(id);
+    setDeletingIds(new Set(deletingIdsRef.current));
   }
 
   const columns: TableProps<AccountView>["columns"] = [
     { title: "用户名", dataIndex: "username" },
-    { title: "显示名", dataIndex: "displayName" },
     { title: "Steam64", dataIndex: "steam64", render: (value?: string) => value || "-" },
-    { title: "角色", dataIndex: "role" },
     {
       title: "启用",
       dataIndex: "enabled",
@@ -98,12 +93,12 @@ export function AccountsPage() {
       title: "操作",
       render: (_: unknown, row: AccountView) => {
         const resetting = resettingIds.has(row.id);
-        const revoking = revokingIds.has(row.id);
+        const deleting = deletingIds.has(row.id);
         return (
           <Space>
-            <Button onClick={() => edit(row)}>编辑</Button>
+            {row.role === "player" ? <Button onClick={() => edit(row)}>编辑</Button> : null}
             <Button loading={resetting} disabled={resetting} onClick={() => reset(row)}>重置密码</Button>
-            <Button loading={revoking} disabled={revoking} onClick={() => revoke(row)}>撤销会话</Button>
+            <Button danger loading={deleting} disabled={deleting || row.role === "admin"} onClick={() => remove(row)}>删除账号</Button>
           </Space>
         );
       },
@@ -113,7 +108,7 @@ export function AccountsPage() {
   function create() {
     setIsEditing(false);
     form.resetFields();
-    form.setFieldsValue({ role: "player", steam64: undefined });
+    form.setFieldsValue({ steam64: undefined });
     setOpen(true);
   }
 
@@ -123,9 +118,7 @@ export function AccountsPage() {
     form.setFieldsValue({
       id: row.id,
       username: row.username,
-      displayName: row.displayName,
       steam64: row.steam64,
-      role: row.role,
     });
     setOpen(true);
   }
@@ -155,16 +148,26 @@ export function AccountsPage() {
     }
   }
 
-  async function revoke(row: AccountView) {
-    if (!beginRevoking(row.id)) return;
-    try {
-      const result = await accountApi.revokeSessions(row.id);
-      message.success(`已撤销 ${result.revoked} 个会话`);
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : "撤销会话失败");
-    } finally {
-      endRevoking(row.id);
-    }
+  function remove(row: AccountView) {
+    Modal.confirm({
+      title: "删除账号",
+      content: `确定删除账号 ${row.username}？该账号会立即无法继续登录。`,
+      okText: "删除",
+      okButtonProps: { danger: true },
+      cancelText: "取消",
+      onOk: async () => {
+        if (!beginDeleting(row.id)) return;
+        try {
+          await accountApi.delete(row.id);
+          message.success("账号已删除");
+          await refresh();
+        } catch (error) {
+          message.error(error instanceof Error ? error.message : "删除账号失败");
+        } finally {
+          endDeleting(row.id);
+        }
+      },
+    });
   }
 
   async function submit(values: AccountFormValues) {
@@ -172,18 +175,14 @@ export function AccountsPage() {
     try {
       if (values.id) {
         const input: UpdateAccountInput = {
-          displayName: values.displayName?.trim() || undefined,
-          steam64: values.role === "player" ? values.steam64?.trim() ?? "" : "",
-          role: values.role,
+          steam64: values.steam64?.trim() ?? "",
         };
         await accountApi.update(values.id, input);
       } else {
         const input: CreateAccountInput = {
           username: values.username.trim(),
           password: values.password ?? "",
-          displayName: values.displayName?.trim() || values.username.trim(),
-          steam64: values.role === "player" ? values.steam64?.trim() || undefined : undefined,
-          role: values.role,
+          steam64: values.steam64?.trim() || undefined,
         };
         await accountApi.create(input);
       }
@@ -228,11 +227,7 @@ export function AccountsPage() {
               <Input.Password />
             </Form.Item>
           )}
-          <Form.Item name="displayName" label="显示名"><Input /></Form.Item>
-          <Form.Item name="role" label="角色" initialValue="player">
-            <Select options={[{ value: "player", label: "player" }, { value: "admin", label: "admin" }]} />
-          </Form.Item>
-          {role === "player" ? <Form.Item name="steam64" label="Steam64"><Input /></Form.Item> : null}
+          <Form.Item name="steam64" label="Steam64"><Input /></Form.Item>
         </Form>
       </Modal>
     </>

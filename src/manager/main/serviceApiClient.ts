@@ -12,7 +12,7 @@ export class ServiceApiClient {
 
   async login(username: string, password: string): Promise<LoginResult> {
     this.token = undefined;
-    const response = await this.request<{ token: string; account: AccountView }>("POST", "/auth/login", { username, password });
+    const response = await this.request<{ token: string; account: AccountView }>("POST", "/auth/manager-login", { username, password });
     this.token = response.token;
     return { account: response.account };
   }
@@ -45,8 +45,8 @@ export class ServiceApiClient {
     return response.account;
   }
 
-  revokeSessions(id: string): Promise<{ revoked: number }> {
-    return this.request("POST", `/admin/accounts/${id}/revoke-sessions`, {});
+  deleteAccount(id: string): Promise<void> {
+    return this.request("DELETE", `/admin/accounts/${id}`);
   }
 
   private request<T>(method: string, route: string, body?: unknown): Promise<T> {
