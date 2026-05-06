@@ -12,6 +12,7 @@ import { registerPlayerIpc } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
 import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
+import { revokePlayerSessionForExit } from "./sessionShutdown.js";
 
 const sessionFile = path.join(app.getPath("userData"), "player-session.json");
 const sessionStore = new SavedLoginStore(sessionFile);
@@ -25,6 +26,7 @@ let realtimeSessionVersion = 0;
 let connectedInCurrentSession = false;
 let pauseRealtimeEvents = false;
 let realtimeDeliveryQueue = Promise.resolve();
+let quitAfterSessionCleanup = false;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 
@@ -217,6 +219,22 @@ app.whenReady().then(async () => {
 
   app.on("activate", async () => {
     if (BrowserWindow.getAllWindows().length === 0) await createWindow();
+  });
+});
+
+app.on("before-quit", (event) => {
+  if (quitAfterSessionCleanup || !apiClient) return;
+  event.preventDefault();
+  void revokePlayerSessionForExit({
+    clearSession,
+    disconnectRealtime,
+    getApiClient: () => apiClient,
+    setApiClient: (client) => {
+      apiClient = client;
+    },
+  }).finally(() => {
+    quitAfterSessionCleanup = true;
+    app.quit();
   });
 });
 

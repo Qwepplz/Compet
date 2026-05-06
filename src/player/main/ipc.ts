@@ -1,5 +1,5 @@
 import { clipboard, ipcMain, net, shell } from "electron";
-import type { PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason } from "../shared/types.js";
+import type { PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { SteamProfileService } from "./steamProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
@@ -13,6 +13,8 @@ export interface SavedPlayerLogin {
 interface PersistedSession extends SavedPlayerLogin {
   token?: string;
 }
+
+const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 
 interface IpcDeps {
   clearSession: () => Promise<void>;
@@ -43,7 +45,8 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     const result = await client.login(username, password);
     deps.setApiClient(client);
     await deps.saveSession({ baseUrl, token: result.token, username, password });
-    deps.connectRealtime(baseUrl, result.token);
+    if (result.account.mustChangePassword) deps.disconnectRealtime();
+    else deps.connectRealtime(baseUrl, result.token);
     return result;
   });
 
@@ -84,6 +87,8 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("matchmaking:declineReady", () => withSavedAuth(deps, (client) => client.declineReady()));
   ipcMain.handle("matchmaking:applyVeto", (_event, roomId: string, action: "ban" | "pick", map: string) =>
     withSavedAuth(deps, (client) => client.applyVeto(roomId, action, map)));
+  ipcMain.handle("matchmaking:sendChatMessage", (_event, roomId: string, text: string) =>
+    withSavedAuth(deps, (client) => client.sendMatchChatMessage(roomId, text)));
   ipcMain.handle("matchmaking:refreshSnapshot", () => withSavedAuth(deps, () => deps.refreshRealtimeSnapshot("manual")));
 
   ipcMain.handle("player:copyText", (_event, text: string) => {
@@ -120,9 +125,13 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     const client = createPlayerApiClient(persisted.baseUrl);
     try {
       const loginResult = await client.login(persisted.username, persisted.password);
-      const restored = await client.restoreSession();
       deps.setApiClient(client);
       await deps.saveSession({ ...persisted, token: loginResult.token });
+      if (loginResult.account.mustChangePassword) {
+        deps.disconnectRealtime();
+        return { baseUrl: persisted.baseUrl, account: loginResult.account, matchmaking: emptyMatchmakingState };
+      }
+      const restored = await client.restoreSession();
       deps.connectRealtime(persisted.baseUrl, loginResult.token);
       return { baseUrl: persisted.baseUrl, ...restored };
     } catch (error) {

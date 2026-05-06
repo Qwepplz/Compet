@@ -14,14 +14,15 @@ interface MatchRoomPageProps {
   onCopyText?: (text: string) => Promise<void>;
 }
 
-function formatCountdown(deadlineAt: string | undefined, nowMs: number): string {
+function formatCountdown(deadlineAt: string | undefined, nowMs: number, maxSeconds?: number): string {
   if (!deadlineAt) return "--:--";
   const deadlineMs = new Date(deadlineAt).getTime();
   if (!Number.isFinite(deadlineMs)) return "--:--";
   const remainingMs = deadlineMs - nowMs;
   const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  const minutes = Math.floor(remainingSeconds / 60).toString().padStart(2, "0");
-  const seconds = (remainingSeconds % 60).toString().padStart(2, "0");
+  const displayedSeconds = Math.min(maxSeconds ?? remainingSeconds, remainingSeconds);
+  const minutes = Math.floor(displayedSeconds / 60).toString().padStart(2, "0");
+  const seconds = (displayedSeconds % 60).toString().padStart(2, "0");
   return `${minutes}:${seconds}`;
 }
 
@@ -58,14 +59,26 @@ function participantName(participant: PlayerMatchParticipantDto): string {
 }
 
 function participantMeta(participant: PlayerMatchParticipantDto): string {
-  return participant.kind === "human" ? "STEAM 玩家" : "BOT";
+  if (participant.kind === "human") return "STEAM 玩家";
+  return participant.botCategory === "pro" ? "Pro-Bot" : "BOT";
 }
 
 function mapThumbClass(map: string): string {
   return `faceit-map-thumb faceit-map-thumb--${map.toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`;
 }
 
-function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | "right") {
+function vetoPrompt(
+  currentActor: NonNullable<PlayerLiveMatchStateDto["veto"]>["current"] | undefined,
+  canApplyCurrentVeto: boolean,
+  isOwnTeamVeto: boolean,
+): string {
+  if (!currentActor) return "等待操作";
+  if (!isOwnTeamVeto) return currentActor.action === "pick" ? "你的对手正在选择地图" : "你的对手正在禁用地图";
+  if (canApplyCurrentVeto) return currentActor.action === "pick" ? "轮到您选择地图" : "轮到您封禁地图";
+  return currentActor.action === "pick" ? "正在等待队长选择地图" : "正在等待队长封禁地图";
+}
+
+function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | "right", accountId: string | undefined) {
   if (!team) return null;
 
   return (
@@ -75,15 +88,23 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
         <strong>{team.name}</strong>
       </div>
       <div className="faceit-player-list">
-        {team.participants.map((participant) => (
-          <div className="faceit-player-card" key={participant.id}>
-            <SteamAvatar className="faceit-player-avatar" avatarUrl={participant.steamAvatarUrl} label={participantName(participant)} />
-            <div className="faceit-player-main">
-              <strong>{participantName(participant)}</strong>
-              <span>{participantMeta(participant)}</span>
+        {team.participants.map((participant) => {
+          const isSelf = Boolean(accountId && participant.accountId === accountId);
+          return (
+            <div className={`faceit-player-card${isSelf ? " faceit-player-card--self" : ""}`} key={participant.id}>
+              <SteamAvatar className="faceit-player-avatar" avatarUrl={participant.steamAvatarUrl} label={participantName(participant)} />
+              <div className="faceit-player-main">
+                <div className="faceit-player-name-line">
+                  <strong>{participantName(participant)}</strong>
+                  {participant.isCaptain ? (
+                    <span className="faceit-captain-badge" aria-label="队长" title="队长">C</span>
+                  ) : null}
+                </div>
+                <span>{participantMeta(participant)}</span>
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
@@ -106,6 +127,12 @@ export function MatchRoomPage({
 
   const connect = room?.connect;
   const currentActor = room?.veto?.current;
+  const accountTeamId = account?.id && room?.teamA?.participants.some((participant) => participant.accountId === account.id)
+    ? "teamA"
+    : account?.id && room?.teamB?.participants.some((participant) => participant.accountId === account.id)
+      ? "teamB"
+      : undefined;
+  const isOwnTeamVeto = Boolean(accountTeamId && currentActor?.actorTeamId === accountTeamId);
   const canApplyCurrentVeto = Boolean(
     account?.id && currentActor?.actorType === "human" && currentActor.actorAccountId === account.id,
   );
@@ -118,8 +145,14 @@ export function MatchRoomPage({
   const actorLabel = currentActor
     ? currentActor.actorAccountId
       ? participantNames.get(currentActor.actorAccountId) ?? currentActor.actorName
-      : "系统选择"
+      : currentActor.actorName
     : undefined;
+  const teamNameById = new Map([
+    ["teamA", room?.teamA?.name ?? "Team A"],
+    ["teamB", room?.teamB?.name ?? "Team B"],
+  ] as const);
+  const actorTeamName = currentActor ? teamNameById.get(currentActor.actorTeamId) : undefined;
+  const currentVetoPrompt = vetoPrompt(currentActor, canApplyCurrentVeto, isOwnTeamVeto);
 
   return (
     <div className="faceit-matchroom">
@@ -132,7 +165,7 @@ export function MatchRoomPage({
 
       <section className="faceit-match-header">
         <div className="faceit-team-summary">
-          <strong>Team {room?.teamA?.name ?? "alpha"}</strong>
+          <strong>{room?.teamA?.name ?? "Team A"}</strong>
           <span>{room?.teamA?.participants.length ?? 0} 名玩家</span>
         </div>
         <div className="faceit-match-status">
@@ -141,7 +174,7 @@ export function MatchRoomPage({
           <small>{formatMapName(currentMap)}</small>
         </div>
         <div className="faceit-team-summary faceit-team-summary--right">
-          <strong>Team {room?.teamB?.name ?? "beta"}</strong>
+          <strong>{room?.teamB?.name ?? "Team B"}</strong>
           <span>{room?.teamB?.participants.length ?? 0} 名玩家</span>
         </div>
       </section>
@@ -153,7 +186,7 @@ export function MatchRoomPage({
         </section>
       ) : (
         <div className="faceit-match-grid">
-          {renderTeam(room.teamA, "left")}
+          {renderTeam(room.teamA, "left", account?.id)}
 
           <main className="faceit-center-panel">
             <div className="faceit-progress-line" />
@@ -184,12 +217,12 @@ export function MatchRoomPage({
             ) : null}
 
             {room.phase === "map_banpick" ? (
-              <section className="faceit-connect-panel">
-                <span>Map Veto</span>
-                <strong>{actorLabel ? `Actor: ${actorLabel}` : "Waiting"}</strong>
-                <small>{currentActor ? `${currentActor.actorTeamId} · ${currentActor.action}` : "等待操作"}</small>
-                <strong className="faceit-countdown">{formatCountdown(currentActor?.deadlineAt, nowMs)}</strong>
-                <small>剩余 {formatCountdown(currentActor?.deadlineAt, nowMs)}</small>
+              <section className="faceit-connect-panel faceit-veto-panel">
+                <div className="faceit-veto-status">
+                  <strong>{currentVetoPrompt}</strong>
+                  <span>{formatCountdown(currentActor?.deadlineAt, nowMs, 30)}</span>
+                  <small>{actorLabel ? `队长：${actorLabel}${actorTeamName ? ` · ${actorTeamName}` : ""}` : "等待操作"}</small>
+                </div>
                 <div className="faceit-map-pool">
                   {room.veto?.mapPool.map((map) => {
                     const actionLabel = currentActor?.action === "pick" ? "PICK" : "BAN";
@@ -207,9 +240,9 @@ export function MatchRoomPage({
                       >
                         <span className={mapThumbClass(map)} aria-hidden="true" />
                         <span className="faceit-map-card-main">
-                          <span>{cardActionLabel}</span>
                           <strong>{mapName}</strong>
                         </span>
+                        <span className="faceit-map-card-action">{cardActionLabel}</span>
                       </Button>
                     );
                   })}
@@ -254,7 +287,7 @@ export function MatchRoomPage({
             ) : null}
           </main>
 
-          {renderTeam(room.teamB, "right")}
+          {renderTeam(room.teamB, "right", account?.id)}
         </div>
       )}
     </div>

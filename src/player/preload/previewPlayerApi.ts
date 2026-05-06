@@ -6,6 +6,7 @@ import type {
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchChatMessageDto,
   PlayerMatchmakingStateDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
@@ -227,6 +228,22 @@ export function createPreviewPlayerApi() {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);
       return room;
+    },
+    sendMatchChatMessage: async (_roomId: string, text: string): Promise<PlayerMatchChatMessageDto> => {
+      const nextParty = ensureParty();
+      room = room ?? makeReadyRoom(nextParty);
+      const message: PlayerMatchChatMessageDto = {
+        id: `preview-chat-${Date.now()}`,
+        kind: "player",
+        text: text.trim(),
+        accountId: previewAccount.id,
+        displayName: previewAccount.steamPersonaName,
+        createdAt: new Date().toISOString(),
+      };
+      room = { ...room, chat: [...(room.chat ?? []), message] };
+      for (const listener of eventListeners) listener({ type: "match_chat_message", matchId: room.id, message });
+      publishSnapshot();
+      return message;
     },
     refreshRealtimeSnapshot: async (): Promise<PlayerRealtimeSnapshotDto> => snapshot(),
     onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) => {

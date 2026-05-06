@@ -10,6 +10,7 @@ import { assignTeams } from "./teamAssignment.js";
 import type { MatchParticipant, MatchPlan } from "./types.js";
 import {
   MatchmakingStore,
+  type MatchChatMessage,
   type MatchRoomReadyState,
   type MatchRoomRecord,
   type PartyInvitationRecord,
@@ -17,6 +18,8 @@ import {
   type QueueEntry,
 } from "./matchmakingStore.js";
 import {
+  BOT_AUTO_VETO_WINDOW_MS,
+  VETO_STEP_MS,
   applyVetoAction,
   applyVetoTimeout,
   createVetoState,
@@ -27,7 +30,7 @@ import {
   type VetoHistoryEntry,
 } from "./vetoService.js";
 
-const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "de_vertigo", "de_ancient", "de_anubis"];
+const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "de_dust2", "de_ancient", "de_anubis"];
 const MAX_PARTY_HUMANS = 10;
 const READY_TIMEOUT_MS = 60_000;
 type ReadyTimeoutHandle = ReturnType<typeof setTimeout>;
@@ -74,6 +77,7 @@ export interface PublicMatchRoomRecord {
   partyId?: string;
   veto?: PublicVetoState;
   connect?: MatchConnectInfo;
+  chat?: MatchChatMessage[];
   createdAt: string;
 }
 
@@ -276,7 +280,7 @@ export class MatchmakingService {
 
       const startedAt = this.now();
       const humans = await Promise.all(party.memberAccountIds.map((accountId) => this.toHumanParticipant(accountId)));
-      const teams = assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, random: this.random });
+      const teams = assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
       const participants = [...teams.teamA.participants, ...teams.teamB.participants];
       const room: MatchRoomRecord = {
         id: this.idFactory(),
@@ -288,6 +292,7 @@ export class MatchmakingService {
         ready: this.buildReadyStates(humans),
         readyDeadlineAt: this.buildReadyDeadlineAt(startedAt),
         partyId: party.id,
+        chat: [],
         createdAt: startedAt,
       };
       const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, updatedAt: startedAt };
@@ -432,6 +437,36 @@ export class MatchmakingService {
     });
   }
 
+  sendMatchChatMessage(input: { roomId: string; accountId: string; text: string }): Promise<MatchChatMessage> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(input.accountId);
+      const text = input.text.trim();
+      if (!text) throw new Error("match chat message is empty");
+
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === input.roomId);
+      if (!room) throw new Error(`room not found: ${input.roomId}`);
+      if (isTerminalMatchPhase(room.phase)) throw new Error("match room is closed");
+      if (!this.roomHasAccount(room, input.accountId)) throw new Error("account is not in match room");
+
+      const participant = [...room.teamA.participants, ...room.teamB.participants].find(
+        (candidate) => candidate.accountId === input.accountId,
+      );
+      const message: MatchChatMessage = {
+        id: this.idFactory(),
+        kind: "player",
+        text,
+        accountId: input.accountId,
+        displayName: participant?.steamPersonaName?.trim() || participant?.steam64?.trim() || undefined,
+        createdAt: this.now(),
+      };
+      const updated: MatchRoomRecord = { ...room, chat: [...(room.chat ?? []), message] };
+      await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? updated : candidate)));
+      await this.emit({ type: "match_chat_message", matchId: room.id, accountIds: this.roomAudience(updated), message }, room.id);
+      return message;
+    });
+  }
+
   applyVetoTimeoutsUntilFinal(roomId: string): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
@@ -495,7 +530,7 @@ export class MatchmakingService {
     });
   }
 
-  private expireVeto(roomId: string, timeoutAt: string): Promise<PublicMatchRoomRecord> {
+  private expireVeto(roomId: string, timeoutAt: string, allowEarlyBot = false): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId);
@@ -503,7 +538,7 @@ export class MatchmakingService {
 
       const veto = normalizeVetoState(room.veto);
       const previousHistoryLength = veto.history.length;
-      const updatedVeto = applyVetoTimeout(veto, { now: timeoutAt, random: this.random });
+      const updatedVeto = applyVetoTimeout(veto, { now: timeoutAt, random: this.random, allowEarlyBot });
       const updated: MatchRoomRecord = { ...room, phase: "map_banpick", veto: updatedVeto };
 
       await this.emitVetoHistory(room.id, previousHistoryLength, updatedVeto.history, this.roomAudience(updated), toPublicVetoState(updatedVeto)!);
@@ -732,10 +767,16 @@ export class MatchmakingService {
     }
 
     this.clearVetoTimeout(room.id);
-    const timeoutMs = Math.max(0, Date.parse(current.deadlineAt) - Date.parse(this.now()) + 1);
-    const timeoutAt = new Date(Date.parse(current.deadlineAt) + 1).toISOString();
+    const nowMs = Date.parse(this.now());
+    const deadlineMs = Date.parse(current.deadlineAt);
+    const allowEarlyBot = current.actorType === "bot";
+    const botWindowStartMs = deadlineMs - VETO_STEP_MS;
+    const botActionMs = botWindowStartMs + Math.floor((this.random ?? Math.random)() * BOT_AUTO_VETO_WINDOW_MS);
+    const actionAtMs = allowEarlyBot ? Math.min(deadlineMs, Math.max(nowMs, botActionMs)) : deadlineMs + 1;
+    const timeoutMs = Math.max(0, actionAtMs - nowMs);
+    const timeoutAt = new Date(actionAtMs).toISOString();
     const timeout = this.setTimeoutFn(() => {
-      void this.expireVeto(room.id, timeoutAt).catch(() => undefined);
+      void this.expireVeto(room.id, timeoutAt, allowEarlyBot).catch(() => undefined);
     }, timeoutMs);
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.vetoTimeouts.set(room.id, timeout);
@@ -789,6 +830,7 @@ export class MatchmakingService {
       partyId: room.partyId,
       veto: toPublicVetoState(room.veto),
       connect: room.connect ? { ...room.connect } : undefined,
+      chat: room.chat?.map((message) => ({ ...message })),
       createdAt: room.createdAt,
     };
   }

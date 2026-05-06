@@ -6,7 +6,7 @@ import type {
 } from "../../friends/friendService.js";
 import type { MatchConnectInfo } from "../../game/matchExecutor.js";
 import type { PublicMatchRoomRecord, PartyInvitationDto } from "../../matchmaking/matchmakingService.js";
-import type { MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
+import type { MatchChatMessage, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
 import type { MatchParticipant, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
 import type { PublicVetoState, VetoHistoryEntry } from "../../matchmaking/vetoService.js";
 
@@ -26,6 +26,7 @@ export type PlayerMatchTeamDto = MatchTeam;
 export type PlayerVetoHistoryEntryDto = VetoHistoryEntry;
 export type PlayerVetoStateDto = PublicVetoState;
 export type PlayerConnectDto = MatchConnectInfo;
+export type PlayerMatchChatMessageDto = MatchChatMessage;
 export type PlayerLiveMatchStateDto = PublicMatchRoomRecord;
 
 export interface PlayerRealtimeStatusDto {
@@ -85,6 +86,7 @@ export type PlayerRealtimeEvent =
   | { type: "veto_tick"; matchId: string; deadlineAt: string }
   | { type: "map_banned"; matchId: string; entry: PlayerVetoHistoryEntryDto; veto?: PlayerVetoStateDto }
   | { type: "map_picked"; matchId: string; entry: PlayerVetoHistoryEntryDto; veto?: PlayerVetoStateDto }
+  | { type: "match_chat_message"; matchId: string; message: PlayerMatchChatMessageDto }
   | { type: "server_preparing"; matchId: string }
   | { type: "connect_ready"; matchId: string; connect: PlayerConnectDto }
   | { type: "match_live"; matchId: string }

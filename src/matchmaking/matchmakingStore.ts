@@ -39,6 +39,15 @@ export interface MatchRoomReadyState {
   respondedAt?: string;
 }
 
+export interface MatchChatMessage {
+  id: string;
+  kind: "system" | "player";
+  text: string;
+  createdAt: string;
+  accountId?: string;
+  displayName?: string;
+}
+
 export interface MatchRoomRecord {
   id: string;
   phase: MatchPhase;
@@ -51,6 +60,7 @@ export interface MatchRoomRecord {
   partyId?: string;
   veto?: VetoState;
   connect?: MatchConnectInfo;
+  chat?: MatchChatMessage[];
   createdAt: string;
 }
 interface QueueFile {

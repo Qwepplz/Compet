@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Form, Input, Spin, message } from "antd";
+import { Button, Card, Form, Input, Modal, Spin, message } from "antd";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type {
   PlayerFriendListDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchChatMessageDto,
   PlayerMatchParticipantDto,
   PlayerMatchTeamDto,
   PlayerMatchmakingStateDto,
@@ -21,6 +22,7 @@ import {
   hasSavedLoginApi,
 } from "./api/playerApi.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
+import { MatchChatPanel } from "./components/MatchChatPanel.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
 import { playerAccountLabel } from "./playerDisplay.js";
@@ -30,12 +32,16 @@ import {
   mergePartySnapshot,
 } from "./realtimeStateMerge.js";
 
+const matchFoundSoundUrl = new URL("./assets/sounds/faceit_accept_sound_epic.mp3", import.meta.url).href;
+
 type PlayerView = "login" | "change-password" | "home" | "match-room";
 
 const defaultBaseUrl = "https://127.0.0.1:18443";
 
 type SavedPlayerLogin = { baseUrl: string; username?: string; password?: string };
 type LoginValues = { baseUrl: string; username: string; password: string };
+type PasswordChangeValues = { currentPassword: string; newPassword: string; confirmPassword: string };
+type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steamPersonaName" | "steamAvatarUrl">;
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
@@ -75,6 +81,12 @@ function upsertRoom(rooms: PlayerLiveMatchStateDto[], nextRoom: PlayerLiveMatchS
   return nextRooms;
 }
 
+function appendMatchChatMessage(room: PlayerLiveMatchStateDto, chatMessage: PlayerMatchChatMessageDto): PlayerLiveMatchStateDto {
+  const currentMessages = room.chat ?? [];
+  if (currentMessages.some((message) => message.id === chatMessage.id)) return room;
+  return { ...room, chat: [...currentMessages, chatMessage] };
+}
+
 function mergeRoomSteamProfileData(previous: PlayerLiveMatchStateDto, next: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto {
   const profileById = new Map<string, Pick<PlayerMatchParticipantDto, "displayName" | "steamPersonaName" | "steamAvatarUrl">>();
   for (const participant of [...(previous.teamA?.participants ?? []), ...(previous.teamB?.participants ?? [])]) {
@@ -96,7 +108,7 @@ function mergeRoomSteamProfileData(previous: PlayerLiveMatchStateDto, next: Play
 
 function mergeTeamSteamProfileData(
   team: PlayerMatchTeamDto,
-  profileById: Map<string, Pick<PlayerMatchParticipantDto, "displayName" | "steamPersonaName" | "steamAvatarUrl">>,
+  profileById: Map<string, KnownPlayerProfile>,
 ): PlayerMatchTeamDto {
   return {
     ...team,
@@ -105,6 +117,57 @@ function mergeTeamSteamProfileData(
       return profile ? { ...participant, ...profile } : participant;
     }),
   };
+}
+
+function mergeTeamKnownPlayerProfiles(
+  team: PlayerMatchTeamDto,
+  profileByAccountId: Map<string, KnownPlayerProfile>,
+): PlayerMatchTeamDto {
+  if (profileByAccountId.size === 0) return team;
+  return {
+    ...team,
+    participants: team.participants.map((participant) => {
+      const profile = participant.accountId ? profileByAccountId.get(participant.accountId) : undefined;
+      if (!profile) return participant;
+      return {
+        ...participant,
+        displayName: profile.displayName || participant.displayName,
+        steamPersonaName: profile.steamPersonaName ?? participant.steamPersonaName,
+        steamAvatarUrl: profile.steamAvatarUrl ?? participant.steamAvatarUrl,
+      };
+    }),
+  };
+}
+
+export function mergeRoomKnownPlayerProfiles(
+  room: PlayerLiveMatchStateDto | null,
+  profileByAccountId: Map<string, KnownPlayerProfile>,
+): PlayerLiveMatchStateDto | null {
+  if (!room || profileByAccountId.size === 0) return room;
+  return {
+    ...room,
+    teamA: mergeTeamKnownPlayerProfiles(room.teamA, profileByAccountId),
+    teamB: mergeTeamKnownPlayerProfiles(room.teamB, profileByAccountId),
+  };
+}
+
+function buildKnownPlayerProfiles(account: AccountView | null, friends: PlayerFriendListDto): Map<string, KnownPlayerProfile> {
+  const profiles = new Map<string, KnownPlayerProfile>();
+  if (account?.id) {
+    profiles.set(account.id, {
+      displayName: playerAccountLabel(account),
+      steamPersonaName: account.steamPersonaName,
+      steamAvatarUrl: account.steamAvatarUrl,
+    });
+  }
+  for (const entry of [...friends.friends, ...friends.incomingRequests, ...friends.outgoingRequests]) {
+    profiles.set(entry.accountId, {
+      displayName: entry.steamPersonaName ?? entry.displayName,
+      steamPersonaName: entry.steamPersonaName,
+      steamAvatarUrl: entry.steamAvatarUrl,
+    });
+  }
+  return profiles;
 }
 
 export function App() {
@@ -121,9 +184,12 @@ export function App() {
   const [savedLogin, setSavedLogin] = useState<SavedPlayerLogin | null>(null);
   const [loginPending, setLoginPending] = useState(false);
   const [changePasswordPending, setChangePasswordPending] = useState(false);
+  const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
+  const playedMatchSoundRoomIds = useRef(new Set<string>());
+  const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const realtimeApi = hasRealtimeApi(window.playerApi) ? window.playerApi : undefined;
   const savedLoginApi = hasSavedLoginApi(window.playerApi) ? window.playerApi : undefined;
@@ -131,12 +197,25 @@ export function App() {
   const partyApi = hasPartyApi(window.playerApi) ? window.playerApi : undefined;
   const matchRoomApi = hasMatchRoomApi(window.playerApi) ? window.playerApi : undefined;
   const currentRoom = getCurrentRoom(matchmaking);
+  const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
+  const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
   const hasActiveMatch = Boolean(currentRoom);
   const accountLabel = playerAccountLabel(account);
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
 
   useEffect(() => {
     void restoreSession();
+  }, []);
+
+  useEffect(() => {
+    const audio = new Audio(matchFoundSoundUrl);
+    audio.preload = "auto";
+    audio.volume = 1;
+    matchFoundAudioRef.current = audio;
+    return () => {
+      audio.pause();
+      matchFoundAudioRef.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -194,6 +273,21 @@ export function App() {
     });
     if (getCurrentRoom(snapshot.matchmaking)) {
       setActiveView((current) => (current === "home" ? "match-room" : current));
+    }
+  }
+
+  function playMatchFoundSound(matchId: string) {
+    if (playedMatchSoundRoomIds.current.has(matchId)) return;
+    playedMatchSoundRoomIds.current.add(matchId);
+    try {
+      const audio = matchFoundAudioRef.current ?? new Audio(matchFoundSoundUrl);
+      matchFoundAudioRef.current = audio;
+      audio.pause();
+      audio.currentTime = 0;
+      audio.volume = 1;
+      void audio.play().catch(() => undefined);
+    } catch {
+      // Notification sound is best-effort and must not block match state updates.
     }
   }
 
@@ -312,6 +406,7 @@ export function App() {
         }));
         return;
       case "match_room_created":
+        playMatchFoundSound(event.matchId);
         setMatchmaking((current) => {
           const nextRooms = upsertRoom(current.rooms, event.room);
           const nextCurrentRoom = current.room?.id === event.matchId || !current.room ? event.room : current.room;
@@ -385,6 +480,9 @@ export function App() {
               }
             : room.veto),
         }));
+        return;
+      case "match_chat_message":
+        updateCurrentRoom(event.matchId, (room) => appendMatchChatMessage(room, event.message), { activate: false });
         return;
       case "server_preparing":
         updateCurrentRoom(event.matchId, (room) => ({
@@ -527,7 +625,19 @@ export function App() {
       setBaseUrl(values.baseUrl);
       setCurrentPassword(values.password);
       setSavedLogin({ baseUrl: values.baseUrl, username: values.username, password: values.password });
-      await window.playerApi.login(values.baseUrl, values.username, values.password);
+      const loginResult = await window.playerApi.login(values.baseUrl, values.username, values.password);
+      if (loginResult.account.mustChangePassword) {
+        setAccount(loginResult.account);
+        resolvedFriendRequestIds.current.clear();
+        resolvedPartyInvitationIds.current.clear();
+        setFriends(emptyFriends);
+        setParty(null);
+        setMatchmaking(emptyMatchmaking);
+        setRealtimeStatus(emptyRealtimeStatus);
+        setStale(false);
+        setActiveView("change-password");
+        return;
+      }
       const restored = await window.playerApi.restoreSession();
       if (!restored) {
         setActiveView("login");
@@ -550,28 +660,36 @@ export function App() {
     }
   }
 
-  async function changePassword(values: { currentPassword: string; newPassword: string }) {
+  async function changePassword(values: PasswordChangeValues, options: { refreshSession: boolean } = { refreshSession: true }) {
     if (changePasswordPending) return;
+    if (values.newPassword !== values.confirmPassword) {
+      message.error("两次输入的新密码不一致");
+      return;
+    }
     setChangePasswordPending(true);
     try {
       await window.playerApi.changePassword(values.currentPassword, values.newPassword);
       setCurrentPassword(values.newPassword);
       setSavedLogin((current) => current ? { ...current, password: values.newPassword } : current);
-      const restored = await window.playerApi.restoreSession();
-      if (!restored) {
-        setActiveView("login");
-        return;
+      if (options.refreshSession) {
+        const restored = await window.playerApi.restoreSession();
+        if (!restored) {
+          setActiveView("login");
+          return;
+        }
+        setAccount(restored.account);
+        resolvedFriendRequestIds.current.clear();
+        resolvedPartyInvitationIds.current.clear();
+        setFriends(emptyFriends);
+        setParty(restored.matchmaking.party ?? null);
+        setMatchmaking(restored.matchmaking);
+        setRealtimeStatus(emptyRealtimeStatus);
+        setStale(false);
+        setActiveView(viewFromSession(restored.account, restored.matchmaking));
+        await hydrateRealtimeState();
+      } else {
+        setPasswordModalOpen(false);
       }
-      setAccount(restored.account);
-      resolvedFriendRequestIds.current.clear();
-      resolvedPartyInvitationIds.current.clear();
-      setFriends(emptyFriends);
-      setParty(restored.matchmaking.party ?? null);
-      setMatchmaking(restored.matchmaking);
-      setRealtimeStatus(emptyRealtimeStatus);
-      setStale(false);
-      setActiveView(viewFromSession(restored.account, restored.matchmaking));
-      await hydrateRealtimeState();
       message.success("密码已更新");
     } catch (error) {
       message.error(error instanceof Error ? error.message : "修改密码失败");
@@ -676,6 +794,21 @@ export function App() {
     }));
   }
 
+  async function leaveParty() {
+    if (!partyApi || !party || hasActiveMatch) return;
+    try {
+      await partyApi.leaveParty();
+      setParty(null);
+      setMatchmaking((current) => ({
+        ...current,
+        party: null,
+      }));
+      void message.success("已退出队伍");
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : "退出队伍失败");
+    }
+  }
+
   async function startPartyMatchmaking() {
     if (!partyApi) return;
     const nextRoom = await partyApi.startPartyMatchmaking();
@@ -684,6 +817,7 @@ export function App() {
       room: nextRoom,
       rooms: upsertRoom(current.rooms, nextRoom),
     }));
+    playMatchFoundSound(nextRoom.id);
     setActiveView("match-room");
   }
 
@@ -714,6 +848,12 @@ export function App() {
     updateCurrentRoom(nextRoom.id, () => nextRoom);
   }
 
+  async function sendMatchChatMessage(roomId: string, text: string) {
+    if (!matchRoomApi) return;
+    const chatMessage = await matchRoomApi.sendMatchChatMessage(roomId, text);
+    updateCurrentRoom(roomId, (room) => appendMatchChatMessage(room, chatMessage), { activate: false });
+  }
+
   async function copyText(text: string) {
     if (!matchRoomApi) return;
     await matchRoomApi.copyText(text);
@@ -725,7 +865,7 @@ export function App() {
       return (
         <MatchRoomPage
           account={account}
-          room={currentRoom}
+          room={currentRoomWithKnownProfiles}
           onAcceptReady={() => acceptReady()}
           onDeclineReady={() => declineReady()}
           onApplyVeto={(roomId, action, map) => applyVeto(roomId, action, map)}
@@ -745,6 +885,7 @@ export function App() {
         onInviteFriend={partyApi && !hasActiveMatch ? inviteToParty : undefined}
         onAcceptPartyInvite={partyApi ? acceptPartyInvite : undefined}
         onDeclinePartyInvite={partyApi ? declinePartyInvite : undefined}
+        onLeaveParty={partyApi && party && !hasActiveMatch ? leaveParty : undefined}
         onStartMatchmaking={
           partyApi && canUseMatchmaking && !hasActiveMatch && (!party || party.ownerAccountId === account?.id)
             ? startMatchmakingFromHome
@@ -824,6 +965,22 @@ export function App() {
             <Form.Item label="新密码" name="newPassword" rules={[{ required: true, message: "请输入新密码" }]}>
               <Input.Password />
             </Form.Item>
+            <Form.Item
+              dependencies={["newPassword"]}
+              label="确认新密码"
+              name="confirmPassword"
+              rules={[
+                { required: true, message: "请再次输入新密码" },
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
+                    return Promise.reject(new Error("两次输入的新密码不一致"));
+                  },
+                }),
+              ]}
+            >
+              <Input.Password />
+            </Form.Item>
             <Button
               type="primary"
               htmlType="submit"
@@ -865,6 +1022,7 @@ export function App() {
             </span>
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
             <span className={`player-status-pill ${stale ? "player-status-pill--warning" : ""}`}>{stale ? "数据待刷新" : "实时已同步"}</span>
+            <Button onClick={() => setPasswordModalOpen(true)}>修改密码</Button>
             <Button onClick={() => void logout()}>退出登录</Button>
           </div>
         </div>
@@ -872,16 +1030,63 @@ export function App() {
         <div className="player-app-layout">
           <main className="player-app-main">{renderAuthenticatedView()}</main>
           <aside className="player-app-sidebar">
-            <FriendsPanel
-              accountId={account?.id ?? ""}
-              friends={friends}
-              onSearchFriends={friendsApi ? searchFriends : undefined}
-              onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
-              onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
-              onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
-            />
+            {currentRoomWithKnownProfiles ? (
+              <MatchChatPanel
+                accountId={account?.id ?? ""}
+                room={currentRoomWithKnownProfiles}
+                onSendMessage={matchRoomApi ? (text) => sendMatchChatMessage(currentRoomWithKnownProfiles.id, text) : undefined}
+              />
+            ) : (
+              <FriendsPanel
+                accountId={account?.id ?? ""}
+                friends={friends}
+                onSearchFriends={friendsApi ? searchFriends : undefined}
+                onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
+                onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
+                onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
+              />
+            )}
           </aside>
         </div>
+        <Modal
+          centered
+          footer={null}
+          open={passwordModalOpen}
+          title="修改密码"
+          onCancel={() => setPasswordModalOpen(false)}
+        >
+          <Form
+            layout="vertical"
+            initialValues={{ currentPassword }}
+            onFinish={(values) => void changePassword(values, { refreshSession: false })}
+          >
+            <Form.Item label="当前密码" name="currentPassword" rules={[{ required: true, message: "请输入当前密码" }]}>
+              <Input.Password />
+            </Form.Item>
+            <Form.Item label="新密码" name="newPassword" rules={[{ required: true, message: "请输入新密码" }]}>
+              <Input.Password />
+            </Form.Item>
+            <Form.Item
+              dependencies={["newPassword"]}
+              label="确认新密码"
+              name="confirmPassword"
+              rules={[
+                { required: true, message: "请再次输入新密码" },
+                ({ getFieldValue }) => ({
+                  validator(_, value) {
+                    if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
+                    return Promise.reject(new Error("两次输入的新密码不一致"));
+                  },
+                }),
+              ]}
+            >
+              <Input.Password />
+            </Form.Item>
+            <Button type="primary" htmlType="submit" block loading={changePasswordPending} disabled={changePasswordPending}>
+              保存新密码
+            </Button>
+          </Form>
+        </Modal>
       </div>
     </div>
   );

@@ -219,6 +219,106 @@ input {
   background: #050505;
 }
 
+.match-chat-panel {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  min-height: calc(100vh - 64px);
+  background: #0b0b0b;
+}
+
+.match-chat-header {
+  display: grid;
+  gap: 3px;
+  padding: 16px;
+  border-bottom: 1px solid #1b1b1b;
+}
+
+.match-chat-header strong {
+  color: #fff;
+  font-size: 15px;
+}
+
+.match-chat-header span {
+  color: #8b8b8b;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.match-chat-messages {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 14px;
+}
+
+.match-chat-empty {
+  color: #6d6d6d;
+  font-size: 12px;
+}
+
+.match-chat-message {
+  display: grid;
+  gap: 4px;
+  max-width: 92%;
+  padding: 9px 10px;
+  border: 1px solid #222;
+  background: #151515;
+}
+
+.match-chat-message--self {
+  justify-self: end;
+  border-color: #3a271d;
+  background: #211711;
+}
+
+.match-chat-message--system {
+  max-width: 100%;
+  border-color: #252525;
+  background: #101010;
+  color: #a9a9a9;
+}
+
+.match-chat-message strong {
+  color: #fff;
+  font-size: 11px;
+}
+
+.match-chat-message p {
+  margin: 0;
+  color: #dedede;
+  font-size: 12px;
+  line-height: 1.42;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.match-chat-message--system p {
+  color: #a9a9a9;
+}
+
+.match-chat-message time {
+  color: #666;
+  font-size: 10px;
+}
+
+.match-chat-compose {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  padding: 12px;
+  border-top: 1px solid #1b1b1b;
+  background: #090909;
+}
+
+.match-chat-compose .ant-input-affix-wrapper,
+.match-chat-compose .ant-input {
+  border-color: #282828;
+  background: #111;
+  color: #fff;
+}
+
 .faceit-play {
   min-height: calc(100vh - 64px);
   padding: 70px 5vw 0;
@@ -403,15 +503,33 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #ff5500;
 }
 
+.faceit-queue-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
 .faceit-main-cta,
+.faceit-secondary-cta,
 .faceit-connect-button {
   height: 48px;
+  min-width: 118px;
   border-radius: 8px;
+  box-shadow: none;
+  font-weight: 900;
+}
+
+.faceit-main-cta,
+.faceit-connect-button {
   color: #fff;
   background: #ff5500;
   border-color: #ff5500;
-  box-shadow: none;
-  font-weight: 900;
+}
+
+.faceit-secondary-cta {
+  color: #f2f2f2;
+  background: #151515;
+  border-color: #3a3a3a;
 }
 
 .faceit-binding-warning {
@@ -596,6 +714,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background: #101010;
 }
 
+.faceit-player-card--self {
+  border-color: #ff5500;
+  background: #17110d;
+}
+
 .faceit-player-avatar {
   display: grid;
   place-items: center;
@@ -611,12 +734,39 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   min-width: 0;
 }
 
+.faceit-player-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .faceit-player-main strong {
   display: block;
+  min-width: 0;
   overflow: hidden;
   color: #fff;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.faceit-captain-badge {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 2px;
+  background: #ff5500;
+  color: #111;
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.28);
+  font-size: 11px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.faceit-player-card--self .faceit-player-main strong {
+  color: #ff5500;
 }
 
 .faceit-player-main span,
@@ -673,6 +823,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   width: 100%;
 }
 
+.faceit-map-pool {
+  grid-template-columns: 1fr;
+  gap: 6px;
+}
+
 .faceit-ready-row,
 .faceit-server-box {
   display: grid;
@@ -718,22 +873,52 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 10px;
 }
 
+.faceit-veto-panel {
+  gap: 10px;
+}
+
+.faceit-veto-status {
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+  padding: 0 0 2px;
+  text-align: center;
+}
+
+.faceit-veto-status strong {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.faceit-veto-status span {
+  color: #cfcfcf;
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.faceit-veto-status small {
+  color: #8b8b8b;
+  font-size: 11px;
+}
+
 .faceit-map-card.ant-btn {
   height: auto;
-  min-height: 92px;
+  min-height: 38px;
   overflow: hidden;
   padding: 0;
-  border: 1px solid #2b2b2b;
-  background: #111;
+  border: 1px solid #242424;
+  background: #191919;
   text-align: left;
 }
 
 .faceit-map-card.ant-btn > span {
   display: grid;
-  grid-template-columns: 104px minmax(0, 1fr);
+  grid-template-columns: 52px minmax(0, 1fr) 48px;
   align-items: stretch;
   width: 100%;
-  min-height: 92px;
+  min-height: 38px;
 }
 
 .faceit-map-card.ant-btn:not(:disabled):hover,
@@ -752,7 +937,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-map-thumb {
   display: block;
-  min-height: 92px;
+  min-height: 38px;
   background-color: #333;
   background-position: center;
   background-size: cover;
@@ -763,12 +948,9 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   opacity: 0.42;
 }
 
-.faceit-map-card--removed .faceit-map-card-main span {
-  color: #7a7a7a;
-}
-
-.faceit-map-card--removed .faceit-map-card-main strong {
-  color: #9a9a9a;
+.faceit-map-card--removed .faceit-map-card-main strong,
+.faceit-map-card--removed .faceit-map-card-action {
+  color: #666;
 }
 
 .faceit-map-thumb--de_mirage {
@@ -791,12 +973,20 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background-image: url("./assets/maps/de_dust2.jpg");
 }
 
+.faceit-map-thumb--de_cache {
+  background-image: url("./assets/maps/de_cache.png");
+}
+
 .faceit-map-thumb--de_overpass {
   background-image: url("./assets/maps/de_overpass.jpg");
 }
 
 .faceit-map-thumb--de_vertigo {
   background-image: url("./assets/maps/de_vertigo.jpg");
+}
+
+.faceit-map-thumb--de_train {
+  background-image: url("./assets/maps/de_train.png");
 }
 
 .faceit-map-thumb--de_anubis {
@@ -806,30 +996,41 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-map-card-main {
   display: grid;
   align-content: center;
-  gap: 4px;
+  gap: 1px;
   min-width: 0;
-  padding: 12px 14px;
-}
-
-.faceit-map-card-main span {
-  color: #ff5500;
-  font-size: 11px;
-  font-weight: 900;
+  padding: 5px 8px;
 }
 
 .faceit-map-card-main strong {
   overflow: hidden;
   color: #fff;
+  font-size: 12px;
+  line-height: 1.05;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.faceit-map-card-action {
+  display: grid;
+  align-items: center;
+  justify-items: end;
+  padding: 0 10px 0 0;
+  color: #4f4f4f;
+  font-size: 10px;
+  font-weight: 900;
 }
 
 .faceit-map-pool .ant-btn,
 .faceit-connect-panel .ant-btn {
   width: 100%;
+  min-height: 38px;
+  border-radius: 4px;
+  font-weight: 900;
+}
+
+.faceit-connect-panel .faceit-connect-button {
   min-height: 40px;
   border-radius: 8px;
-  font-weight: 900;
 }
 
 .faceit-empty-room {
@@ -885,11 +1086,26 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .player-social-row {
   display: grid;
-  gap: 8px;
+  grid-template-columns: 40px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px 10px;
   padding: 10px;
   background: #121212;
   border: 1px solid #1f1f1f;
   border-radius: 8px;
+}
+
+.player-social-row .faceit-avatar {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
+}
+
+.player-social-row > .ant-btn,
+.player-social-row > .player-social-row-actions,
+.player-social-row > .player-social-meta {
+  grid-column: 2;
+  justify-self: start;
 }
 
 .player-social-row-main {
@@ -941,6 +1157,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   .player-app-sidebar {
     border-left: 0;
     border-top: 1px solid #171717;
+  }
+
+  .match-chat-panel {
+    min-height: 420px;
   }
 
   .faceit-play-hero,

@@ -1,6 +1,8 @@
 import crypto from "node:crypto";
 import type { JsonSessionRepository, SessionRecord } from "./sessionRepository.js";
 
+const ACTIVE_CLIENT_STALE_AFTER_MS = 120_000;
+
 export interface VerifiedSession {
   sessionId: string;
   accountId: string;
@@ -31,7 +33,10 @@ export class SessionService {
       revokedAt: null,
       lastSeenAt: nowIso,
     };
-    if (options.rejectExistingActive) await this.repository.insertIfNoActiveForAccount(session, nowIso);
+    if (options.rejectExistingActive) {
+      const staleBefore = new Date(now.getTime() - ACTIVE_CLIENT_STALE_AFTER_MS).toISOString();
+      await this.repository.insertIfNoActiveForAccount(session, nowIso, staleBefore);
+    }
     else await this.repository.replaceActiveForAccount(session, nowIso);
     return { token, session };
   }

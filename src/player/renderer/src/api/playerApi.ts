@@ -3,6 +3,7 @@ import type {
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchChatMessageDto,
   PlayerMatchmakingStateDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
@@ -45,6 +46,7 @@ export interface PlayerMatchRoomApi {
   acceptReady(): Promise<PlayerLiveMatchStateDto>;
   declineReady(): Promise<PlayerLiveMatchStateDto>;
   applyVeto(roomId: string, action: "ban" | "pick", map: string): Promise<PlayerLiveMatchStateDto>;
+  sendMatchChatMessage(roomId: string, text: string): Promise<PlayerMatchChatMessageDto>;
   copyText(text: string): Promise<void>;
 }
 
@@ -75,5 +77,5 @@ export function hasPartyApi(api: Window["playerApi"]): api is PlayerApiWithParty
 }
 
 export function hasMatchRoomApi(api: Window["playerApi"]): api is PlayerApiWithMatchRoom {
-  return hasMethods(api, ["getMatchmakingState", "acceptReady", "declineReady", "applyVeto", "copyText"]);
+  return hasMethods(api, ["getMatchmakingState", "acceptReady", "declineReady", "applyVeto", "sendMatchChatMessage", "copyText"]);
 }

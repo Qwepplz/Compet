@@ -7,6 +7,7 @@ import type {
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchChatMessageDto,
   PlayerMatchParticipantDto,
   PlayerMatchmakingStateDto,
   PlayerMatchTeamDto,
@@ -42,6 +43,14 @@ export class PlayerApiError extends Error {
     super(message);
     this.name = "PlayerApiError";
   }
+}
+
+function readHttpErrorMessage(data: unknown, fallback: string): string {
+  if (typeof data !== "object" || data === null) return fallback;
+  const envelope = data as { message?: unknown; error?: { message?: unknown } };
+  if (typeof envelope.message === "string") return envelope.message;
+  if (typeof envelope.error?.message === "string") return envelope.error.message;
+  return fallback;
 }
 
 export function isSessionInvalidError(error: unknown): boolean {
@@ -175,6 +184,13 @@ export class PlayerApiClient {
       map,
     });
     return this.enrichRoom(response.room);
+  }
+
+  async sendMatchChatMessage(roomId: string, text: string): Promise<PlayerMatchChatMessageDto> {
+    const response = await this.request<{ message: PlayerMatchChatMessageDto }>("POST", `/match-room/${encodeURIComponent(roomId)}/chat`, {
+      text,
+    });
+    return response.message;
   }
 
   async fetchRealtimeSnapshot(reason: PlayerRealtimeSnapshotReason): Promise<PlayerRealtimeSnapshotDto> {
@@ -318,8 +334,7 @@ export class PlayerApiClient {
         method,
         rejectUnauthorized: false,
         headers: {
-          "content-type": "application/json",
-          ...(payload ? { "content-length": Buffer.byteLength(payload) } : {}),
+          ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         },
       }, (res) => {
@@ -338,10 +353,7 @@ export class PlayerApiClient {
             }
           }
           if (statusCode >= 400) {
-            const message = typeof data === "object" && data !== null && "message" in data && typeof data.message === "string"
-              ? data.message
-              : `HTTP ${statusCode}`;
-            reject(new PlayerApiError(message, statusCode));
+            reject(new PlayerApiError(readHttpErrorMessage(data, `HTTP ${statusCode}`), statusCode));
             return;
           }
           resolve(data as T);

@@ -1,6 +1,7 @@
 import { Button, Input } from "antd";
 import { useMemo, useState } from "react";
 import type { PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
+import { SteamAvatar } from "./SteamAvatar.js";
 
 interface FriendsPanelProps {
   accountId: string;
@@ -118,6 +119,7 @@ export function FriendsPanel({
                 const hasPending = pendingAccountIds.has(result.accountId) || isSelf;
                 return (
                   <div className="player-social-row" key={result.accountId}>
+                    <SteamAvatar avatarUrl={result.steamAvatarUrl} label={result.displayName} />
                     <div className="player-social-row-main">
                       <strong>{result.displayName}</strong>
                       <span>已绑定 Steam</span>
@@ -150,6 +152,7 @@ export function FriendsPanel({
             <div className="player-social-list">
               {friends.incomingRequests.map((request) => (
                 <div className="player-social-row" key={request.id}>
+                  <SteamAvatar avatarUrl={request.steamAvatarUrl} label={request.displayName} />
                   <div className="player-social-row-main">
                     <strong>{request.displayName}</strong>
                     <span>好友请求</span>
@@ -190,6 +193,7 @@ export function FriendsPanel({
             <div className="player-social-list">
               {friends.friends.map((friend) => (
                 <div className="player-social-row" key={friend.friendshipId}>
+                  <SteamAvatar avatarUrl={friend.steamAvatarUrl} label={friend.displayName} />
                   <div className="player-social-row-main">
                     <strong>{friend.displayName}</strong>
                     <span>好友</span>

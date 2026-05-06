@@ -40,8 +40,8 @@ export interface VetoState extends PublicVetoState {
   captains?: Record<TeamSide, VetoCaptain>;
 }
 
-const humanVetoStepMs = 60_000;
-const botVetoStepMs = 2_000;
+export const VETO_STEP_MS = 30_000;
+export const BOT_AUTO_VETO_WINDOW_MS = 10_000;
 
 export function normalizeVetoState(state: VetoState): VetoState {
   const captains = state.captains
@@ -131,7 +131,7 @@ export function applyVetoAction(
 
 export function applyVetoTimeout(
   state: VetoState,
-  input: { now: string; random?: () => number },
+  input: { now: string; random?: () => number; allowEarlyBot?: boolean },
 ): VetoState {
   const normalizedState = normalizeVetoState(state);
   if (!normalizedState.current) {
@@ -139,7 +139,8 @@ export function applyVetoTimeout(
   }
   const nowMs = parseTimestamp(input.now, "now time");
   const deadlineMs = parseTimestamp(normalizedState.current.deadlineAt, "deadline time");
-  if (nowMs < deadlineMs) {
+  const canApplyEarlyBot = input.allowEarlyBot === true && normalizedState.current.actorType === "bot";
+  if (nowMs < deadlineMs && !canApplyEarlyBot) {
     return normalizedState;
   }
   const map = chooseRandomMap(normalizedState.availableMaps, input.random ?? Math.random);
@@ -185,36 +186,46 @@ function applyBan(state: VetoState, input: { map: string; now: string; actorType
 }
 
 function selectCaptain(team: MatchTeam, random: () => number): VetoCaptain {
+  const markedCaptain = team.participants.find((participant) => participant.isCaptain);
+  if (markedCaptain) {
+    return participantToCaptain(team, markedCaptain);
+  }
+
   const humanCaptains = team.participants.filter((participant) => participant.kind === "human" && participant.accountId);
-  const humanCaptain = humanCaptains.length === 1
-    ? humanCaptains[0]
-    : humanCaptains[chooseRandomIndex(humanCaptains.length, random)];
-  if (humanCaptain?.accountId) {
+  const humanCaptain = humanCaptains[chooseRandomIndex(humanCaptains.length, random)];
+  if (humanCaptain) {
+    return participantToCaptain(team, humanCaptain);
+  }
+
+  const botCaptain = team.participants[chooseRandomIndex(team.participants.length, random)];
+  return participantToCaptain(team, botCaptain);
+}
+
+function participantToCaptain(team: MatchTeam, participant: MatchTeam["participants"][number] | undefined): VetoCaptain {
+  if (participant?.kind === "human" && participant.accountId) {
     return {
       teamId: team.id,
-      displayName: humanCaptain.displayName,
-      accountId: humanCaptain.accountId,
+      displayName: participant.displayName,
+      accountId: participant.accountId,
       actorType: "human",
     };
   }
 
-  const botCaptain = team.participants[0];
   return {
     teamId: team.id,
-    displayName: botCaptain?.displayName ?? (team.id === "teamA" ? "Team A Captain" : "Team B Captain"),
+    displayName: participant?.displayName ?? (team.id === "teamA" ? "Team A Captain" : "Team B Captain"),
     actorType: "bot",
   };
 }
 
 function nextCurrent(actor: VetoCaptain, now: string): NonNullable<VetoState["current"]> {
-  const stepMs = actor.actorType === "bot" ? botVetoStepMs : humanVetoStepMs;
   return {
     action: "ban",
     actorTeamId: actor.teamId,
     actorName: actor.displayName,
     actorType: actor.actorType,
     ...(actor.accountId ? { actorAccountId: actor.accountId } : {}),
-    deadlineAt: new Date(parseTimestamp(now, "now time") + stepMs).toISOString(),
+    deadlineAt: new Date(parseTimestamp(now, "now time") + VETO_STEP_MS).toISOString(),
   };
 }
 

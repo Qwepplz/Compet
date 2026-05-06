@@ -1,4 +1,5 @@
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
+import type { MatchChatMessage } from "../matchmaking/matchmakingStore.js";
 import type { PublicVetoState, VetoHistoryEntry } from "../matchmaking/vetoService.js";
 
 export type RealtimeEvent =
@@ -40,6 +41,7 @@ export type RealtimeEvent =
   | { type: "veto_tick"; matchId: string; accountIds?: string[]; deadlineAt: string }
   | { type: "map_banned"; matchId: string; accountIds?: string[]; entry: VetoHistoryEntry; veto?: PublicVetoState }
   | { type: "map_picked"; matchId: string; accountIds?: string[]; entry: VetoHistoryEntry; veto?: PublicVetoState }
+  | { type: "match_chat_message"; matchId: string; accountIds?: string[]; message: MatchChatMessage }
   | { type: "server_preparing"; matchId: string; accountIds?: string[] }
   | { type: "connect_ready"; matchId: string; accountIds?: string[]; connect: MatchConnectInfo }
   | { type: "match_live"; matchId: string; accountIds?: string[] }

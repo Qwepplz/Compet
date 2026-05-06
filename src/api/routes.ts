@@ -44,12 +44,32 @@ const friendSearchQuerySchema = z.object({ q: z.string().default("") }).default(
 const friendRequestSchema = z.object({ accountId: z.string().min(1) });
 const matchRoomParamsSchema = z.object({ id: z.string().min(1) });
 const vetoSchema = z.object({ action: z.enum(["ban", "pick"]), map: z.string().min(1) });
+const matchChatSchema = z.object({ text: z.string().trim().min(1).max(300) });
 
 function mapAccountServiceError(error: unknown): never {
   if (error instanceof Error && error.message === "account not found") throw notFound();
   if (error instanceof Error && error.message === "username already exists") throw conflict("Username already exists");
   if (error instanceof Error && error.message === "admin account cannot be deleted") throw forbidden("Cannot delete the server admin account");
   throw error;
+}
+
+function mapClientLoginError(error: unknown): never {
+  if (error instanceof Error) {
+    if (error.message === "account already logged in") throw conflict("账号已在另一个客户端登录");
+    if (error.message === "account disabled") throw unauthorized("账号已被禁用");
+    if (error.message === "admin account cannot use client login") throw unauthorized("管理员账号不能登录客户端，请使用服务端管理器登录");
+    if (error.message === "too many login attempts") throw unauthorized("登录失败次数过多，请稍后再试");
+  }
+  throw unauthorized("用户名或密码错误");
+}
+
+function mapManagerLoginError(error: unknown): never {
+  if (error instanceof Error) {
+    if (error.message === "account disabled") throw unauthorized("管理员账号已被禁用");
+    if (error.message === "admin account required") throw unauthorized("只有管理员账号可以登录服务端管理器");
+    if (error.message === "too many login attempts") throw unauthorized("登录失败次数过多，请稍后再试");
+  }
+  throw unauthorized("用户名或密码错误");
 }
 
 function requireMatchmaking(deps: RouteDeps): MatchmakingService {
@@ -84,6 +104,9 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("party matchmaking must use party owner start") ||
       error.message.includes("party matchmaking must be started by owner") ||
       error.message.includes("party invitation") ||
+      error.message.includes("match chat message is empty") ||
+      error.message.includes("match room is closed") ||
+      error.message.includes("account is not in match room") ||
       error.message.includes("already in another party") ||
       error.message.includes("already a party member") ||
       error.message.includes("not a friend") ||
@@ -129,8 +152,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
       const result = await deps.auth.login(username, password, request.ip);
       return { token: result.token, expiresAt: result.expiresAt, account: publicAccount(result.account) };
     } catch (error) {
-      if (error instanceof Error && error.message === "account already logged in") throw conflict("Account already logged in");
-      throw unauthorized("Invalid username or password");
+      mapClientLoginError(error);
     }
   });
 
@@ -140,8 +162,8 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     try {
       const result = await deps.auth.login(username, password, request.ip, { requireAdmin: true });
       return { token: result.token, expiresAt: result.expiresAt, account: publicAccount(result.account) };
-    } catch {
-      throw unauthorized("Invalid username or password");
+    } catch (error) {
+      mapManagerLoginError(error);
     }
   });
 
@@ -200,24 +222,30 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const { id } = accountIdParamsSchema.parse(request.params);
     const { password } = passwordSchema.parse(request.body);
     try {
-      return { account: publicAccount(await deps.accounts.resetPassword(id, password)) };
+      const account = await deps.accounts.resetPassword(id, password);
+      await deps.sessions.revokeSessionsForAccount(id);
+      return { account: publicAccount(account) };
     } catch (error) {
       mapAccountServiceError(error);
     }
   });
 
-  app.delete("/admin/accounts/:id", async (request, reply) => {
+  app.delete("/admin/accounts/:id", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requireAdmin(request);
     const { id } = accountIdParamsSchema.parse(request.params);
     if (id === auth.account.id) throw forbidden("Cannot delete current admin");
     try {
-      await deps.accounts.deleteAccount(id);
       await deps.sessions.revokeSessionsForAccount(id);
-      return reply.status(204).send();
+    } catch {
+      // Deleting the account makes any leftover sessions fail account lookup.
+    }
+    try {
+      await deps.accounts.deleteAccount(id);
     } catch (error) {
       mapAccountServiceError(error);
     }
+    return { ok: true };
   });
 
   app.get("/me", async (request) => {
@@ -446,6 +474,19 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const input = vetoSchema.parse(request.body);
     try {
       return { room: await matchmaking.applyVeto({ roomId: id, accountId: auth.account.id, action: input.action as VetoAction, map: input.map }) };
+    } catch (error) {
+      mapMatchmakingServiceError(error);
+    }
+  });
+
+  app.post("/match-room/:id/chat", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const matchmaking = requireMatchmaking(deps);
+    const { id } = matchRoomParamsSchema.parse(request.params);
+    const input = matchChatSchema.parse(request.body);
+    try {
+      return { message: await matchmaking.sendMatchChatMessage({ roomId: id, accountId: auth.account.id, text: input.text }) };
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

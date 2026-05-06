@@ -65,14 +65,20 @@ export class JsonSessionRepository {
     });
   }
 
-  async insertIfNoActiveForAccount(session: SessionRecord, now: string): Promise<SessionRecord> {
+  async insertIfNoActiveForAccount(session: SessionRecord, now: string, staleBefore?: string): Promise<SessionRecord> {
     return this.enqueueWrite(async () => {
       const sessions = await this.list();
-      const hasActive = sessions.some((item) => (
-        item.accountId === session.accountId &&
-        !item.revokedAt &&
-        Date.parse(item.expiresAt) > Date.parse(now)
-      ));
+      let hasActive = false;
+      for (let index = 0; index < sessions.length; index += 1) {
+        const item = sessions[index];
+        if (item.accountId !== session.accountId || item.revokedAt || Date.parse(item.expiresAt) <= Date.parse(now)) continue;
+        if (staleBefore && Date.parse(item.lastSeenAt) <= Date.parse(staleBefore)) {
+          sessions[index] = { ...item, revokedAt: now };
+          continue;
+        }
+        hasActive = true;
+        break;
+      }
       if (hasActive) throw new Error("account already logged in");
       sessions.push(session);
       await writeJsonFileAtomic(this.filePath, { sessions });

@@ -16,22 +16,32 @@ interface HomePageProps {
   onInviteFriend?: (accountId: string) => Promise<void>;
   onAcceptPartyInvite?: (invitationId: string) => Promise<void>;
   onDeclinePartyInvite?: (invitationId: string) => Promise<void>;
+  onLeaveParty?: () => Promise<void>;
   onStartMatchmaking?: () => Promise<void>;
 }
 
-function memberLabel(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): string {
+const partyMemberSlotOrder = [3, 1, 4, 0];
+
+function memberDisplay(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): { label: string; avatarUrl?: string } {
   if (accountId === account?.id) {
-    return playerAccountLabel(account);
+    return { label: playerAccountLabel(account), avatarUrl: account.steamAvatarUrl };
   }
   const friend = friends.friends.find((entry) => entry.accountId === accountId);
-  return friend?.steamPersonaName ?? friend?.displayName ?? "玩家";
+  return {
+    label: friend?.steamPersonaName ?? friend?.displayName ?? "玩家",
+    avatarUrl: friend?.steamAvatarUrl,
+  };
+}
+
+function memberLabel(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): string {
+  return memberDisplay(accountId, account, friends).label;
 }
 
 function slotAccountId(index: number, account: AccountView | null, party: PlayerPartyDto | null): string | null {
   if (index === 2) return account?.id ?? null;
   const otherMemberIds = party?.memberAccountIds.filter((memberId) => memberId !== account?.id).slice(0, 4) ?? [];
-  const memberIndex = index < 2 ? index : index - 1;
-  return otherMemberIds[memberIndex] ?? null;
+  const memberIndex = partyMemberSlotOrder.indexOf(index);
+  return memberIndex >= 0 ? otherMemberIds[memberIndex] ?? null : null;
 }
 
 function canInviteFriend(friend: PlayerFriendDto, party: PlayerPartyDto | null, account: AccountView | null): boolean {
@@ -51,15 +61,18 @@ export function HomePage({
   onInviteFriend,
   onAcceptPartyInvite,
   onDeclinePartyInvite,
+  onLeaveParty,
   onStartMatchmaking,
 }: HomePageProps) {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
+  const [leavingParty, setLeavingParty] = useState(false);
+  const [matchingPending, setMatchingPending] = useState(false);
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
   const hasSteamBinding = Boolean(account?.steam64?.trim());
   const accountName = playerAccountLabel(account);
-  const primaryDisabled = !hasSteamBinding || !canStart;
+  const primaryDisabled = !hasSteamBinding || !canStart || matchingPending;
 
   async function inviteFriend(accountId: string) {
     if (!onInviteFriend) return;
@@ -89,6 +102,26 @@ export function HomePage({
       await onDeclinePartyInvite(invitationId);
     } finally {
       setBusyPartyInvitationId(null);
+    }
+  }
+
+  async function leaveParty() {
+    if (!onLeaveParty) return;
+    setLeavingParty(true);
+    try {
+      await onLeaveParty();
+    } finally {
+      setLeavingParty(false);
+    }
+  }
+
+  async function startMatchmaking() {
+    if (!onStartMatchmaking || matchingPending) return;
+    setMatchingPending(true);
+    try {
+      await onStartMatchmaking();
+    } finally {
+      setMatchingPending(false);
     }
   }
 
@@ -123,7 +156,7 @@ export function HomePage({
             const fromLabel = memberLabel(invitation.fromAccountId, account, friends);
             return (
               <div className="faceit-invite-row" key={invitation.id}>
-                <SteamAvatar label={fromLabel} />
+                <SteamAvatar avatarUrl={memberDisplay(invitation.fromAccountId, account, friends).avatarUrl} label={fromLabel} />
                 <div className="faceit-invite-main">
                   <strong>{fromLabel}</strong>
                   <span>邀请你加入队伍</span>
@@ -156,15 +189,12 @@ export function HomePage({
       <div className="faceit-party-stage">
         {[0, 1, 2, 3, 4].map((index) => {
           const memberId = slotAccountId(index, account, party);
-          const label = memberId ? memberLabel(memberId, account, friends) : "";
+          const member = memberId ? memberDisplay(memberId, account, friends) : null;
+          const label = member?.label ?? "";
           const isSelf = index === 2;
           return label ? (
             <div className={`faceit-party-slot ${isSelf ? "faceit-party-slot--self" : ""}`} key={index}>
-              {isSelf ? (
-                <SteamAvatar avatarUrl={account?.steamAvatarUrl} label={accountName} />
-              ) : (
-                <SteamAvatar label={label} />
-              )}
+              <SteamAvatar avatarUrl={member?.avatarUrl} label={label} />
               <strong>{label}</strong>
               <span>{isSelf ? (hasSteamBinding ? "已绑定 Steam" : "未绑定 Steam") : "队伍成员"}</span>
             </div>
@@ -198,7 +228,7 @@ export function HomePage({
               const inviteEnabled = Boolean(onInviteFriend && canInviteFriend(friend, party, account));
               return (
                 <div className="faceit-invite-row" key={friend.friendshipId}>
-                  <SteamAvatar label={label} />
+                  <SteamAvatar avatarUrl={friend.steamAvatarUrl} label={label} />
                   <div className="faceit-invite-main">
                     <strong>{label}</strong>
                     <span>{friend.online ? "在线" : "离线"}</span>
@@ -228,14 +258,22 @@ export function HomePage({
           <span>房间 {roomCount}</span>
         </div>
         {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
-        <Button
-          type="primary"
-          className="faceit-main-cta"
-          onClick={() => void onStartMatchmaking?.()}
-          disabled={primaryDisabled}
-        >
-          匹配比赛
-        </Button>
+        <div className="faceit-queue-actions">
+          {party ? (
+            <Button className="faceit-secondary-cta" onClick={() => void leaveParty()} disabled={!onLeaveParty || leavingParty || matchingPending} loading={leavingParty}>
+              退出队伍
+            </Button>
+          ) : null}
+          <Button
+            type="primary"
+            className="faceit-main-cta"
+            onClick={() => void startMatchmaking()}
+            disabled={primaryDisabled}
+            loading={matchingPending}
+          >
+            {matchingPending ? "正在匹配" : "匹配比赛"}
+          </Button>
+        </div>
       </div>
     </div>
   );

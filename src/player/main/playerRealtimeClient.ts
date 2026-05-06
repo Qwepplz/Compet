@@ -208,6 +208,7 @@ function sanitizeRealtimeEvent(payload: RawData): PlayerRealtimeEvent | undefine
       case "veto_tick":
       case "map_banned":
       case "map_picked":
+      case "match_chat_message":
       case "server_preparing":
       case "connect_ready":
       case "match_live":

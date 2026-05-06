@@ -7,6 +7,7 @@ import type {
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchChatMessageDto,
   PlayerMatchmakingStateDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
@@ -50,6 +51,8 @@ export const playerApi = {
   declineReady: (): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:declineReady"),
   applyVeto: (roomId: string, action: "ban" | "pick", map: string): Promise<PlayerLiveMatchStateDto> =>
     invoke("matchmaking:applyVeto", roomId, action, map),
+  sendMatchChatMessage: (roomId: string, text: string): Promise<PlayerMatchChatMessageDto> =>
+    invoke("matchmaking:sendChatMessage", roomId, text),
   refreshRealtimeSnapshot: (): Promise<PlayerRealtimeSnapshotDto> => invoke("matchmaking:refreshSnapshot"),
   onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) =>
     subscribe("player:realtime:event", listener),

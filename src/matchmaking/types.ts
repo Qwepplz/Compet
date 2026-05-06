@@ -11,6 +11,8 @@ export interface MatchParticipant {
   steamPersonaName?: string;
   steamAvatarUrl?: string;
   botProfileName?: string;
+  botCategory?: "pro";
+  isCaptain?: boolean;
   accountId?: string;
 }
 

@@ -1,6 +1,14 @@
 import https from "node:https";
 import type { AccountView, CreateAccountInput, LoginResult, UpdateAccountInput } from "../shared/types.js";
 
+function readHttpErrorMessage(data: unknown, fallback: string): string {
+  if (typeof data !== "object" || data === null) return fallback;
+  const envelope = data as { message?: unknown; error?: { message?: unknown } };
+  if (typeof envelope.message === "string") return envelope.message;
+  if (typeof envelope.error?.message === "string") return envelope.error.message;
+  return fallback;
+}
+
 export class ServiceApiClient {
   private token?: string;
 
@@ -45,8 +53,8 @@ export class ServiceApiClient {
     return response.account;
   }
 
-  deleteAccount(id: string): Promise<void> {
-    return this.request("DELETE", `/admin/accounts/${id}`);
+  async deleteAccount(id: string): Promise<void> {
+    await this.request<{ ok: boolean }>("DELETE", `/admin/accounts/${encodeURIComponent(id)}`);
   }
 
   private request<T>(method: string, route: string, body?: unknown): Promise<T> {
@@ -57,8 +65,7 @@ export class ServiceApiClient {
         method,
         rejectUnauthorized: false,
         headers: {
-          "content-type": "application/json",
-          ...(payload ? { "content-length": Buffer.byteLength(payload) } : {}),
+          ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
           ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
         },
       }, (res) => {
@@ -77,10 +84,7 @@ export class ServiceApiClient {
             }
           }
           if (statusCode >= 400) {
-            const message = typeof data === "object" && data !== null && "message" in data && typeof data.message === "string"
-              ? data.message
-              : `HTTP ${statusCode}`;
-            reject(new Error(message));
+            reject(new Error(readHttpErrorMessage(data, `HTTP ${statusCode}`)));
             return;
           }
           resolve(data as T);
