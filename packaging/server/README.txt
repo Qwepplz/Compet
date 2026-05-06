@@ -1,6 +1,6 @@
 Compet Server
 
-1. Extract this ZIP to a stable folder.
+1. Extract this archive to a stable folder.
 2. Run Compet Server Manager.exe.
 3. Use the graphical server manager for bootstrap, settings, diagnostics, logs, accounts, and service start/stop/restart.
 4. The managed backend service runs from the packaged app bundle and keeps its default data folder inside the extracted package.

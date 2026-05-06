@@ -17,7 +17,9 @@
     "player:preview": "electron-vite preview --config electron.player.vite.config.ts",
     "package:server": "npm run build && npm run manager:build && pwsh -NoProfile -File scripts/package-server.ps1",
     "package:client": "npm run player:build && pwsh -NoProfile -File scripts/package-client.ps1",
-    "package:zip": "npm run package:server && npm run package:client"
+    "package:7z": "npm run package:server && npm run package:client",
+    "package:archive": "npm run package:7z",
+    "package:zip": "npm run package:7z"
   },
   "dependencies": {
     "@ant-design/icons": "^6.2.2",

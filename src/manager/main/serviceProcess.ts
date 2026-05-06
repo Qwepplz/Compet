@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { spawn as nodeSpawn, type ChildProcessByStdio } from "node:child_process";
+import path from "node:path";
 import type { Readable } from "node:stream";
 import type { ManagerConfig, ServiceStatus } from "../shared/types.js";
 
@@ -21,7 +22,7 @@ export class ManagedServiceProcess extends EventEmitter {
   async start(config: ManagerConfig): Promise<ServiceStatus> {
     if (this.child) return this.current;
     this.setStatus({ state: "starting", baseUrl: this.baseUrl(config) });
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...process.env,
       COMPET_HOST: config.host,
       COMPET_PORT: String(config.port),
@@ -32,6 +33,9 @@ export class ManagedServiceProcess extends EventEmitter {
       COMPET_GAME_PORT_START: String(config.gamePortStart),
       COMPET_GAME_PORT_END: String(config.gamePortEnd),
     };
+    if (this.shouldRunAsElectronNode(config.serverCommand)) {
+      env.ELECTRON_RUN_AS_NODE = "1";
+    }
     try {
       const child = this.spawnFn(config.serverCommand, config.serverArgs, { cwd: this.cwd, env, stdio: ["ignore", "pipe", "pipe"] });
       this.child = child;
@@ -88,6 +92,10 @@ export class ManagedServiceProcess extends EventEmitter {
   private baseUrl(config: ManagerConfig): string {
     const host = config.host === "0.0.0.0" ? "127.0.0.1" : config.host;
     return `https://${host}:${config.port}`;
+  }
+
+  private shouldRunAsElectronNode(command: string): boolean {
+    return Boolean(process.versions.electron) && path.resolve(command) === path.resolve(process.execPath);
   }
 
   private errorMessage(error: unknown): string {
