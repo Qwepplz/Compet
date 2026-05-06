@@ -128,6 +128,8 @@ async function completeRoomsIfGameServerUnavailable(matchmaking: MatchmakingServ
 }
 
 async function loadRuntimeBotCatalog(serverRoot: string) {
+  if (!serverRoot.trim()) return emptyBotCatalog();
+
   try {
     return await loadBotCatalog({
       profileDbPath: path.join(serverRoot, "csgo", "botprofile.db"),

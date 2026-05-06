@@ -21,6 +21,7 @@ export function App() {
   const [loggedIn, setLoggedIn] = useState(false);
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
   const [savedLogin, setSavedLogin] = useState<SavedLoginCredentials | null>(null);
+  const [serviceActionPending, setServiceActionPending] = useState(false);
 
   useEffect(() => {
     void refreshStatus();
@@ -43,28 +44,49 @@ export function App() {
   }
 
   async function startService() {
+    if (serviceActionPending) return;
+    setServiceActionPending(true);
     try {
-      setStatus(await managerApi.startService());
+      const nextStatus = await managerApi.startService();
+      setStatus(nextStatus);
+      if (loggedIn && nextStatus.state === "running") {
+        await reauthenticateAfterServiceRestart();
+      }
     } catch (error) {
       message.error(error instanceof Error ? error.message : "启动服务失败");
       await refreshStatus();
+    } finally {
+      setServiceActionPending(false);
     }
   }
 
   async function stopService() {
+    if (serviceActionPending) return;
+    setServiceActionPending(true);
     try {
       setStatus(await managerApi.stopService());
     } catch (error) {
       message.error(error instanceof Error ? error.message : "停止服务失败");
       await refreshStatus();
+    } finally {
+      setServiceActionPending(false);
     }
   }
   async function restartService() {
+    if (serviceActionPending) return;
+    setServiceActionPending(true);
+    setPage("overview");
     try {
-      setStatus(await managerApi.restartService());
+      const nextStatus = await managerApi.restartService();
+      setStatus(nextStatus);
+      if (nextStatus.state === "running") {
+        await reauthenticateAfterServiceRestart();
+      }
     } catch (error) {
       message.error(error instanceof Error ? error.message : "重启服务失败");
       await refreshStatus();
+    } finally {
+      setServiceActionPending(false);
     }
   }
 
@@ -85,6 +107,7 @@ export function App() {
   async function login(username: string, password: string) {
     try {
       const result = await managerApi.login(username, password);
+      setSavedLogin({ username, password });
       if (result.account.mustChangePassword) {
         setPasswordChangeRequired(true);
         message.warning("请先修改初始密码");
@@ -98,10 +121,41 @@ export function App() {
     }
   }
 
+  async function reauthenticateAfterServiceRestart() {
+    const credentials = savedLogin ?? await managerApi.loadSavedLogin().catch(() => null);
+    if (!credentials?.username || !credentials.password) {
+      setLoggedIn(false);
+      setPasswordChangeRequired(false);
+      setPage("overview");
+      message.warning("服务已重启，请重新登录");
+      return;
+    }
+
+    try {
+      const result = await managerApi.login(credentials.username, credentials.password);
+      setSavedLogin(credentials);
+      if (result.account.mustChangePassword) {
+        setLoggedIn(false);
+        setPasswordChangeRequired(true);
+        setPage("overview");
+        message.warning("服务已重启，请先修改密码");
+        return;
+      }
+      setPasswordChangeRequired(false);
+      setLoggedIn(true);
+    } catch (error) {
+      setLoggedIn(false);
+      setPasswordChangeRequired(false);
+      setPage("overview");
+      message.error(error instanceof Error ? `服务已重启，请重新登录：${error.message}` : "服务已重启，请重新登录");
+    }
+  }
+
   async function changePassword(currentPassword: string, newPassword: string) {
     try {
       await managerApi.changePassword(currentPassword, newPassword);
       message.success("密码已更新");
+      setSavedLogin((credentials) => credentials ? { ...credentials, password: newPassword } : credentials);
       setPasswordChangeRequired(false);
       setLoggedIn(true);
       setPage("overview");
@@ -125,7 +179,9 @@ export function App() {
   }
 
   return (
-    <AppShell page={page} status={status} onPageChange={setPage}>
+    <AppShell page={page} status={status} onPageChange={(nextPage) => {
+      if (!serviceActionPending) setPage(nextPage);
+    }}>
       {page === "overview" && (
         <OverviewPage status={status} onStart={startService} onStop={stopService} onRestart={restartService} />
       )}

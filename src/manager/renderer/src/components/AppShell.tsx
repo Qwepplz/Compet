@@ -31,10 +31,10 @@ export function AppShell({ page, status, children, onPageChange }: { page: strin
             <SafetyCertificateOutlined />
             <Typography.Text strong>服务端管理</Typography.Text>
           </Space>
-          <Space className="status-row">
-            <Tag color={statusColor[status.state]}>{status.state}</Tag>
+          <div className="manager-status">
+            <Tag className="manager-status-tag" color={statusColor[status.state]}>{status.state}</Tag>
             <Typography.Text className="status-url" type="secondary">{status.baseUrl}</Typography.Text>
-          </Space>
+          </div>
         </Layout.Header>
         <Layout.Content className="manager-content">{children}</Layout.Content>
       </Layout>

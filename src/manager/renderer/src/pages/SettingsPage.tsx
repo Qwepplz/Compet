@@ -92,71 +92,76 @@ export function SettingsPage() {
   }
 
   return (
-    <>
+    <div className="settings-page">
       <h1 className="page-title">设置</h1>
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
-      <Spin spinning={loading}>
-        <Form<SettingsFormValues>
-          form={form}
-          layout="vertical"
-          onFinish={submit}
-          disabled={loading || submitting}
-          style={{ maxWidth: 560 }}
-        >
-          <Form.Item name="dataDir" label="数据目录" rules={[{ required: true, whitespace: true, message: "请输入数据目录" }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item name="host" label="匹配服务绑定 IP" rules={[{ required: true, whitespace: true, message: "请输入匹配服务绑定 IP" }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item
-            name="port"
-            label="匹配服务端口"
-            rules={[
-              { required: true, message: "请输入端口" },
-              { type: "number", min: 1, max: 65535, message: "端口范围为 1-65535" },
-            ]}
+      <div className="settings-body">
+        <Spin spinning={loading}>
+          <Form<SettingsFormValues>
+            form={form}
+            layout="vertical"
+            onFinish={submit}
+            disabled={loading || submitting}
+            className="settings-form"
+            style={{ maxWidth: 560 }}
           >
-            <InputNumber min={1} max={65535} precision={0} style={{ width: 180 }} />
-          </Form.Item>
-          <Form.Item
-            name="tokenTtlMinutes"
-            label="Token 有效期分钟"
-            rules={[
-              { required: true, message: "请输入 Token 有效期" },
-              { type: "number", min: 1, message: "Token 有效期至少 1 分钟" },
-            ]}
-          >
-            <InputNumber min={1} precision={0} style={{ width: 180 }} />
-          </Form.Item>
-          <Form.Item label="CSGO 服务端目录" required>
-            <Space.Compact style={{ width: "100%" }}>
-              <Form.Item name="serverRoot" noStyle rules={[{ required: true, whitespace: true, message: "请输入 CSGO 服务端目录" }]}>
-                <Input />
-              </Form.Item>
-              <Button onClick={() => void selectServerRoot()} disabled={loading || submitting}>
-                选择目录
-              </Button>
-            </Space.Compact>
-          </Form.Item>
-          <Form.Item name="publicConnectHost" label="游戏服对外 IP / 域名" rules={[{ required: true, whitespace: true, message: "请输入游戏服对外 IP 或域名" }]}>
-            <Input />
-          </Form.Item>
-          <Space size={12} align="start">
-            <Form.Item name="gamePortStart" label="游戏服端口" rules={[{ required: true, message: "请输入端口" }, { type: "number", min: 1, max: 65535, message: "端口范围为 1-65535" }]}>
+            <Form.Item name="dataDir" label="数据目录" rules={[{ required: true, whitespace: true, message: "请输入数据目录" }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item name="host" label="匹配服务绑定 IP" rules={[{ required: true, whitespace: true, message: "请输入匹配服务绑定 IP" }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item
+              name="port"
+              label="匹配服务端口"
+              rules={[
+                { required: true, message: "请输入端口" },
+                { type: "number", min: 1, max: 65535, message: "端口范围为 1-65535" },
+              ]}
+            >
               <InputNumber min={1} max={65535} precision={0} style={{ width: 180 }} />
             </Form.Item>
-          </Space>
-          <Space>
-            <Button type="primary" htmlType="submit" loading={submitting} disabled={loading || submitting || !loadedConfig}>
-              保存
-            </Button>
-            <Button onClick={() => void loadConfig()} disabled={loading || submitting}>
-              重新加载
-            </Button>
-          </Space>
-        </Form>
-      </Spin>
-    </>
+            <Form.Item
+              name="tokenTtlMinutes"
+              label="Token 有效期分钟"
+              rules={[
+                { required: true, message: "请输入 Token 有效期" },
+                { type: "number", min: 1, message: "Token 有效期至少 1 分钟" },
+              ]}
+            >
+              <InputNumber min={1} precision={0} style={{ width: 180 }} />
+            </Form.Item>
+            <Form.Item label="CSGO 服务端目录" required>
+              <Space.Compact style={{ width: "100%" }}>
+                <Form.Item name="serverRoot" noStyle rules={[{ required: true, whitespace: true, message: "请输入 CSGO 服务端目录" }]}>
+                  <Input />
+                </Form.Item>
+                <Button onClick={() => void selectServerRoot()} disabled={loading || submitting}>
+                  选择目录
+                </Button>
+              </Space.Compact>
+            </Form.Item>
+            <Form.Item name="publicConnectHost" label="游戏服对外 IP / 域名" rules={[{ required: true, whitespace: true, message: "请输入游戏服对外 IP 或域名" }]}>
+              <Input />
+            </Form.Item>
+            <Space size={12} align="start">
+              <Form.Item name="gamePortStart" label="游戏服端口" rules={[{ required: true, message: "请输入端口" }, { type: "number", min: 1, max: 65535, message: "端口范围为 1-65535" }]}>
+                <InputNumber min={1} max={65535} precision={0} style={{ width: 180 }} />
+              </Form.Item>
+            </Space>
+            <div className="settings-actions">
+              <Space>
+                <Button type="primary" htmlType="submit" loading={submitting} disabled={loading || submitting || !loadedConfig}>
+                  保存
+                </Button>
+                <Button onClick={() => void loadConfig()} disabled={loading || submitting}>
+                  重新加载
+                </Button>
+              </Space>
+            </div>
+          </Form>
+        </Spin>
+      </div>
+    </div>
   );
 }

@@ -5,7 +5,7 @@ import { z } from "zod";
 import type { ManagerConfig } from "../shared/types.js";
 import { defaultPublicConnectHost } from "../../shared/network.js";
 
-const defaultServerRoot = "E:\\SteamLibrary\\steamapps\\common\\Counter-Strike Global Offensive Beta - Dedicated Server";
+const legacyDefaultServerRoot = "E:\\SteamLibrary\\steamapps\\common\\Counter-Strike Global Offensive Beta - Dedicated Server";
 const detectedPublicConnectHost = defaultPublicConnectHost();
 
 const schema = z.object({
@@ -15,7 +15,7 @@ const schema = z.object({
   tokenTtlMinutes: z.number().int().positive().default(1440),
   serverCommand: z.string().min(1).default("node"),
   serverArgs: z.array(z.string()).default(["dist/main.js"]),
-  serverRoot: z.string().min(1).default(defaultServerRoot),
+  serverRoot: z.string().default(""),
   publicConnectHost: z.string().min(1).default(detectedPublicConnectHost),
   gamePortStart: z.number().int().min(1).max(65535).default(27015),
   gamePortEnd: z.number().int().min(1).max(65535).default(27030),
@@ -76,6 +76,7 @@ export class FileConfigStore {
     const serverArgs = defaultArgs[0] === "dist/main.cjs" && config.serverArgs.join(" ") === "dist/main.js"
       ? defaultArgs
       : config.serverArgs;
-    return { ...config, serverCommand: command, serverArgs };
+    const serverRoot = config.serverRoot === legacyDefaultServerRoot ? "" : config.serverRoot;
+    return { ...config, serverCommand: command, serverArgs, serverRoot };
   }
 }

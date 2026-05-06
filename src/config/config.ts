@@ -24,7 +24,7 @@ const envSchema = z.object({
   COMPET_PORT: positiveInt.max(65535).default(8443),
   COMPET_DATA_DIR: z.string().min(1).optional(),
   COMPET_TOKEN_TTL_MINUTES: positiveInt.default(1440),
-  COMPET_CSGO_SERVER_ROOT: z.string().min(1).default("E:\\SteamLibrary\\steamapps\\common\\Counter-Strike Global Offensive Beta - Dedicated Server"),
+  COMPET_CSGO_SERVER_ROOT: z.string().default(""),
   COMPET_PUBLIC_CONNECT_HOST: z.string().min(1).default(detectedPublicConnectHost),
   COMPET_GAME_PORT_START: positiveInt.max(65535).default(27015),
   COMPET_GAME_PORT_END: positiveInt.max(65535).default(27030),
