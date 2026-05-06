@@ -5,8 +5,8 @@ $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Server"
 $appRoot = Join-Path $stage "resources\app"
 $archive = Join-Path $artifacts "Compet-Server.7z"
-$legacyZip = Join-Path $artifacts "Compet-Server.zip"
-$legacyTarXz = Join-Path $artifacts "Compet-Server.tar.xz"
+$supersededZip = Join-Path $artifacts "Compet-Server.zip"
+$supersededTarXz = Join-Path $artifacts "Compet-Server.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $serverExe = "Compet Server Manager.exe"
 $preferred7z = "E:\EXCHANGE\github-C\lzma2600\bin\x64\7zr.exe"
@@ -154,8 +154,8 @@ function Optimize-RuntimeNodeModules {
 
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $legacyZip -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $legacyTarXz -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $supersededZip -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $supersededTarXz -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
 $required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "out\main", "out\preload", "out\renderer", "packaging\server", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist")

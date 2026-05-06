@@ -5,8 +5,8 @@ $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Client"
 $appRoot = Join-Path $stage "resources\app"
 $archive = Join-Path $artifacts "Compet-Client.7z"
-$legacyZip = Join-Path $artifacts "Compet-Client.zip"
-$legacyTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
+$supersededZip = Join-Path $artifacts "Compet-Client.zip"
+$supersededTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $clientExe = "Compet Player Client.exe"
 $preferred7z = "E:\EXCHANGE\github-C\lzma2600\bin\x64\7zr.exe"
@@ -116,8 +116,8 @@ function Remove-UnusedElectronFiles {
 
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $legacyZip -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $legacyTarXz -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $supersededZip -Force -ErrorAction SilentlyContinue
+Remove-Item -LiteralPath $supersededTarXz -Force -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
 $required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client", "node_modules\electron\dist")

@@ -5,7 +5,6 @@ import { z } from "zod";
 import type { ManagerConfig } from "../shared/types.js";
 import { defaultPublicConnectHost } from "../../shared/network.js";
 
-const legacyDefaultServerRoot = "E:\\SteamLibrary\\steamapps\\common\\Counter-Strike Global Offensive Beta - Dedicated Server";
 const detectedPublicConnectHost = defaultPublicConnectHost();
 
 const schema = z.object({
@@ -76,7 +75,6 @@ export class FileConfigStore {
     const serverArgs = defaultArgs[0] === "dist/main.cjs" && config.serverArgs.join(" ") === "dist/main.js"
       ? defaultArgs
       : config.serverArgs;
-    const serverRoot = config.serverRoot === legacyDefaultServerRoot ? "" : config.serverRoot;
-    return { ...config, serverCommand: command, serverArgs, serverRoot };
+    return { ...config, serverCommand: command, serverArgs };
   }
 }
