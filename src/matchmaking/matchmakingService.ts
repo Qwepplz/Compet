@@ -279,6 +279,10 @@ export class MatchmakingService {
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
       this.requireOpenParty(party);
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
+      const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms());
+      if (existingRooms.some((room) => isServerManagedPhase(room.phase))) {
+        throw new Error("game server is already active");
+      }
 
       const startedAt = this.now();
       const humans = await Promise.all(party.memberAccountIds.map((accountId) => this.toHumanParticipant(accountId)));
@@ -298,7 +302,7 @@ export class MatchmakingService {
         createdAt: startedAt,
       };
       const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, updatedAt: startedAt };
-      const rooms = [...this.pruneTerminalRooms(await this.deps.store.listRooms()), room];
+      const rooms = [...existingRooms, room];
 
       await this.deps.store.saveRooms(rooms);
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
@@ -660,6 +664,10 @@ export class MatchmakingService {
       return room;
     }
 
+    if (rooms.some((candidate) => candidate.id !== room.id && isServerManagedPhase(candidate.phase))) {
+      return this.failRoomBecauseGameServerActive(rooms, room);
+    }
+
     this.clearVetoTimeout(room.id);
     const preparing: MatchRoomRecord = { ...room, phase: "server_prepare", connect: undefined };
     await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? preparing : candidate)));
@@ -871,6 +879,21 @@ export class MatchmakingService {
 
   private findCurrentRoom<T extends { phase: string }>(rooms: T[]): T | null {
     return [...rooms].reverse().find((room) => !isTerminalMatchPhase(room.phase)) ?? null;
+  }
+
+  private async failRoomBecauseGameServerActive(rooms: MatchRoomRecord[], room: MatchRoomRecord): Promise<MatchRoomRecord> {
+    const failedAt = this.now();
+    const reason = "game server is already active";
+    const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
+    this.clearReadyTimeout(room.id);
+    this.clearVetoTimeout(room.id);
+
+    const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
+    await this.deps.store.saveRooms(updatedRooms);
+    await this.unlockPartyForRoom(failedRoom, failedAt);
+    await this.deps.records?.saveStatus(room.id, { phase: "failed", error: reason });
+    await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason }, room.id);
+    return failedRoom;
   }
 
   private async failReadyRoom(rooms: MatchRoomRecord[], room: MatchRoomRecord, reason: string): Promise<MatchRoomRecord> {

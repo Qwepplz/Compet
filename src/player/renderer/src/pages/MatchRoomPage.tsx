@@ -126,6 +126,8 @@ export function MatchRoomPage({
   }, []);
 
   const connect = room?.connect;
+  const finalMap = room?.veto?.finalMap;
+  const selectedMap = finalMap ?? connect?.map;
   const currentActor = room?.veto?.current;
   const accountTeamId = account?.id && room?.teamA?.participants.some((participant) => participant.accountId === account.id)
     ? "teamA"
@@ -136,7 +138,7 @@ export function MatchRoomPage({
   const canApplyCurrentVeto = Boolean(
     account?.id && currentActor?.actorType === "human" && currentActor.actorAccountId === account.id,
   );
-  const currentMap = room?.connect?.map ?? room?.veto?.finalMap ?? room?.veto?.availableMaps[0] ?? "de_mirage";
+  const currentMap = selectedMap ?? room?.veto?.availableMaps[0] ?? "de_mirage";
   const roomPhase = phaseLabel(room?.phase);
   const participantNames = new Map(
     [...(room?.teamA?.participants ?? []), ...(room?.teamB?.participants ?? [])]
@@ -190,6 +192,14 @@ export function MatchRoomPage({
 
           <main className="faceit-center-panel">
             <div className="faceit-progress-line" />
+
+            {selectedMap ? (
+              <section className="faceit-final-map-preview" aria-label="最终地图">
+                <span>最终地图</span>
+                <strong>{formatMapName(selectedMap)}</strong>
+                <span className={`faceit-final-map-thumb ${mapThumbClass(selectedMap)}`} aria-hidden="true" />
+              </section>
+            ) : null}
 
             {room.phase === "ready" ? (
               <section className="faceit-connect-panel">
@@ -249,12 +259,6 @@ export function MatchRoomPage({
                     );
                   })}
                 </div>
-                {room.veto?.finalMap ? (
-                  <div className="faceit-server-box">
-                    <span>Final Map</span>
-                    <strong>{formatMapName(room.veto.finalMap)}</strong>
-                  </div>
-                ) : null}
               </section>
             ) : null}
 

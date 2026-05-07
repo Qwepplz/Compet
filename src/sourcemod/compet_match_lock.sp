@@ -4,6 +4,8 @@
 #pragma semicolon 1
 #pragma newdecls required
 
+static const int WARMUP_TIMEOUT_SECONDS = 600;
+
 public Plugin myinfo = {
   name = "Compet Match Lock",
   author = "Compet",
@@ -14,8 +16,10 @@ public Plugin myinfo = {
 
 StringMap g_PlayerTeams;
 bool g_LockEnabled = false;
+bool g_Get5Started = false;
 char g_MatchId[128] = "";
 Handle g_EnforceTimer = null;
+Handle g_WarmupTimeoutTimer = null;
 
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
@@ -24,7 +28,13 @@ public void OnPluginStart() {
   RegServerCmd("compet_lock_enable", Command_EnableLock);
   AddCommandListener(Command_JoinTeam, "jointeam");
   AddCommandListener(Command_JoinTeam, "joingame");
+  RestartWarmupTimeout();
 }
+
+public void OnPluginEnd() {
+  StopWarmupTimeout();
+}
+
 public void OnClientPostAdminCheck(int client) {
   if (!g_LockEnabled || IsFakeClient(client)) {
     return;
@@ -36,11 +46,13 @@ public void OnClientPostAdminCheck(int client) {
 public Action Command_ResetLock(int args) {
   g_PlayerTeams.Clear();
   g_LockEnabled = false;
+  g_Get5Started = false;
   StopEnforceTimer();
   g_MatchId[0] = '\0';
   if (args >= 1) {
     GetCmdArg(1, g_MatchId, sizeof(g_MatchId));
   }
+  RestartWarmupTimeout();
   return Plugin_Handled;
 }
 
@@ -84,6 +96,10 @@ public Action Command_EnableLock(int args) {
   return Plugin_Handled;
 }
 
+public void Get5_OnGameStateChanged(Handle event) {
+  MarkGet5Started();
+}
+
 public Action Command_JoinTeam(int client, const char[] command, int argc) {
   if (!g_LockEnabled || client <= 0 || !IsClientInGame(client) || IsFakeClient(client)) {
     return Plugin_Continue;
@@ -123,11 +139,8 @@ bool ApplyClientLock(int client, bool fromCommand, int requestedTeam) {
 
   int lockedTeam = CS_TEAM_NONE;
   if (!g_PlayerTeams.GetValue(auth, lockedTeam)) {
-    if (fromCommand && IsPlayingTeam(requestedTeam)) {
-      KickClient(client, "You are not assigned to this Compet match.");
-      return false;
-    }
-    return true;
+    KickClient(client, "You are not assigned to this Compet match.");
+    return false;
   }
 
   if (IsPlayingTeam(requestedTeam) && requestedTeam != lockedTeam) {
@@ -163,6 +176,50 @@ void StopEnforceTimer() {
   }
   delete g_EnforceTimer;
   g_EnforceTimer = null;
+}
+
+void RestartWarmupTimeout() {
+  if (g_Get5Started) {
+    return;
+  }
+  StopWarmupTimeout();
+  StartWarmupCountdown();
+  g_WarmupTimeoutTimer = CreateTimer(float(WARMUP_TIMEOUT_SECONDS), Timer_WarmupTimeout, 0, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+void StartWarmupCountdown() {
+  ServerCommand("mp_do_warmup_period 1");
+  ServerCommand("mp_warmuptime %d", WARMUP_TIMEOUT_SECONDS);
+  ServerCommand("mp_warmup_start");
+  ServerExecute();
+}
+
+void StopWarmupTimeout() {
+  if (g_WarmupTimeoutTimer == null) {
+    return;
+  }
+  delete g_WarmupTimeoutTimer;
+  g_WarmupTimeoutTimer = null;
+}
+
+void MarkGet5Started() {
+  if (g_Get5Started) {
+    return;
+  }
+  g_Get5Started = true;
+  StopWarmupTimeout();
+}
+
+public Action Timer_WarmupTimeout(Handle timer, any data) {
+  g_WarmupTimeoutTimer = null;
+  if (g_Get5Started) {
+    return Plugin_Stop;
+  }
+
+  PrintToServer("[Compet] Warmup timeout expired before get5 started; shutting down server.");
+  ServerCommand("quit");
+  ServerExecute();
+  return Plugin_Stop;
 }
 
 bool IsPlayingTeam(int team) {

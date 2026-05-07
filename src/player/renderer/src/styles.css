@@ -791,6 +791,45 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background: linear-gradient(90deg, #1a1a1a, #ff5500 50%, #1a1a1a);
 }
 
+.faceit-final-map-preview {
+  display: grid;
+  gap: 10px;
+  justify-items: center;
+  width: 100%;
+  max-width: 420px;
+  padding: 14px;
+  border: 1px solid #262626;
+  border-radius: 8px;
+  background: #111;
+}
+
+.faceit-final-map-preview > span {
+  color: #8d8d8d;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.faceit-final-map-preview strong {
+  color: #fff;
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1.08;
+  text-align: center;
+  white-space: nowrap;
+}
+
+.faceit-final-map-thumb {
+  display: block;
+  width: 100%;
+  min-height: 180px;
+  border: 1px solid #2b2b2b;
+  border-radius: 8px;
+  background-position: center;
+  background-size: cover;
+}
+
 .faceit-connect-panel {
   display: grid;
   gap: 12px;
