@@ -217,6 +217,21 @@ function buildNoRandomBotsCfg(): string {
   ].join("\n");
 }
 
+function trimTrailingBlankLines(lines: string[]): string[] {
+  const next = [...lines];
+  while (next.length > 0 && next[next.length - 1].trim() === "") {
+    next.pop();
+  }
+  return next;
+}
+
+function appendManagedLines(lines: string[], managedLines: string[]): void {
+  if (lines.length > 0) {
+    lines.push("");
+  }
+  lines.push(...managedLines);
+}
+
 async function ensureBaseCfgLoadsNoRandomBots(serverRoot: string): Promise<void> {
   const baseCfgFile = path.join(serverRoot, "csgo", "cfg", "1.cfg");
   await mkdir(path.dirname(baseCfgFile), { recursive: true });
@@ -233,13 +248,13 @@ async function ensureBaseCfgLoadsNoRandomBots(serverRoot: string): Promise<void>
   const noRandomBotsComment = "// Compet managed no random bot hook";
 
   const lines = current.length > 0 ? current.split(/\r?\n/) : [];
-  const nextLines = lines.filter((line) => {
+  const nextLines = trimTrailingBlankLines(lines.filter((line) => {
     const trimmed = line.trim();
     return trimmed !== activeMatchComment && trimmed !== activeMatchHook;
-  });
+  }));
 
   if (!nextLines.some((line) => line.trim() === noRandomBotsHook)) {
-    nextLines.push(noRandomBotsComment, noRandomBotsHook);
+    appendManagedLines(nextLines, [noRandomBotsComment, noRandomBotsHook]);
   }
 
   const next = nextLines.join("\n").replace(/\n*$/, "\n");
@@ -263,15 +278,19 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
   const noRandomBotsHook = `exec ${NO_RANDOM_BOTS_CFG_PATH}`;
   const noRandomBotsComment = "// Compet managed no random bot hook";
   const lines = current.length > 0 ? current.split(/\r?\n/) : [];
-  const nextLines = lines.filter((line) => {
+  const nextLines = trimTrailingBlankLines(lines.filter((line) => {
     const trimmed = line.trim();
     return trimmed !== activeMatchComment
       && trimmed !== activeMatchHook
       && trimmed !== noRandomBotsComment
       && trimmed !== noRandomBotsHook;
-  });
-  nextLines.push(noRandomBotsComment, noRandomBotsHook);
-  nextLines.push(activeMatchComment, activeMatchHook);
+  }));
+  appendManagedLines(nextLines, [
+    noRandomBotsComment,
+    noRandomBotsHook,
+    activeMatchComment,
+    activeMatchHook,
+  ]);
 
   const next = nextLines.join("\n").replace(/\n*$/, "\n");
   if (next !== current) {

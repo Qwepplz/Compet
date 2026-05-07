@@ -75,6 +75,10 @@ function buildProBotNames(botRosters: readonly BotRosterTeam[] | undefined): Rea
   return new Set((botRosters ?? []).flatMap((roster) => roster.players.map(normalizeBotName)).filter(Boolean));
 }
 
+function hasProProfileTemplate(candidate: BotCandidate): boolean {
+  return candidate.templates.some((template) => template.trim().toLowerCase().startsWith("pro"));
+}
+
 function normalizeBotName(name: string): string {
   return name.trim().toLowerCase();
 }
@@ -101,7 +105,7 @@ function toBotParticipant(
 
   usedBotIds.add(id);
   const steam64 = steamAccountIdToSteam64(candidate.steamAccountId);
-  const isProBot = proBotNames.has(normalizeBotName(candidate.name));
+  const isProBot = proBotNames.has(normalizeBotName(candidate.name)) || hasProProfileTemplate(candidate);
 
   return {
     id,

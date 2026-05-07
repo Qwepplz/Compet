@@ -59,7 +59,7 @@ function participantName(participant: PlayerMatchParticipantDto): string {
 }
 
 function participantMeta(participant: PlayerMatchParticipantDto): string {
-  if (participant.kind === "human") return "STEAM 玩家";
+  if (participant.kind === "human") return "Player";
   return participant.botCategory === "pro" ? "Pro-Bot" : "BOT";
 }
 
