@@ -60,7 +60,7 @@ export class FriendService {
 
   async search(accountId: string, query: string): Promise<FriendSearchResult[]> {
     await this.requireEnabledAccount(accountId);
-    const normalizedQuery = query.trim().toLowerCase();
+    const normalizedQuery = normalizeFriendSearchQuery(query);
     if (normalizedQuery.length === 0) return [];
 
     const accounts = (await this.deps.accounts.listAccounts())
@@ -68,7 +68,7 @@ export class FriendService {
         (account) =>
           account.enabled &&
           account.id !== accountId &&
-          account.steam64.includes(normalizedQuery),
+          accountMatchesSearch(account, normalizedQuery),
       )
       .sort((left, right) => left.steam64.localeCompare(right.steam64));
 
@@ -348,4 +348,18 @@ export class FriendService {
     this.mutationQueue = next.catch(() => undefined);
     return next;
   }
+}
+
+function normalizeFriendSearchQuery(query: string): string {
+  const trimmed = query.trim().toLowerCase();
+  const steam64 = /\d{17}/u.exec(trimmed)?.[0];
+  return steam64 ?? trimmed;
+}
+
+function accountMatchesSearch(account: AccountRecord, normalizedQuery: string): boolean {
+  if (account.steam64.includes(normalizedQuery)) return true;
+  return [account.username, account.displayName]
+    .map((value) => value.trim().toLowerCase())
+    .filter(Boolean)
+    .some((value) => value.includes(normalizedQuery));
 }

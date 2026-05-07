@@ -50,11 +50,6 @@ export class FileConfigStore {
   }
 
   private defaultServerCommand(): string {
-    const packagedBundle = path.join(this.appRoot, "dist", "main.cjs");
-    if (existsSync(packagedBundle) && process.versions.electron) {
-      return process.execPath;
-    }
-
     const bundledNode = path.join(this.appRoot, "runtime", "node", "node.exe");
     return existsSync(bundledNode) ? bundledNode : "node";
   }

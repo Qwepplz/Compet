@@ -29,6 +29,10 @@ const DEFAULT_NEGATIVE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const STEAM64_PATTERN = /^\d{17}$/;
 const DEFAULT_TIMEOUT_MS = 5_000;
+const STEAM_FETCH_HEADERS = {
+  accept: "application/json,text/xml,application/xml;q=0.9,*/*;q=0.8",
+  "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Compet/0.1",
+};
 
 interface SteamPlayerSummary {
   steamid: string;
@@ -100,7 +104,7 @@ export class SteamProfileService implements SteamProfileResolver {
       const url = new URL("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/");
       url.searchParams.set("key", this.steamWebApiKey);
       url.searchParams.set("steamids", steam64s.join(","));
-      const response = await this.fetchFn(url.toString(), { signal: controller.signal });
+      const response = await this.fetchFn(url.toString(), { headers: STEAM_FETCH_HEADERS, signal: controller.signal });
       if (!response.ok) {
         return new Map();
       }
@@ -130,10 +134,13 @@ export class SteamProfileService implements SteamProfileResolver {
     const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
       const response = await this.fetchFn(`https://steamcommunity.com/profiles/${steam64}/?xml=1`, {
+        headers: STEAM_FETCH_HEADERS,
         signal: controller.signal,
       });
       if (!response.ok) {
-        this.setCachedProfile(steam64, null);
+        if (response.status === 404) {
+          this.setCachedProfile(steam64, null);
+        }
         return undefined;
       }
 
@@ -153,7 +160,6 @@ export class SteamProfileService implements SteamProfileResolver {
       this.setCachedProfile(steam64, profile);
       return profile;
     } catch {
-      this.setCachedProfile(steam64, null);
       return undefined;
     } finally {
       clearTimeout(timeout);

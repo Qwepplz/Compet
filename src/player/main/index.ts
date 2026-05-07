@@ -1,5 +1,6 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import path from "node:path";
+import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
 import { SavedLoginStore, type SavedLoginRecord } from "../../desktop/main/savedLoginStore.js";
 import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main/windowEntry.js";
 import type {
@@ -13,6 +14,13 @@ import { PlayerApiClient } from "./playerApiClient.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
 import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
 import { revokePlayerSessionForExit } from "./sessionShutdown.js";
+
+const bootLogFile = "compet-player-client-boot.log";
+appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`);
+process.on("uncaughtException", (error) => appendBootLog(bootLogFile, "uncaught exception", error));
+process.on("unhandledRejection", (error) => appendBootLog(bootLogFile, "unhandled rejection", error));
+
+configureRemoteDesktopRendering();
 
 const sessionFile = path.join(app.getPath("userData"), "player-session.json");
 const sessionStore = new SavedLoginStore(sessionFile);
@@ -31,6 +39,20 @@ let realtimeDeliveryQueue = Promise.resolve();
 let quitAfterSessionCleanup = false;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
+
+function configureRemoteDesktopRendering(): void {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  app.commandLine.appendSwitch("disable-direct-composition");
+  app.commandLine.appendSwitch("disable-accelerated-2d-canvas");
+  app.commandLine.appendSwitch("disable-accelerated-video-decode");
+  app.commandLine.appendSwitch("disable-accelerated-video-encode");
+  app.commandLine.appendSwitch("disable-webgl");
+  app.commandLine.appendSwitch("disable-webgl2");
+  app.commandLine.appendSwitch("disable-features", "DirectComposition,DirectCompositionVideoOverlays,HardwareMediaKeyHandling,Vulkan");
+  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+}
 
 function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   queuedRealtimeEvents.push(nextEvent);
@@ -54,7 +76,9 @@ async function clearSession(): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
+  appendBootLog(bootLogFile, "creating BrowserWindow");
   const entry = resolveDesktopWindowEntry(__dirname);
+  appendBootLog(bootLogFile, `resolved entries preload=${entry.preloadPath}; renderer=${entry.rendererPath}; problems=${entry.problems.join(" | ")}`);
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -71,7 +95,15 @@ async function createWindow(): Promise<void> {
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = undefined;
   });
+  win.webContents.on("render-process-gone", (_event, details) => {
+    appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`);
+    console.error(`Compet Player renderer process gone: ${details.reason}`);
+  });
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`);
+  });
   await loadDesktopWindow(win, __dirname);
+  appendBootLog(bootLogFile, "desktop window load requested");
 }
 
 function focusMainWindow(): void {
@@ -249,6 +281,12 @@ if (!gotSingleInstanceLock) {
       if (BrowserWindow.getAllWindows().length === 0) await createWindow();
       else focusMainWindow();
     });
+  }).catch((error) => {
+    const message = error instanceof Error ? error.stack ?? error.message : String(error);
+    console.error("Failed to start Compet Player Client", message);
+    appendBootLog(bootLogFile, "startup failed", error);
+    dialog.showErrorBox("Compet Player Client 启动失败", message);
+    app.exit(1);
   });
 }
 

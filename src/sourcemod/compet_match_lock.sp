@@ -20,6 +20,8 @@ bool g_Get5Started = false;
 char g_MatchId[128] = "";
 Handle g_EnforceTimer = null;
 Handle g_WarmupTimeoutTimer = null;
+float g_WarmupDeadline = 0.0;
+int g_LastWarmupNoticeSeconds = -1;
 
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
@@ -28,7 +30,7 @@ public void OnPluginStart() {
   RegServerCmd("compet_lock_enable", Command_EnableLock);
   AddCommandListener(Command_JoinTeam, "jointeam");
   AddCommandListener(Command_JoinTeam, "joingame");
-  RestartWarmupTimeout();
+  PrintToServer("[Compet] Match lock plugin loaded; waiting for compet_lock_reset.");
 }
 
 public void OnPluginEnd() {
@@ -40,6 +42,7 @@ public void OnClientPostAdminCheck(int client) {
     return;
   }
 
+  PrintWarmupStatusToClient(client);
   CreateTimer(0.2, Timer_ApplyClientLock, GetClientUserId(client), TIMER_FLAG_NO_MAPCHANGE);
 }
 
@@ -97,6 +100,9 @@ public Action Command_EnableLock(int args) {
 }
 
 public void Get5_OnGameStateChanged(Handle event) {
+  if (!g_LockEnabled || g_MatchId[0] == '\0') {
+    return;
+  }
   MarkGet5Started();
 }
 
@@ -183,23 +189,30 @@ void RestartWarmupTimeout() {
     return;
   }
   StopWarmupTimeout();
+  g_WarmupDeadline = GetEngineTime() + float(WARMUP_TIMEOUT_SECONDS);
+  g_LastWarmupNoticeSeconds = -1;
   StartWarmupCountdown();
-  g_WarmupTimeoutTimer = CreateTimer(float(WARMUP_TIMEOUT_SECONDS), Timer_WarmupTimeout, 0, TIMER_FLAG_NO_MAPCHANGE);
+  PrintToServer("[Compet] Warmup shutdown timer started for match %s: %d seconds.", g_MatchId, WARMUP_TIMEOUT_SECONDS);
+  PrintWarmupNoticeToAll(WARMUP_TIMEOUT_SECONDS);
+  g_WarmupTimeoutTimer = CreateTimer(1.0, Timer_WarmupTick, 0, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
 void StartWarmupCountdown() {
-  ServerCommand("mp_do_warmup_period 1");
-  ServerCommand("mp_warmuptime %d", WARMUP_TIMEOUT_SECONDS);
+  SetConVarIntIfExists("mp_do_warmup_period", 1);
+  SetConVarIntIfExists("mp_warmuptime", WARMUP_TIMEOUT_SECONDS);
+  SetConVarIntIfExists("mp_warmuptime_all_players_connected", 0);
+  SetConVarIntIfExists("mp_warmup_pausetimer", 0);
   ServerCommand("mp_warmup_start");
   ServerExecute();
 }
 
 void StopWarmupTimeout() {
-  if (g_WarmupTimeoutTimer == null) {
-    return;
+  if (g_WarmupTimeoutTimer != null) {
+    delete g_WarmupTimeoutTimer;
+    g_WarmupTimeoutTimer = null;
   }
-  delete g_WarmupTimeoutTimer;
-  g_WarmupTimeoutTimer = null;
+  g_WarmupDeadline = 0.0;
+  g_LastWarmupNoticeSeconds = -1;
 }
 
 void MarkGet5Started() {
@@ -207,19 +220,74 @@ void MarkGet5Started() {
     return;
   }
   g_Get5Started = true;
+  PrintToServer("[Compet] get5 state changed; warmup shutdown timer cancelled for match %s.", g_MatchId);
+  PrintToChatAll("[Compet] get5 has started; automatic warmup shutdown cancelled.");
   StopWarmupTimeout();
 }
 
-public Action Timer_WarmupTimeout(Handle timer, any data) {
-  g_WarmupTimeoutTimer = null;
+public Action Timer_WarmupTick(Handle timer, any data) {
   if (g_Get5Started) {
+    g_WarmupTimeoutTimer = null;
     return Plugin_Stop;
   }
 
-  PrintToServer("[Compet] Warmup timeout expired before get5 started; shutting down server.");
-  ServerCommand("quit");
-  ServerExecute();
-  return Plugin_Stop;
+  int secondsRemaining = SecondsUntilWarmupShutdown();
+  if (secondsRemaining <= 0) {
+    g_WarmupTimeoutTimer = null;
+    PrintToChatAll("[Compet] get5 did not start in time; shutting down server.");
+    PrintToServer("[Compet] Warmup timeout expired before get5 started; shutting down server.");
+    ServerCommand("quit");
+    ServerExecute();
+    return Plugin_Stop;
+  }
+
+  if (ShouldPrintWarmupNotice(secondsRemaining)) {
+    PrintWarmupNoticeToAll(secondsRemaining);
+  }
+  return Plugin_Continue;
+}
+
+void PrintWarmupNoticeToAll(int secondsRemaining) {
+  int minutes = secondsRemaining / 60;
+  int seconds = secondsRemaining % 60;
+  PrintToChatAll("[Compet] Warmup ends in %d:%02d. Use !get5 before the server closes.", minutes, seconds);
+}
+
+void PrintWarmupStatusToClient(int client) {
+  int secondsRemaining = SecondsUntilWarmupShutdown();
+  if (secondsRemaining <= 0) {
+    return;
+  }
+  int minutes = secondsRemaining / 60;
+  int seconds = secondsRemaining % 60;
+  PrintToChat(client, "[Compet] Warmup ends in %d:%02d. Use !get5 before the server closes.", minutes, seconds);
+}
+
+bool ShouldPrintWarmupNotice(int secondsRemaining) {
+  if (secondsRemaining == g_LastWarmupNoticeSeconds) {
+    return false;
+  }
+  if (secondsRemaining == 300 || secondsRemaining == 120 || secondsRemaining == 60 || secondsRemaining == 30 || secondsRemaining <= 10) {
+    g_LastWarmupNoticeSeconds = secondsRemaining;
+    return true;
+  }
+  return false;
+}
+
+int SecondsUntilWarmupShutdown() {
+  if (g_WarmupDeadline <= 0.0) {
+    return 0;
+  }
+  return RoundToCeil(g_WarmupDeadline - GetEngineTime());
+}
+
+void SetConVarIntIfExists(const char[] name, int value) {
+  ConVar cvar = FindConVar(name);
+  if (cvar == null) {
+    PrintToServer("[Compet] Missing warmup cvar: %s", name);
+    return;
+  }
+  cvar.IntValue = value;
 }
 
 bool IsPlayingTeam(int team) {

@@ -35,6 +35,15 @@ const NO_RANDOM_BOTS_CFG_PATH = "compet/no_random_bots.cfg";
 const COMPET_LOCK_PLUGIN_FILE = "compet_match_lock.smx";
 const COMPET_LOCK_SOURCE_FILE = "compet_match_lock.sp";
 const GET5_AUTOLOAD_COMMENT = "// Compet managed get5 autoload";
+const WARMUP_CFG_COMMENT = "// Compet managed warmup hook";
+const WARMUP_CFG_LINES = [
+  WARMUP_CFG_COMMENT,
+  "mp_do_warmup_period 1",
+  "mp_warmuptime 600",
+  "mp_warmuptime_all_players_connected 0",
+  "mp_warmup_pausetimer 0",
+  "mp_warmup_start",
+];
 
 export class MatchExecutor {
   constructor(private readonly options: MatchExecutorOptions) {}
@@ -287,15 +296,18 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
   const activeMatchComment = "// Compet managed match cfg hook";
   const noRandomBotsHook = `exec ${NO_RANDOM_BOTS_CFG_PATH}`;
   const noRandomBotsComment = "// Compet managed no random bot hook";
+  const managedWarmupLines = new Set(WARMUP_CFG_LINES);
   const lines = current.length > 0 ? current.split(/\r?\n/) : [];
   const nextLines = trimTrailingBlankLines(lines.filter((line) => {
     const trimmed = line.trim();
     return trimmed !== activeMatchComment
       && trimmed !== activeMatchHook
       && trimmed !== noRandomBotsComment
-      && trimmed !== noRandomBotsHook;
+      && trimmed !== noRandomBotsHook
+      && !managedWarmupLines.has(trimmed);
   }));
   appendManagedLines(nextLines, [
+    ...WARMUP_CFG_LINES,
     noRandomBotsComment,
     noRandomBotsHook,
     activeMatchComment,

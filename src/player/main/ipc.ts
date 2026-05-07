@@ -1,8 +1,9 @@
-import { clipboard, ipcMain, net, shell } from "electron";
+import { clipboard, ipcMain, shell } from "electron";
 import type { PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { SteamProfileService } from "./steamProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
+import { electronNetFetch } from "./electronNetFetch.js";
 
 export interface SavedPlayerLogin {
   baseUrl: string;
@@ -32,7 +33,7 @@ export interface RestoreSessionResult extends RestoredPlayerSession {
 }
 
 function createPlayerApiClient(baseUrl: string, token?: string): PlayerApiClient {
-  return new PlayerApiClient(baseUrl, token, new SteamProfileService({ fetchFn: net.fetch.bind(net) as typeof fetch }));
+  return new PlayerApiClient(baseUrl, token, new SteamProfileService({ fetchFn: electronNetFetch }));
 }
 
 function withSavedAuth<T>(deps: IpcDeps, operation: (client: PlayerApiClient) => Promise<T>): Promise<T> {

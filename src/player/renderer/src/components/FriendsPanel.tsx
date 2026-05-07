@@ -98,7 +98,7 @@ export function FriendsPanel({
       <div className="player-social-search">
         <Input
           value={query}
-          placeholder="输入 Steam64 搜索在线玩家"
+          placeholder="输入 Steam64、Steam 链接或账号名"
           onChange={(event) => setQuery(event.target.value)}
           onPressEnter={() => void handleSearch()}
           disabled={!onSearchFriends}
@@ -142,7 +142,7 @@ export function FriendsPanel({
               })}
             </div>
           ) : (
-            <div className="player-empty">输入 Steam64 后搜索在线玩家。</div>
+            <div className="player-empty">输入 Steam64、Steam 链接或账号名后搜索玩家。</div>
           )}
         </div>
 

@@ -1,6 +1,5 @@
 {
   "name": "compet-player-client",
   "private": true,
-  "type": "module",
-  "main": "out-player/main/index.js"
+  "main": "out-player/main/index.cjs"
 }

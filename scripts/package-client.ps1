@@ -111,7 +111,6 @@ function Remove-UnusedElectronFiles {
       Remove-Item -Force
   }
 
-  Remove-Item -LiteralPath (Join-Path $RootDir "ffmpeg.dll") -Force -ErrorAction SilentlyContinue
 }
 
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
@@ -134,13 +133,16 @@ New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo "out-player") -Destination $appRoot -Recurse
 Copy-Item -LiteralPath (Join-Path $repo "packaging\client\app-package.json") -Destination (Join-Path $appRoot "package.json")
 Copy-Item -LiteralPath (Join-Path $repo "packaging\client\README.txt") -Destination $stage
+Copy-Item -LiteralPath (Join-Path $repo "packaging\client\start-player-client.cmd") -Destination $stage
 
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage $clientExe)),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "ffmpeg.dll")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "README.txt")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "start-player-client.cmd")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "package.json")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\main\index.js")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\main\index.cjs")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\preload\index.js")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\renderer\index.html"))
 )

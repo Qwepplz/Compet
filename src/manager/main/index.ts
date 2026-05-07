@@ -1,6 +1,7 @@
 import path from "node:path";
 import { app, BrowserWindow, dialog } from "electron";
 import { SavedLoginStore } from "../../desktop/main/savedLoginStore.js";
+import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
 import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main/windowEntry.js";
 import { FileConfigStore } from "./configStore.js";
 import { FileLogStore } from "./logStore.js";
@@ -8,6 +9,13 @@ import { ManagedServiceProcess } from "./serviceProcess.js";
 import { ServiceApiClient } from "./serviceApiClient.js";
 import { registerManagerIpc } from "./ipc.js";
 import { ensureManagerUserDataPath } from "./userDataPath.js";
+
+const bootLogFile = "compet-server-manager-boot.log";
+appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`);
+process.on("uncaughtException", (error) => appendBootLog(bootLogFile, "uncaught exception", error));
+process.on("unhandledRejection", (error) => appendBootLog(bootLogFile, "unhandled rejection", error));
+
+configureRemoteDesktopRendering();
 
 const appRoot = app.isPackaged ? app.getAppPath() : process.cwd();
 const managerUserDataPath = ensureManagerUserDataPath({
@@ -47,9 +55,26 @@ service.on("status", (status) => appendLog("manager", "info", `service state ${s
 
 let isQuitPromptOpen = false;
 let isQuitConfirmed = false;
+let mainWindow: BrowserWindow | undefined;
+
+function configureRemoteDesktopRendering(): void {
+  app.disableHardwareAcceleration();
+  app.commandLine.appendSwitch("disable-gpu");
+  app.commandLine.appendSwitch("disable-gpu-compositing");
+  app.commandLine.appendSwitch("disable-direct-composition");
+  app.commandLine.appendSwitch("disable-accelerated-2d-canvas");
+  app.commandLine.appendSwitch("disable-accelerated-video-decode");
+  app.commandLine.appendSwitch("disable-accelerated-video-encode");
+  app.commandLine.appendSwitch("disable-webgl");
+  app.commandLine.appendSwitch("disable-webgl2");
+  app.commandLine.appendSwitch("disable-features", "DirectComposition,DirectCompositionVideoOverlays,HardwareMediaKeyHandling,Vulkan");
+  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
+}
 
 async function createWindow(): Promise<void> {
+  appendBootLog(bootLogFile, "creating BrowserWindow");
   const entry = resolveDesktopWindowEntry(__dirname);
+  appendBootLog(bootLogFile, `resolved entries preload=${entry.preloadPath}; renderer=${entry.rendererPath}; problems=${entry.problems.join(" | ")}`);
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
@@ -61,7 +86,19 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
     },
   });
+  mainWindow = win;
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = undefined;
+  });
+  win.webContents.on("render-process-gone", (_event, details) => {
+    appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`);
+    appendLog("manager", "error", `renderer process gone: ${details.reason}`);
+  });
+  win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
+    appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`);
+  });
   await loadDesktopWindow(win, __dirname);
+  appendBootLog(bootLogFile, "desktop window load requested");
 }
 
 app.on("before-quit", async (event) => {
@@ -85,4 +122,15 @@ app.on("before-quit", async (event) => {
   }
 });
 
-app.whenReady().then(createWindow);
+app.whenReady().then(createWindow).catch((error) => {
+  const message = error instanceof Error ? error.stack ?? error.message : String(error);
+  console.error("Failed to start Compet Server Manager", message);
+  appendBootLog(bootLogFile, "startup failed", error);
+  appendLog("manager", "error", `startup failed: ${message}`);
+  dialog.showErrorBox("Compet Server Manager 启动失败", message);
+  app.exit(1);
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});

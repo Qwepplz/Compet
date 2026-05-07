@@ -8,6 +8,7 @@ $archive = Join-Path $artifacts "Compet-Server.7z"
 $supersededZip = Join-Path $artifacts "Compet-Server.zip"
 $supersededTarXz = Join-Path $artifacts "Compet-Server.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
+$nodeRuntime = (Get-Command "node.exe" -ErrorAction Stop).Source
 $serverExe = "Compet Server Manager.exe"
 $preferred7z = "E:\EXCHANGE\github-C\lzma2600\bin\x64\7zr.exe"
 
@@ -126,7 +127,6 @@ function Remove-UnusedElectronFiles {
       Remove-Item -Force
   }
 
-  Remove-Item -LiteralPath (Join-Path $RootDir "ffmpeg.dll") -Force -ErrorAction SilentlyContinue
 }
 
 function Optimize-RuntimeNodeModules {
@@ -168,6 +168,8 @@ Copy-Item -Path (Join-Path $electronDist "*") -Destination $stage -Recurse
 Move-Item -LiteralPath (Join-Path $stage "electron.exe") -Destination (Join-Path $stage $serverExe)
 Remove-UnusedElectronFiles -RootDir $stage
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\node") -Force | Out-Null
+Copy-Item -LiteralPath $nodeRuntime -Destination (Join-Path $appRoot "runtime\node\node.exe")
 
 New-Item -ItemType Directory -Path (Join-Path $appRoot "dist") -Force | Out-Null
 $serverBundle = Join-Path $appRoot "dist\main.cjs"
@@ -190,14 +192,18 @@ Copy-NodeModulePackage "node-gyp-build"
 Copy-NodeModulePackage "zod"
 Optimize-RuntimeNodeModules
 Copy-Item -LiteralPath (Join-Path $repo "packaging\server\README.txt") -Destination $stage
+Copy-Item -LiteralPath (Join-Path $repo "packaging\server\start-server-manager.cmd") -Destination $stage
 
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage $serverExe)),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "ffmpeg.dll")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "README.txt")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "start-server-manager.cmd")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "package.json")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "runtime\node\node.exe")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "dist\main.cjs")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\main\index.js")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\main\index.cjs")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\preload\index.js")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\renderer\index.html")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "sourcemod\compet_match_lock.smx")),
