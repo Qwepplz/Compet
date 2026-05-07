@@ -3,6 +3,7 @@ import type { BotRosterTeam } from "../bots/botRosterParser.js";
 import type { MatchParticipant, MatchTeam } from "./types.js";
 
 const STEAM64_ACCOUNT_ID_OFFSET = 76561197960265728n;
+const PRO_BOT_SELECTION_CHANCE = 0.6;
 
 export interface PartySnapshot {
   id: string;
@@ -32,12 +33,12 @@ export function assignTeams(input: AssignTeamsInput): AssignTeamsResult {
     throw new Error(`Not enough bot candidates to assign fixed 5v5 teams: need ${botCount}, got ${input.botCandidates.length}`);
   }
 
-  const selectedBots = shuffle(input.botCandidates, random).slice(0, botCount);
+  const proBotNames = buildProBotNames(input.botRosters);
+  const selectedBots = selectBotCandidates(input.botCandidates, botCount, proBotNames, random);
   const humanIds = new Set(shuffledHumans.map((human) => human.id));
   const usedBotIds = new Set<string>();
-  const proBotNames = buildProBotNames(input.botRosters);
   const botParticipants = selectedBots.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, proBotNames));
-  const participants = shuffle([...shuffledHumans, ...botParticipants], random);
+  const participants = distributeParticipants(shuffledHumans, botParticipants, random);
   const [teamAName, teamBName] = pickTeamNames(input.botRosters, random);
 
   return {
@@ -75,6 +76,95 @@ function buildProBotNames(botRosters: readonly BotRosterTeam[] | undefined): Rea
   return new Set((botRosters ?? []).flatMap((roster) => roster.players.map(normalizeBotName)).filter(Boolean));
 }
 
+function selectBotCandidates(
+  candidates: readonly BotCandidate[],
+  count: number,
+  proBotNames: ReadonlySet<string>,
+  random: () => number,
+): BotCandidate[] {
+  const regularCandidates: BotCandidate[] = [];
+  const proCandidates: BotCandidate[] = [];
+  for (const candidate of shuffle(candidates, random)) {
+    if (isProBotCandidate(candidate, proBotNames)) {
+      proCandidates.push(candidate);
+    } else {
+      regularCandidates.push(candidate);
+    }
+  }
+  const regularCandidateCount = regularCandidates.length;
+
+  const selected: BotCandidate[] = [];
+  for (let slot = 0; slot < count; slot += 1) {
+    const preferPro = random() < PRO_BOT_SELECTION_CHANCE;
+    const preferred = preferPro ? proCandidates : regularCandidates;
+    const fallback = preferPro ? regularCandidates : proCandidates;
+    const candidate = preferred.shift() ?? fallback.shift();
+    if (candidate) selected.push(candidate);
+  }
+
+  ensureMinimumRegularBotCandidates(selected, regularCandidates, Math.min(2, count, regularCandidateCount), proBotNames);
+  return selected;
+}
+
+function ensureMinimumRegularBotCandidates(
+  selected: BotCandidate[],
+  regularCandidates: BotCandidate[],
+  minRegularBots: number,
+  proBotNames: ReadonlySet<string>,
+): void {
+  while (selected.filter((candidate) => !isProBotCandidate(candidate, proBotNames)).length < minRegularBots && regularCandidates.length > 0) {
+    const proIndex = selected.findIndex((candidate) => isProBotCandidate(candidate, proBotNames));
+    if (proIndex < 0) return;
+    const replacement = regularCandidates.shift();
+    if (!replacement) return;
+    selected[proIndex] = replacement;
+  }
+}
+
+function distributeParticipants(
+  humans: readonly MatchParticipant[],
+  bots: readonly MatchParticipant[],
+  random: () => number,
+): MatchParticipant[] {
+  return ensureRegularBotPerTeam(shuffle([...humans, ...bots], random));
+}
+
+function ensureRegularBotPerTeam(participants: MatchParticipant[]): MatchParticipant[] {
+  const next = [...participants];
+  ensureRegularBotInSlice(next, 0, 5, 5, 10);
+  ensureRegularBotInSlice(next, 5, 10, 0, 5);
+  return next;
+}
+
+function ensureRegularBotInSlice(
+  participants: MatchParticipant[],
+  start: number,
+  end: number,
+  donorStart: number,
+  donorEnd: number,
+): void {
+  if (participants.slice(start, end).some(isRegularBot)) return;
+  const donorRegulars = participants
+    .slice(donorStart, donorEnd)
+    .map((participant, index) => ({ participant, index: donorStart + index }))
+    .filter(({ participant }) => isRegularBot(participant));
+  if (donorRegulars.length < 2) return;
+
+  const targetIndex = participants.slice(start, end).findIndex((participant) => !isRegularBot(participant));
+  if (targetIndex < 0) return;
+  const absoluteTargetIndex = start + targetIndex;
+  const donorIndex = donorRegulars[0].index;
+  [participants[absoluteTargetIndex], participants[donorIndex]] = [participants[donorIndex], participants[absoluteTargetIndex]];
+}
+
+function isRegularBot(participant: MatchParticipant): boolean {
+  return participant.kind === "bot" && participant.botCategory !== "pro";
+}
+
+function isProBotCandidate(candidate: BotCandidate, proBotNames: ReadonlySet<string>): boolean {
+  return proBotNames.has(normalizeBotName(candidate.name)) || hasProProfileTemplate(candidate);
+}
+
 function hasProProfileTemplate(candidate: BotCandidate): boolean {
   return candidate.templates.some((template) => template.trim().toLowerCase().startsWith("pro"));
 }
@@ -105,7 +195,7 @@ function toBotParticipant(
 
   usedBotIds.add(id);
   const steam64 = steamAccountIdToSteam64(candidate.steamAccountId);
-  const isProBot = proBotNames.has(normalizeBotName(candidate.name)) || hasProProfileTemplate(candidate);
+  const isProBot = isProBotCandidate(candidate, proBotNames);
 
   return {
     id,

@@ -22,6 +22,7 @@ const realtimeEventChannel = "player:realtime:event";
 const realtimeSnapshotChannel = "player:realtime:snapshot";
 
 let apiClient: PlayerApiClient | undefined;
+let mainWindow: BrowserWindow | undefined;
 let realtimeSessionVersion = 0;
 let connectedInCurrentSession = false;
 let pauseRealtimeEvents = false;
@@ -58,7 +59,19 @@ async function createWindow(): Promise<void> {
       nodeIntegration: false,
     },
   });
+  mainWindow = win;
+  win.on("closed", () => {
+    if (mainWindow === win) mainWindow = undefined;
+  });
   await loadDesktopWindow(win, __dirname);
+}
+
+function focusMainWindow(): void {
+  const win = mainWindow ?? BrowserWindow.getAllWindows()[0];
+  if (!win || win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
 }
 
 function broadcast(channel: string, payload: unknown): void {
@@ -201,26 +214,35 @@ function flushQueuedRealtimeEvents(sessionVersion: number): void {
   }
 }
 
-app.whenReady().then(async () => {
-  registerPlayerIpc({
-    clearSession,
-    connectRealtime,
-    disconnectRealtime,
-    getApiClient: currentApiClient,
-    loadSession,
-    refreshRealtimeSnapshot,
-    saveSession,
-    setApiClient: (client) => {
-      apiClient = client;
-    },
-  });
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
 
-  await createWindow();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on("second-instance", focusMainWindow);
 
-  app.on("activate", async () => {
-    if (BrowserWindow.getAllWindows().length === 0) await createWindow();
+  app.whenReady().then(async () => {
+    registerPlayerIpc({
+      clearSession,
+      connectRealtime,
+      disconnectRealtime,
+      getApiClient: currentApiClient,
+      loadSession,
+      refreshRealtimeSnapshot,
+      saveSession,
+      setApiClient: (client) => {
+        apiClient = client;
+      },
+    });
+
+    await createWindow();
+
+    app.on("activate", async () => {
+      if (BrowserWindow.getAllWindows().length === 0) await createWindow();
+      else focusMainWindow();
+    });
   });
-});
+}
 
 app.on("before-quit", (event) => {
   if (quitAfterSessionCleanup || !apiClient) return;

@@ -238,11 +238,13 @@ export function MatchRoomPage({
                         disabled={!onApplyVeto || !canApplyCurrentVeto || !isAvailable}
                         onClick={() => void onApplyVeto?.(room.id, currentActor?.action ?? "ban", map)}
                       >
-                        <span className={mapThumbClass(map)} aria-hidden="true" />
-                        <span className="faceit-map-card-main">
-                          <strong>{mapName}</strong>
+                        <span className="faceit-map-card-layout">
+                          <span className={mapThumbClass(map)} aria-hidden="true" />
+                          <span className="faceit-map-card-main">
+                            <strong>{mapName}</strong>
+                          </span>
+                          <span className="faceit-map-card-action">{cardActionLabel}</span>
                         </span>
-                        <span className="faceit-map-card-action">{cardActionLabel}</span>
                       </Button>
                     );
                   })}

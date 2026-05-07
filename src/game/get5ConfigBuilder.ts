@@ -40,6 +40,7 @@ export function buildGet5Config(input: Get5BuildInput): Get5MatchConfig {
       mp_autoteambalance: "0",
       mp_limitteams: "0",
       tv_enable: "1",
+      ...buildTeamNameCvars(input.matchPlan),
     },
   };
 }
@@ -64,6 +65,15 @@ function buildTeamConfig(team: MatchTeam): Get5TeamConfig {
 
 function buildMapSides(team1: MatchTeam): string[] {
   return [team1.gameSide === "t" ? "team1_t" : "team1_ct"];
+}
+
+function buildTeamNameCvars(matchPlan: MatchPlan): Record<"mp_teamname_1" | "mp_teamname_2", string> {
+  const ctTeam = [matchPlan.teamA, matchPlan.teamB].find((team) => team.gameSide === "ct");
+  const tTeam = [matchPlan.teamA, matchPlan.teamB].find((team) => team.gameSide === "t");
+  return {
+    mp_teamname_1: ctTeam?.name ?? "",
+    mp_teamname_2: tTeam?.name ?? "",
+  };
 }
 
 function resolveHumanSteam64(participant: MatchParticipant): string | undefined {

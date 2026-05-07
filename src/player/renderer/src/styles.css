@@ -913,9 +913,9 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   text-align: left;
 }
 
-.faceit-map-card.ant-btn > span {
+.faceit-map-card-layout {
   display: grid;
-  grid-template-columns: 52px minmax(0, 1fr) 48px;
+  grid-template-columns: minmax(128px, 42%) minmax(0, 1fr) 64px;
   align-items: stretch;
   width: 100%;
   min-height: 38px;
@@ -999,14 +999,16 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 1px;
   min-width: 0;
   padding: 5px 8px;
+  overflow: visible;
 }
 
 .faceit-map-card-main strong {
-  overflow: hidden;
   color: #fff;
   font-size: 12px;
-  line-height: 1.05;
-  text-overflow: ellipsis;
+  line-height: 1.12;
+  overflow: visible;
+  overflow-wrap: normal;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -1014,10 +1016,13 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   display: grid;
   align-items: center;
   justify-items: end;
+  min-width: 0;
   padding: 0 10px 0 0;
   color: #4f4f4f;
   font-size: 10px;
   font-weight: 900;
+  text-align: right;
+  white-space: nowrap;
 }
 
 .faceit-map-pool .ant-btn,

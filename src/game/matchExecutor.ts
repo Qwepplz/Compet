@@ -139,11 +139,21 @@ function formatServerExitMonitorOutput(
 function buildMatchStartupCfg(matchPlan: MatchPlan, safeMatchId: string): string {
   return [
     `sv_password ${quoteConsoleString(matchPlan.connectPassword)}`,
+    ...buildTeamNameCommands(matchPlan),
     `compet_lock_reset ${quoteConsoleString(safeMatchId)}`,
     ...buildCompetLockCommands(matchPlan),
     "compet_lock_enable 1",
     ...buildBotAddCommands(matchPlan),
   ].join("\n");
+}
+
+function buildTeamNameCommands(matchPlan: MatchPlan): string[] {
+  const ctTeam = [matchPlan.teamA, matchPlan.teamB].find((team) => team.gameSide === "ct");
+  const tTeam = [matchPlan.teamA, matchPlan.teamB].find((team) => team.gameSide === "t");
+  return [
+    `mp_teamname_1 ${quoteConsoleString(ctTeam?.name ?? "")}`,
+    `mp_teamname_2 ${quoteConsoleString(tTeam?.name ?? "")}`,
+  ];
 }
 
 function buildCompetLockCommands(matchPlan: MatchPlan): string[] {
