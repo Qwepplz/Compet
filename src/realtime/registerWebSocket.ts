@@ -5,7 +5,7 @@ import type { AccountService } from "../accounts/accountService.js";
 import type { SessionService } from "../auth/sessionService.js";
 import type { PresenceService, PresenceSummary } from "../presence/presenceService.js";
 import type { RealtimeEventBus } from "./eventBus.js";
-import type { RealtimeEvent } from "./realtimeTypes.js";
+import { RealtimeSocketRegistry } from "./realtimeSocketRegistry.js";
 
 export interface WebSocketDeps {
   accounts: AccountService;
@@ -22,13 +22,21 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
   app: FastifyInstance<RawServer>,
   deps: WebSocketDeps,
 ): Promise<void> {
+  const sockets = new RealtimeSocketRegistry();
+  const unsubscribeEvents = deps.events?.subscribe((event) => sockets.publish(event));
+
+  app.addHook("onClose", (_instance, done) => {
+    unsubscribeEvents?.();
+    done();
+  });
+
   app.get<{ Querystring: WebSocketQuery }>("/ws", { websocket: true }, (socket, request) => {
     const token = request.query.token;
     const accountPromise = authorizeWebSocket(token, deps).catch(() => undefined);
-    let unsubscribe: (() => void) | undefined;
     let authorizationCheck: ReturnType<typeof setInterval> | undefined;
     let registeredAccountId: string | undefined;
     const cleanup = () => {
+      sockets.unregister(socket);
       if (registeredAccountId && deps.presence) {
         publishPresenceUpdated("disconnect", deps, deps.presence.unregister(registeredAccountId));
         registeredAccountId = undefined;
@@ -37,8 +45,6 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
         clearInterval(authorizationCheck);
         authorizationCheck = undefined;
       }
-      unsubscribe?.();
-      unsubscribe = undefined;
     };
 
     socket.on("close", cleanup);
@@ -62,11 +68,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
           if (!currentAccount || currentAccount.id !== account.id) closeUnauthorized(socket);
         }).catch(() => closeUnauthorized(socket));
       }, 5_000);
-      if (deps.events) {
-        unsubscribe = deps.events.subscribe((event) => {
-          if (shouldSendEventToAccount(event, account.id)) sendJson(socket, event);
-        });
-      }
+      sockets.register(account.id, socket);
       sendJson(socket, { type: "hello", accountId: account.id, serverTime: now() });
       sendJson(socket, { type: "server_status", status: "online", serverTime: now() });
       if (deps.presence) {
@@ -103,12 +105,6 @@ function handleMessage(socket: WebSocket, data: RawData): void {
   if (typeof message === "object" && message !== null && (message as { type?: unknown }).type === "ping") {
     sendJson(socket, { type: "pong", serverTime: now() });
   }
-}
-
-function shouldSendEventToAccount(event: RealtimeEvent, accountId: string): boolean {
-  if ("accountIds" in event && event.accountIds) return event.accountIds.includes(accountId);
-  if ("accountId" in event) return event.accountId === accountId;
-  return true;
 }
 
 function closeUnauthorized(socket: WebSocket): void {

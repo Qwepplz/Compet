@@ -29,7 +29,7 @@ export class MatchRecordStore {
   }
 
   async saveStatus(matchId: string, status: unknown): Promise<void> {
-    await this.saveMatchFile(matchId, "status.json", status);
+    await writeJsonFileAtomic(this.matchFile(matchId, "status.json"), status, { pretty: false });
   }
 
   async saveResult(matchId: string, result: unknown): Promise<void> {
@@ -45,7 +45,7 @@ export class MatchRecordStore {
     const previousAppend = eventAppendQueues.get(filePath) ?? Promise.resolve();
     const nextAppend = previousAppend.then(async () => {
       const current = await readJsonFile<EventsFile>(filePath, { events: [] });
-      await writeJsonFileAtomic(filePath, { events: [...current.events, event] });
+      await writeJsonFileAtomic(filePath, { events: [...current.events, event] }, { pretty: false });
     });
 
     let queuedAppend: Promise<void>;

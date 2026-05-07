@@ -12,7 +12,20 @@ interface SteamProfileServiceOptions {
   fetchFn?: typeof fetch;
   timeoutMs?: number;
   steamWebApiKey?: string;
+  cacheMaxEntries?: number;
+  cacheTtlMs?: number;
+  negativeCacheTtlMs?: number;
 }
+
+interface SteamProfileCacheEntry {
+  profile: SteamProfile | null;
+  expiresAt: number;
+  lastUsedAt: number;
+}
+
+const DEFAULT_CACHE_MAX_ENTRIES = 500;
+const DEFAULT_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
+const DEFAULT_NEGATIVE_CACHE_TTL_MS = 10 * 60 * 1000;
 
 const STEAM64_PATTERN = /^\d{17}$/;
 const DEFAULT_TIMEOUT_MS = 5_000;
@@ -35,12 +48,19 @@ export class SteamProfileService implements SteamProfileResolver {
   private readonly fetchFn: typeof fetch;
   private readonly timeoutMs: number;
   private readonly steamWebApiKey: string;
-  private readonly cache = new Map<string, SteamProfile | null>();
+  private readonly cacheMaxEntries: number;
+  private readonly cacheTtlMs: number;
+  private readonly negativeCacheTtlMs: number;
+  private readonly cache = new Map<string, SteamProfileCacheEntry>();
+  private cacheUseClock = 0;
 
   constructor(options: SteamProfileServiceOptions = {}) {
     this.fetchFn = options.fetchFn ?? fetch;
     this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.steamWebApiKey = options.steamWebApiKey ?? process.env.COMPET_STEAM_WEB_API_KEY ?? process.env.STEAM_WEB_API_KEY ?? process.env.STEAM_API_KEY ?? "";
+    this.cacheMaxEntries = options.cacheMaxEntries ?? DEFAULT_CACHE_MAX_ENTRIES;
+    this.cacheTtlMs = options.cacheTtlMs ?? DEFAULT_CACHE_TTL_MS;
+    this.negativeCacheTtlMs = options.negativeCacheTtlMs ?? DEFAULT_NEGATIVE_CACHE_TTL_MS;
   }
 
   async resolveMany(steam64s: string[]): Promise<Map<string, SteamProfile>> {
@@ -49,9 +69,9 @@ export class SteamProfileService implements SteamProfileResolver {
     const missing: string[] = [];
 
     for (const steam64 of uniqueSteam64s) {
-      if (this.cache.has(steam64)) {
-        const cached = this.cache.get(steam64);
-        if (cached) profiles.set(steam64, cached);
+      const cached = this.getCachedProfile(steam64);
+      if (cached.hit) {
+        if (cached.profile) profiles.set(steam64, cached.profile);
       } else {
         missing.push(steam64);
       }
@@ -60,7 +80,7 @@ export class SteamProfileService implements SteamProfileResolver {
     if (missing.length > 0 && this.steamWebApiKey) {
       const apiProfiles = await this.resolveManyFromWebApi(missing);
       for (const [steam64, profile] of apiProfiles) {
-        this.cache.set(steam64, profile);
+        this.setCachedProfile(steam64, profile);
         profiles.set(steam64, profile);
       }
     }
@@ -101,8 +121,9 @@ export class SteamProfileService implements SteamProfileResolver {
   }
 
   private async resolveOne(steam64: string): Promise<SteamProfile | undefined> {
-    if (this.cache.has(steam64)) {
-      return this.cache.get(steam64) ?? undefined;
+    const cached = this.getCachedProfile(steam64);
+    if (cached.hit) {
+      return cached.profile ?? undefined;
     }
 
     const controller = new AbortController();
@@ -112,6 +133,7 @@ export class SteamProfileService implements SteamProfileResolver {
         signal: controller.signal,
       });
       if (!response.ok) {
+        this.setCachedProfile(steam64, null);
         return undefined;
       }
 
@@ -119,6 +141,7 @@ export class SteamProfileService implements SteamProfileResolver {
       const personaName = readXmlText(xml, "steamID");
       const avatarUrl = readXmlText(xml, "avatarFull") || readXmlText(xml, "avatarMedium") || readXmlText(xml, "avatarIcon");
       if (!personaName && !avatarUrl) {
+        this.setCachedProfile(steam64, null);
         return undefined;
       }
 
@@ -127,12 +150,62 @@ export class SteamProfileService implements SteamProfileResolver {
         personaName: personaName || steam64,
         avatarUrl,
       };
-      this.cache.set(steam64, profile);
+      this.setCachedProfile(steam64, profile);
       return profile;
     } catch {
+      this.setCachedProfile(steam64, null);
       return undefined;
     } finally {
       clearTimeout(timeout);
+    }
+  }
+
+  private getCachedProfile(steam64: string): { hit: true; profile: SteamProfile | null } | { hit: false } {
+    const entry = this.cache.get(steam64);
+    const now = Date.now();
+    if (!entry) {
+      return { hit: false };
+    }
+    if (entry.expiresAt <= now) {
+      this.cache.delete(steam64);
+      return { hit: false };
+    }
+    entry.lastUsedAt = this.nextCacheUseStamp();
+    return { hit: true, profile: entry.profile };
+  }
+
+  private setCachedProfile(steam64: string, profile: SteamProfile | null): void {
+    if (this.cacheMaxEntries <= 0) {
+      this.cache.clear();
+      return;
+    }
+
+    const now = Date.now();
+    this.cache.set(steam64, {
+      profile,
+      expiresAt: now + (profile ? this.cacheTtlMs : this.negativeCacheTtlMs),
+      lastUsedAt: this.nextCacheUseStamp(),
+    });
+    this.evictLeastRecentlyUsed();
+  }
+
+  private nextCacheUseStamp(): number {
+    this.cacheUseClock += 1;
+    return this.cacheUseClock;
+  }
+
+  private evictLeastRecentlyUsed(): void {
+    while (this.cache.size > this.cacheMaxEntries) {
+      let oldestSteam64: string | undefined;
+      let oldestLastUsedAt = Number.POSITIVE_INFINITY;
+      for (const [steam64, entry] of this.cache) {
+        if (entry.lastUsedAt < oldestLastUsedAt) {
+          oldestSteam64 = steam64;
+          oldestLastUsedAt = entry.lastUsedAt;
+        }
+      }
+      if (!oldestSteam64) return;
+      this.cache.delete(oldestSteam64);
     }
   }
 }

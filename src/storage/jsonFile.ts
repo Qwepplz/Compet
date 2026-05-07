@@ -20,12 +20,21 @@ export async function readJsonFile<T>(filePath: string, fallback?: T): Promise<T
   return JSON.parse(await readFile(filePath, "utf8")) as T;
 }
 
-export async function writeJsonFileAtomic(filePath: string, value: unknown): Promise<void> {
+export interface WriteJsonFileOptions {
+  pretty?: boolean;
+}
+
+export async function writeJsonFileAtomic(
+  filePath: string,
+  value: unknown,
+  options: WriteJsonFileOptions = {},
+): Promise<void> {
   await mkdir(path.dirname(filePath), { recursive: true });
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
+  const json = options.pretty === false ? JSON.stringify(value) : JSON.stringify(value, null, 2);
 
   try {
-    await writeFile(tempPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+    await writeFile(tempPath, `${json}\n`, "utf8");
     await rename(tempPath, filePath);
   } catch (error) {
     await rm(tempPath, { force: true });

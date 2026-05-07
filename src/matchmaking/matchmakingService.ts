@@ -33,6 +33,8 @@ import {
 const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "de_dust2", "de_ancient", "de_anubis"];
 const MAX_PARTY_HUMANS = 10;
 const READY_TIMEOUT_MS = 60_000;
+const MAX_MATCH_CHAT_MESSAGES = 100;
+const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 type ReadyTimeoutHandle = ReturnType<typeof setTimeout>;
 type ReadyTimeoutScheduler = (handler: () => void, timeoutMs: number) => ReadyTimeoutHandle;
 type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
@@ -296,7 +298,7 @@ export class MatchmakingService {
         createdAt: startedAt,
       };
       const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, updatedAt: startedAt };
-      const rooms = [...(await this.deps.store.listRooms()), room];
+      const rooms = [...this.pruneTerminalRooms(await this.deps.store.listRooms()), room];
 
       await this.deps.store.saveRooms(rooms);
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
@@ -405,7 +407,7 @@ export class MatchmakingService {
     room: PublicMatchRoomRecord | null;
   }> {
     const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
-    const rooms = (await this.deps.store.listRooms())
+    const rooms = this.pruneTerminalRooms(await this.deps.store.listRooms())
       .filter((room) => this.roomHasAccount(room, accountId))
       .filter((room) => !isTerminalMatchPhase(room.phase))
       .map((room) => this.toPublicRoom(room));
@@ -460,7 +462,7 @@ export class MatchmakingService {
         displayName: participant?.steamPersonaName?.trim() || participant?.steam64?.trim() || undefined,
         createdAt: this.now(),
       };
-      const updated: MatchRoomRecord = { ...room, chat: [...(room.chat ?? []), message] };
+      const updated: MatchRoomRecord = { ...room, chat: this.trimMatchChat([...(room.chat ?? []), message]) };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? updated : candidate)));
       await this.emit({ type: "match_chat_message", matchId: room.id, accountIds: this.roomAudience(updated), message }, room.id);
       return message;
@@ -501,7 +503,7 @@ export class MatchmakingService {
       if (!isServerManagedPhase(room.phase)) return this.toPublicRoom(room);
 
       const completedAt = this.now();
-      const completed: MatchRoomRecord = { ...room, phase: "completed" };
+      const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: completedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));
       await this.deps.records?.saveStatus(matchId, { phase: "completed", completedAt, serverExit: exitInfo });
       await this.unlockPartyForRoom(completed, completedAt);
@@ -517,7 +519,9 @@ export class MatchmakingService {
       if (targets.length === 0) return [];
 
       const completedAt = this.now();
-      const completedById = new Map(targets.map((room) => [room.id, { ...room, phase: "completed" as const }]));
+      const completedById = new Map(
+        targets.map((room) => [room.id, { ...room, phase: "completed" as const, terminalStateAt: completedAt }]),
+      );
       await this.deps.store.saveRooms(rooms.map((room) => completedById.get(room.id) ?? room));
 
       for (const completed of completedById.values()) {
@@ -681,9 +685,9 @@ export class MatchmakingService {
       await this.emit({ type: "connect_ready", matchId: room.id, accountIds: this.roomAudience(connected), connect }, room.id);
       return connected;
     } catch (error) {
-      const failed: MatchRoomRecord = { ...preparing, phase: "failed" };
       const failure = error instanceof Error ? error.message : String(error);
       const failedAt = this.now();
+      const failed: MatchRoomRecord = { ...preparing, phase: "failed", terminalStateAt: failedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? failed : candidate)));
       await this.deps.records?.saveStatus(room.id, { phase: "failed", error: failure });
       await this.unlockPartyForRoom(failed, failedAt);
@@ -811,6 +815,20 @@ export class MatchmakingService {
       .map((participant) => participant.accountId as string);
   }
 
+  private trimMatchChat(chat: MatchChatMessage[] | undefined): MatchChatMessage[] | undefined {
+    if (!chat || chat.length <= MAX_MATCH_CHAT_MESSAGES) return chat;
+    return chat.slice(chat.length - MAX_MATCH_CHAT_MESSAGES);
+  }
+
+  private pruneTerminalRooms(rooms: MatchRoomRecord[]): MatchRoomRecord[] {
+    const cutoff = Date.parse(this.now()) - TERMINAL_ROOM_MEMORY_TTL_MS;
+    return rooms.filter((room) => {
+      if (!isTerminalMatchPhase(room.phase)) return true;
+      const roomTime = Date.parse(room.terminalStateAt ?? room.createdAt);
+      return !Number.isFinite(roomTime) || roomTime >= cutoff;
+    });
+  }
+
   private toPublicRoom(room: MatchRoomRecord): PublicMatchRoomRecord {
     return {
       id: room.id,
@@ -830,7 +848,7 @@ export class MatchmakingService {
       partyId: room.partyId,
       veto: toPublicVetoState(room.veto),
       connect: room.connect ? { ...room.connect } : undefined,
-      chat: room.chat?.map((message) => ({ ...message })),
+      chat: this.trimMatchChat(room.chat)?.map((message) => ({ ...message })),
       createdAt: room.createdAt,
     };
   }
@@ -857,9 +875,9 @@ export class MatchmakingService {
 
   private async failReadyRoom(rooms: MatchRoomRecord[], room: MatchRoomRecord, reason: string): Promise<MatchRoomRecord> {
     const failedAt = this.now();
-    const failedRoom: MatchRoomRecord = { ...room, phase: "failed" };
+    const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
     this.clearReadyTimeout(room.id);
-    const updatedRooms = rooms.filter((candidate) => candidate.id !== room.id);
+    const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
     await this.deps.store.saveRooms(updatedRooms);
 
     if (room.partyId) {

@@ -20,6 +20,7 @@ const realtimeClient = new PlayerRealtimeClient();
 const realtimeStatusChannel = "player:realtime:status";
 const realtimeEventChannel = "player:realtime:event";
 const realtimeSnapshotChannel = "player:realtime:snapshot";
+const MAX_QUEUED_REALTIME_EVENTS = 200;
 
 let apiClient: PlayerApiClient | undefined;
 let mainWindow: BrowserWindow | undefined;
@@ -30,6 +31,13 @@ let realtimeDeliveryQueue = Promise.resolve();
 let quitAfterSessionCleanup = false;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
+
+function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
+  queuedRealtimeEvents.push(nextEvent);
+  if (queuedRealtimeEvents.length > MAX_QUEUED_REALTIME_EVENTS) {
+    queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length - MAX_QUEUED_REALTIME_EVENTS);
+  }
+}
 
 async function loadSession(): Promise<(SavedLoginRecord & { baseUrl: string }) | null> {
   const persisted = await sessionStore.load();
@@ -143,7 +151,7 @@ function disconnectRealtime(): void {
 
 realtimeClient.onEvent((event) => {
   if (pauseRealtimeEvents) {
-    queuedRealtimeEvents.push(event);
+    queueRealtimeEvent(event);
     return;
   }
   const sessionVersion = realtimeSessionVersion;
@@ -198,7 +206,7 @@ function publishEnrichedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion
     .then(() => deliverRealtimeEvent(event, sessionVersion, (next) => currentApiClient().enrichRealtimeEvent(next), {
       getSessionVersion: () => realtimeSessionVersion,
       isPaused: () => pauseRealtimeEvents,
-      queue: (next) => queuedRealtimeEvents.push(next),
+      queue: queueRealtimeEvent,
       publish: publishRealtimeEvent,
     }))
     .catch(() => undefined);

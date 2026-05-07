@@ -62,6 +62,7 @@ export interface MatchRoomRecord {
   connect?: MatchConnectInfo;
   chat?: MatchChatMessage[];
   createdAt: string;
+  terminalStateAt?: string;
 }
 interface QueueFile {
   queue: QueueEntry[];
