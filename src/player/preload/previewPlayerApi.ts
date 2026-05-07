@@ -74,7 +74,6 @@ function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
     partyId: party.id,
     humanAccountIds: [previewAccount.id],
     botParticipantIds: ["preview-bot-1", "preview-bot-2"],
-    readyDeadlineAt: "2026-05-04T09:01:00.000Z",
     ready: [{ accountId: previewAccount.id, ready: false }],
     teamA: {
       id: "teamA",
@@ -211,6 +210,13 @@ export function createPreviewPlayerApi() {
       return room;
     },
     getMatchmakingState: async (): Promise<PlayerMatchmakingStateDto> => matchmaking(),
+    ackMatchRoomEntered: async (): Promise<PlayerLiveMatchStateDto> => {
+      const nextParty = ensureParty();
+      room = room ?? makeReadyRoom(nextParty);
+      room = { ...room, readyDeadlineAt: room.readyDeadlineAt ?? new Date(Date.now() + 60_000).toISOString() };
+      publishSnapshot();
+      return room;
+    },
     acceptReady: async (): Promise<PlayerLiveMatchStateDto> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);

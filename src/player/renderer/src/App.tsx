@@ -23,6 +23,12 @@ import {
 } from "./api/playerApi.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
 import { MatchChatPanel } from "./components/MatchChatPanel.js";
+import {
+  getActiveMatchRoom,
+  getDisplayedMatchRoom,
+  getVetoDeadlineRefreshDelayMs,
+  isTerminalMatchPhase,
+} from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
 import { playerAccountLabel } from "./playerDisplay.js";
@@ -45,25 +51,16 @@ type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steam
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
-
-function isTerminalMatchPhase(phase: PlayerLiveMatchStateDto["phase"] | undefined): boolean {
-  return phase === "completed" || phase === "failed";
-}
-
-function activeMatchRooms(rooms: PlayerLiveMatchStateDto[]): PlayerLiveMatchStateDto[] {
-  return rooms.filter((room) => !isTerminalMatchPhase(room.phase));
-}
+const VETO_DEADLINE_REFRESH_GRACE_MS = 1_500;
+const VETO_DEADLINE_REFRESH_RETRY_MS = 2_000;
+const VETO_DEADLINE_REFRESH_MAX_ATTEMPTS = 8;
 
 function getCurrentRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
-  const rooms = [
-    ...(matchmaking.room ? [matchmaking.room] : []),
-    ...matchmaking.rooms,
-  ];
-  return rooms.find((room) => !isTerminalMatchPhase(room.phase)) ?? null;
+  return getDisplayedMatchRoom(matchmaking);
 }
 
 function viewFromMatchmaking(matchmaking: PlayerMatchmakingStateDto): PlayerView {
-  return getCurrentRoom(matchmaking) ? "match-room" : "home";
+  return getActiveMatchRoom(matchmaking) ? "match-room" : "home";
 }
 
 function viewFromSession(account: AccountView, matchmaking: PlayerMatchmakingStateDto): PlayerView {
@@ -188,6 +185,7 @@ export function App() {
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
+  const enteredReadyRoomIds = useRef(new Set<string>());
   const playedMatchSoundRoomIds = useRef(new Set<string>());
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -197,9 +195,13 @@ export function App() {
   const partyApi = hasPartyApi(window.playerApi) ? window.playerApi : undefined;
   const matchRoomApi = hasMatchRoomApi(window.playerApi) ? window.playerApi : undefined;
   const currentRoom = getCurrentRoom(matchmaking);
+  const activeMatchRoom = getActiveMatchRoom(matchmaking);
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
-  const hasActiveMatch = Boolean(currentRoom);
+  const sidebarMatchRoom = currentRoomWithKnownProfiles && !isTerminalMatchPhase(currentRoomWithKnownProfiles.phase)
+    ? currentRoomWithKnownProfiles
+    : null;
+  const hasActiveMatch = Boolean(activeMatchRoom);
   const accountLabel = playerAccountLabel(account);
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
 
@@ -239,6 +241,78 @@ export function App() {
     };
   }, [account, realtimeApi]);
 
+  useEffect(() => {
+    if (!account || !realtimeApi || !currentRoom) return;
+    const initialDelay = getVetoDeadlineRefreshDelayMs(currentRoom, Date.now(), VETO_DEADLINE_REFRESH_GRACE_MS);
+    if (initialDelay === null) return;
+
+    let cancelled = false;
+    let attempts = 0;
+    let retryTimer: number | undefined;
+
+    const refreshExpiredVeto = () => {
+      if (cancelled) return;
+      attempts += 1;
+      void hydrateRealtimeState().finally(() => {
+        if (!cancelled && attempts < VETO_DEADLINE_REFRESH_MAX_ATTEMPTS) {
+          retryTimer = window.setTimeout(refreshExpiredVeto, VETO_DEADLINE_REFRESH_RETRY_MS);
+        }
+      });
+    };
+
+    const initialTimer = window.setTimeout(refreshExpiredVeto, initialDelay);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialTimer);
+      if (retryTimer) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [
+    account,
+    currentRoom?.id,
+    currentRoom?.phase,
+    currentRoom?.veto?.current?.deadlineAt,
+    currentRoom?.veto?.history.length,
+    currentRoom?.veto?.finalMap,
+    realtimeApi,
+  ]);
+
+  useEffect(() => {
+    if (!matchRoomApi || activeView !== "match-room" || !account?.id || !currentRoom || currentRoom.phase !== "ready") return;
+    if (!currentRoom.humanAccountIds?.includes(account.id)) return;
+
+    const entryKey = `${currentRoom.id}:${account.id}`;
+    if (enteredReadyRoomIds.current.has(entryKey)) return;
+
+    let cancelled = false;
+    let retryTimer: number | undefined;
+    const markReadyRoomEntered = async (attempt = 0) => {
+      enteredReadyRoomIds.current.add(entryKey);
+      try {
+        const nextRoom = await matchRoomApi.ackMatchRoomEntered(currentRoom.id);
+        if (!cancelled) {
+          updateCurrentRoom(nextRoom.id, () => nextRoom);
+        }
+      } catch {
+        if (cancelled) return;
+        enteredReadyRoomIds.current.delete(entryKey);
+        if (attempt < 2) {
+          retryTimer = window.setTimeout(() => void markReadyRoomEntered(attempt + 1), 1500);
+        }
+      }
+    };
+
+    const enterTimer = window.setTimeout(() => void markReadyRoomEntered(), 0);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(enterTimer);
+      if (retryTimer !== undefined) {
+        window.clearTimeout(retryTimer);
+      }
+    };
+  }, [account?.id, activeView, currentRoom?.id, currentRoom?.phase, matchRoomApi]);
+
   async function hydrateRealtimeState() {
     if (!realtimeApi) return;
     try {
@@ -256,12 +330,11 @@ export function App() {
     setStale(false);
     setRealtimeStatus({ connection: "connected", stale: false });
     setMatchmaking((current) => {
-      const snapshotRooms = activeMatchRooms(snapshot.matchmaking.rooms);
-      const nextRoom = getCurrentRoom({ ...snapshot.matchmaking, rooms: snapshotRooms });
+      const nextRoom = getDisplayedMatchRoom(snapshot.matchmaking);
       const nextParty = mergePartySnapshot(current.party, snapshotParty);
       return {
         queue: snapshot.matchmaking.queue,
-        rooms: snapshotRooms.length > 0 ? snapshotRooms : nextRoom ? [nextRoom] : [],
+        rooms: snapshot.matchmaking.rooms,
         party: nextParty,
         partyInvitations: mergePartyInvitationsSnapshot(
           current.partyInvitations,
@@ -271,7 +344,7 @@ export function App() {
         room: nextRoom,
       };
     });
-    if (getCurrentRoom(snapshot.matchmaking)) {
+    if (getActiveMatchRoom(snapshot.matchmaking)) {
       setActiveView((current) => (current === "home" ? "match-room" : current));
     }
   }
@@ -307,14 +380,11 @@ export function App() {
       const nextRooms = baseRooms.some((room) => room.id === matchId)
         ? baseRooms.map((room) => (room.id === matchId ? nextRoom : room))
         : [...baseRooms, nextRoom];
-      const activeRooms = activeMatchRooms(nextRooms);
-      const nextCurrentRoom = isTerminalMatchPhase(nextRoom.phase)
-        ? getCurrentRoom({ ...current, rooms: activeRooms, room: current.room?.id === matchId ? null : current.room })
-        : nextRoom;
+      const nextCurrentRoom = current.room?.id === matchId || !current.room ? nextRoom : current.room;
       return {
         ...current,
         room: nextCurrentRoom,
-        rooms: activeRooms,
+        rooms: nextRooms,
       };
     });
     if (options.activate ?? true) {
@@ -508,14 +578,16 @@ export function App() {
           ...room,
           phase: "completed",
         }), { activate: false });
-        setActiveView((current) => (current === "match-room" ? "home" : current));
+        void message.success("游戏服务器已关闭，本场比赛已结束");
+        setActiveView("home");
         return;
       case "match_failed":
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "failed",
         }), { activate: false });
-        setActiveView((current) => (current === "match-room" ? "home" : current));
+        void message.error(event.error ? `比赛已结束：${event.error}` : "比赛已结束，服务器已关闭");
+        setActiveView("home");
         return;
     }
   }
@@ -586,6 +658,7 @@ export function App() {
       setBaseUrl(restored.baseUrl);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
+      enteredReadyRoomIds.current.clear();
       setAccount(restored.account);
       setFriends(emptyFriends);
       setParty(restored.matchmaking.party ?? null);
@@ -630,6 +703,7 @@ export function App() {
         setAccount(loginResult.account);
         resolvedFriendRequestIds.current.clear();
         resolvedPartyInvitationIds.current.clear();
+        enteredReadyRoomIds.current.clear();
         setFriends(emptyFriends);
         setParty(null);
         setMatchmaking(emptyMatchmaking);
@@ -646,6 +720,7 @@ export function App() {
       setAccount(restored.account);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
+      enteredReadyRoomIds.current.clear();
       setFriends(emptyFriends);
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
@@ -680,6 +755,7 @@ export function App() {
         setAccount(restored.account);
         resolvedFriendRequestIds.current.clear();
         resolvedPartyInvitationIds.current.clear();
+        enteredReadyRoomIds.current.clear();
         setFriends(emptyFriends);
         setParty(restored.matchmaking.party ?? null);
         setMatchmaking(restored.matchmaking);
@@ -705,6 +781,7 @@ export function App() {
       setAccount(null);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
+      enteredReadyRoomIds.current.clear();
       setFriends(emptyFriends);
       setParty(null);
       setMatchmaking(emptyMatchmaking);
@@ -1030,11 +1107,11 @@ export function App() {
         <div className="player-app-layout">
           <main className="player-app-main">{renderAuthenticatedView()}</main>
           <aside className="player-app-sidebar">
-            {currentRoomWithKnownProfiles ? (
+            {sidebarMatchRoom ? (
               <MatchChatPanel
                 accountId={account?.id ?? ""}
-                room={currentRoomWithKnownProfiles}
-                onSendMessage={matchRoomApi ? (text) => sendMatchChatMessage(currentRoomWithKnownProfiles.id, text) : undefined}
+                room={sidebarMatchRoom}
+                onSendMessage={matchRoomApi ? (text) => sendMatchChatMessage(sidebarMatchRoom.id, text) : undefined}
               />
             ) : (
               <FriendsPanel

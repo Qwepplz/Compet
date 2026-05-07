@@ -5,6 +5,8 @@ export interface RealtimeEventDeliveryOptions {
   isPaused: () => boolean;
   queue: (event: PlayerRealtimeEvent) => void;
   publish: (event: PlayerRealtimeEvent) => void;
+  enrichTimeoutMs?: number;
+  publishFallback?: boolean;
 }
 
 export async function deliverRealtimeEvent(
@@ -14,9 +16,38 @@ export async function deliverRealtimeEvent(
   options: RealtimeEventDeliveryOptions,
 ): Promise<void> {
   try {
-    publishOrQueue(await enrich(event), sessionVersion, options);
+    const next = await enrichWithTimeout(event, enrich, options.enrichTimeoutMs);
+    if (next !== event || options.publishFallback !== false) {
+      publishOrQueue(next, sessionVersion, options);
+    }
   } catch {
-    publishOrQueue(event, sessionVersion, options);
+    if (options.publishFallback !== false) {
+      publishOrQueue(event, sessionVersion, options);
+    }
+  }
+}
+
+async function enrichWithTimeout(
+  event: PlayerRealtimeEvent,
+  enrich: (event: PlayerRealtimeEvent) => Promise<PlayerRealtimeEvent>,
+  enrichTimeoutMs: number | undefined,
+): Promise<PlayerRealtimeEvent> {
+  if (!enrichTimeoutMs || enrichTimeoutMs <= 0) {
+    return enrich(event);
+  }
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      Promise.resolve().then(() => enrich(event)),
+      new Promise<PlayerRealtimeEvent>((resolve) => {
+        timeoutId = setTimeout(() => resolve(event), enrichTimeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
   }
 }
 

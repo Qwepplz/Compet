@@ -57,6 +57,7 @@ export interface MatchRoomRecord {
   botParticipantIds?: string[];
   ready?: MatchRoomReadyState[];
   readyDeadlineAt?: string;
+  readyEnteredAccountIds?: string[];
   partyId?: string;
   veto?: VetoState;
   connect?: MatchConnectInfo;

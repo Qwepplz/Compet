@@ -140,6 +140,7 @@ export function MatchRoomPage({
   );
   const currentMap = selectedMap ?? room?.veto?.availableMaps[0] ?? "de_mirage";
   const roomPhase = phaseLabel(room?.phase);
+  const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
   const participantNames = new Map(
     [...(room?.teamA?.participants ?? []), ...(room?.teamB?.participants ?? [])]
       .flatMap((participant) => (participant.accountId ? [[participant.accountId, participantName(participant)] as const] : [])),
@@ -203,8 +204,8 @@ export function MatchRoomPage({
 
             {room.phase === "ready" ? (
               <section className="faceit-connect-panel">
-                <span>准备倒计时</span>
-                <strong className="faceit-countdown">{formatCountdown(room.readyDeadlineAt, nowMs)}</strong>
+                <span>{readyCountdownStarted ? "准备倒计时" : "等待所有玩家进入房间"}</span>
+                <strong className="faceit-countdown">{readyCountdownStarted ? formatCountdown(room.readyDeadlineAt, nowMs) : "--:--"}</strong>
                 <div className="faceit-ready-list">
                   {(room.ready ?? []).map((entry) => (
                     <div className="faceit-ready-row" key={entry.accountId}>
@@ -215,10 +216,10 @@ export function MatchRoomPage({
                 </div>
                 {account?.id && room.humanAccountIds?.includes(account.id) ? (
                   <div className="faceit-action-row">
-                    <Button aria-label="准备" type="primary" onClick={() => void onAcceptReady?.()} disabled={!onAcceptReady}>
+                    <Button aria-label="准备" type="primary" onClick={() => void onAcceptReady?.()} disabled={!onAcceptReady || !readyCountdownStarted}>
                       准备
                     </Button>
-                    <Button aria-label="拒绝本场" onClick={() => void onDeclineReady?.()} disabled={!onDeclineReady}>
+                    <Button aria-label="拒绝本场" onClick={() => void onDeclineReady?.()} disabled={!onDeclineReady || !readyCountdownStarted}>
                       拒绝本场
                     </Button>
                   </div>
@@ -270,7 +271,7 @@ export function MatchRoomPage({
               </section>
             ) : null}
 
-            {room.phase === "connect" || room.phase === "live" || room.phase === "completed" || room.phase === "failed" ? (
+            {room.phase === "connect" || room.phase === "live" ? (
               <section className="faceit-connect-panel">
                 <span>Time To Connect</span>
                 <strong className="faceit-countdown faceit-countdown--ready">{connect ? "READY" : "--:--"}</strong>
@@ -289,6 +290,14 @@ export function MatchRoomPage({
                 ) : (
                   <small>连接信息尚未下发。</small>
                 )}
+              </section>
+            ) : null}
+
+            {room.phase === "completed" || room.phase === "failed" ? (
+              <section className="faceit-connect-panel">
+                <span>{room.phase === "completed" ? "Match Completed" : "Match Failed"}</span>
+                <strong>{room.phase === "completed" ? "比赛已结束" : "比赛已关闭"}</strong>
+                <small>本场已结束，进服指令已失效。</small>
               </section>
             ) : null}
           </main>

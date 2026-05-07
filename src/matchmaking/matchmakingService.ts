@@ -296,7 +296,6 @@ export class MatchmakingService {
         humanAccountIds: humans.map((participant) => participant.accountId ?? participant.id),
         botParticipantIds: participants.filter((participant) => participant.kind === "bot").map((participant) => participant.id),
         ready: this.buildReadyStates(humans),
-        readyDeadlineAt: this.buildReadyDeadlineAt(startedAt),
         partyId: party.id,
         chat: [],
         createdAt: startedAt,
@@ -306,12 +305,9 @@ export class MatchmakingService {
 
       await this.deps.store.saveRooms(rooms);
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
-      this.scheduleReadyTimeout(room);
       await this.expirePendingInvitationsForParty(party.id);
       await this.emitPartyUpdated(updatedParty);
       await this.emit({ type: "match_room_created", matchId: room.id, accountIds: this.roomAudience(room), room: this.toPublicRoom(room) }, room.id);
-      await this.emit(this.toReadyEvent("ready_check_started", room));
-      await this.emit(this.toReadyEvent("ready_check_updated", room));
       return this.toPublicRoom(room);
     });
   }
@@ -348,12 +344,51 @@ export class MatchmakingService {
     });
   }
 
+  ackReadyRoomEntered(roomId: string, accountId: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(accountId);
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === roomId && candidate.phase === "ready");
+      if (!room) throw new Error(`ready room not found: ${roomId}`);
+
+      const audience = this.roomAudience(room);
+      if (!audience.includes(accountId)) throw new Error("account is not in match room");
+
+      const enteredAccountIds = room.readyEnteredAccountIds ?? [];
+      const nextEnteredAccountIds = enteredAccountIds.includes(accountId)
+        ? enteredAccountIds
+        : [...enteredAccountIds, accountId];
+      const shouldStartCountdown = !room.readyDeadlineAt && audience.every((id) => nextEnteredAccountIds.includes(id));
+      const updatedReadyRoom: MatchRoomRecord = {
+        ...room,
+        readyEnteredAccountIds: nextEnteredAccountIds,
+        readyDeadlineAt: room.readyDeadlineAt ?? (shouldStartCountdown ? this.buildReadyDeadlineAt(this.now()) : undefined),
+      };
+
+      if (updatedReadyRoom.readyEnteredAccountIds === room.readyEnteredAccountIds && updatedReadyRoom.readyDeadlineAt === room.readyDeadlineAt) {
+        return this.toPublicRoom(room);
+      }
+
+      const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? updatedReadyRoom : candidate));
+      await this.deps.store.saveRooms(updatedRooms);
+
+      if (shouldStartCountdown) {
+        this.scheduleReadyTimeout(updatedReadyRoom);
+        await this.emit(this.toReadyEvent("ready_check_started", updatedReadyRoom));
+        await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
+      }
+
+      return this.toPublicRoom(updatedReadyRoom);
+    });
+  }
+
   acceptReady(accountId: string): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
       const rooms = await this.deps.store.listRooms();
       const room = this.findReadyRoomForAccount(rooms, accountId);
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
+      if (!room.readyDeadlineAt) throw new Error("ready check has not started");
 
       const acceptedAt = this.now();
       const ready = (room.ready ?? []).map((entry) => {
@@ -390,6 +425,7 @@ export class MatchmakingService {
       const rooms = await this.deps.store.listRooms();
       const room = this.findReadyRoomForAccount(rooms, accountId);
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
+      if (!room.readyDeadlineAt) throw new Error("ready check has not started");
       return this.toPublicRoom(await this.failReadyRoom(rooms, room, "ready declined"));
     });
   }
@@ -413,7 +449,6 @@ export class MatchmakingService {
     const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
     const rooms = this.pruneTerminalRooms(await this.deps.store.listRooms())
       .filter((room) => this.roomHasAccount(room, accountId))
-      .filter((room) => !isTerminalMatchPhase(room.phase))
       .map((room) => this.toPublicRoom(room));
     const party = (await this.deps.store.listParties()).find((candidate) => candidate.memberAccountIds.includes(accountId)) ?? null;
     const partyInvitations = (await this.deps.store.listInvitations()).filter(
@@ -640,7 +675,11 @@ export class MatchmakingService {
 
   private async emit(event: RealtimeEvent, matchId?: string): Promise<void> {
     if (matchId) {
-      await this.deps.records?.appendEvent(matchId, { ...event, at: this.now() });
+      void this.deps.records?.appendEvent(matchId, { ...event, at: this.now() }).catch((error) => {
+        process.stderr.write(
+          `Failed to append match event for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      });
     }
     this.deps.events?.publish(event);
   }
@@ -761,12 +800,16 @@ export class MatchmakingService {
   }
 
   private scheduleReadyTimeout(room: MatchRoomRecord): void {
-    if (room.phase !== "ready") return;
+    if (room.phase !== "ready" || !room.readyDeadlineAt) return;
+
+    const deadlineMs = Date.parse(room.readyDeadlineAt);
+    const nowMs = Date.parse(this.now());
+    if (!Number.isFinite(deadlineMs) || !Number.isFinite(nowMs)) return;
 
     this.clearReadyTimeout(room.id);
     const timeout = this.setTimeoutFn(() => {
       void this.expireReady(room.id).catch(() => undefined);
-    }, READY_TIMEOUT_MS);
+    }, Math.max(0, deadlineMs - nowMs));
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.readyTimeouts.set(room.id, timeout);
   }
@@ -878,7 +921,7 @@ export class MatchmakingService {
   }
 
   private findCurrentRoom<T extends { phase: string }>(rooms: T[]): T | null {
-    return [...rooms].reverse().find((room) => !isTerminalMatchPhase(room.phase)) ?? null;
+    return [...rooms].reverse().find((room) => !isTerminalMatchPhase(room.phase)) ?? rooms.at(-1) ?? null;
   }
 
   private async failRoomBecauseGameServerActive(rooms: MatchRoomRecord[], room: MatchRoomRecord): Promise<MatchRoomRecord> {

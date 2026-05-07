@@ -19,7 +19,7 @@ import type {
 } from "../shared/types.js";
 import { SteamProfileService, type SteamProfileResolver } from "./steamProfileService.js";
 
-const REQUEST_TIMEOUT_MS = 10_000;
+const REQUEST_TIMEOUT_MS = 4_000;
 
 export interface PlayerLoginResult {
   token: string;
@@ -166,6 +166,11 @@ export class PlayerApiClient {
 
   matchmakingState(): Promise<PlayerMatchmakingStateDto> {
     return this.getMatchmakingState();
+  }
+
+  async ackMatchRoomEntered(roomId: string): Promise<PlayerLiveMatchStateDto> {
+    const response = await this.request<{ room: PlayerLiveMatchStateDto }>("POST", `/match-room/${encodeURIComponent(roomId)}/entered`, {});
+    return this.enrichRoom(response.room);
   }
 
   async acceptReady(): Promise<PlayerLiveMatchStateDto> {

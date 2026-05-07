@@ -3,6 +3,8 @@ import type { PlayerRealtimeConnection, PlayerRealtimeEvent } from "../shared/ty
 
 interface WebSocketLike {
   close(): void;
+  send(data: string): void;
+  terminate?(): void;
   on(event: "open", listener: () => void): this;
   on(event: "message", listener: (data: RawData) => void): this;
   on(event: "close", listener: () => void): this;
@@ -12,6 +14,8 @@ interface WebSocketLike {
 interface PlayerRealtimeClientOptions {
   createSocket?: (url: string) => WebSocketLike;
   reconnectDelaysMs?: readonly number[];
+  heartbeatIntervalMs?: number;
+  heartbeatTimeoutMs?: number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
 }
@@ -19,10 +23,14 @@ interface PlayerRealtimeClientOptions {
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000] as const;
+const DEFAULT_HEARTBEAT_INTERVAL_MS = 6_000;
+const DEFAULT_HEARTBEAT_TIMEOUT_MS = 12_000;
 
 export class PlayerRealtimeClient {
   private readonly createSocket: (url: string) => WebSocketLike;
   private readonly reconnectDelaysMs: readonly number[];
+  private readonly heartbeatIntervalMs: number;
+  private readonly heartbeatTimeoutMs: number;
   private readonly setTimeoutFn: typeof setTimeout;
   private readonly clearTimeoutFn: typeof clearTimeout;
   private readonly eventListeners = new Set<(event: PlayerRealtimeEvent) => void>();
@@ -32,6 +40,8 @@ export class PlayerRealtimeClient {
   private token?: string;
   private socket?: WebSocketLike;
   private reconnectTimer?: TimerHandle;
+  private heartbeatTimer?: TimerHandle;
+  private heartbeatTimeoutTimer?: TimerHandle;
   private reconnectAttempt = 0;
   private manualDisconnect = false;
   private connectionId = 0;
@@ -39,6 +49,8 @@ export class PlayerRealtimeClient {
   constructor(options: PlayerRealtimeClientOptions = {}) {
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url, { rejectUnauthorized: false }));
     this.reconnectDelaysMs = options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
+    this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
+    this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
     this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
     this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
   }
@@ -98,12 +110,14 @@ export class PlayerRealtimeClient {
       }
       this.reconnectAttempt = 0;
       this.emitStatus("connected");
+      this.scheduleHeartbeat(socket, connectionId);
     });
 
     socket.on("message", (data) => {
       if (connectionId !== this.connectionId || this.socket !== socket) {
         return;
       }
+      this.acknowledgeHeartbeat(socket, connectionId);
       const event = sanitizeRealtimeEvent(data);
       if (event) {
         this.emitEvent(event);
@@ -114,6 +128,7 @@ export class PlayerRealtimeClient {
       if (connectionId !== this.connectionId || this.socket !== socket) {
         return;
       }
+      this.clearHeartbeat();
       this.socket = undefined;
       this.handleDisconnect();
     });
@@ -150,6 +165,7 @@ export class PlayerRealtimeClient {
       this.clearTimeoutFn(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    this.clearHeartbeat();
 
     const socket = this.socket;
     this.socket = undefined;
@@ -160,6 +176,69 @@ export class PlayerRealtimeClient {
     if (clearListeners) {
       this.eventListeners.clear();
       this.statusListeners.clear();
+    }
+  }
+
+  private scheduleHeartbeat(socket: WebSocketLike, connectionId: number): void {
+    if (connectionId !== this.connectionId || this.socket !== socket || this.heartbeatIntervalMs <= 0) {
+      return;
+    }
+    if (this.heartbeatTimer) {
+      this.clearTimeoutFn(this.heartbeatTimer);
+    }
+    this.heartbeatTimer = this.setTimeoutFn(() => {
+      this.heartbeatTimer = undefined;
+      this.sendHeartbeat(socket, connectionId);
+    }, this.heartbeatIntervalMs);
+  }
+
+  private sendHeartbeat(socket: WebSocketLike, connectionId: number): void {
+    if (connectionId !== this.connectionId || this.socket !== socket) {
+      return;
+    }
+    try {
+      socket.send(JSON.stringify({ type: "ping" }));
+    } catch {
+      this.forceDisconnect(socket, connectionId);
+      return;
+    }
+    if (this.heartbeatTimeoutMs <= 0) {
+      this.scheduleHeartbeat(socket, connectionId);
+      return;
+    }
+    this.heartbeatTimeoutTimer = this.setTimeoutFn(() => {
+      this.heartbeatTimeoutTimer = undefined;
+      this.forceDisconnect(socket, connectionId);
+    }, this.heartbeatTimeoutMs);
+  }
+
+  private acknowledgeHeartbeat(socket: WebSocketLike, connectionId: number): void {
+    if (this.heartbeatTimeoutTimer) {
+      this.clearTimeoutFn(this.heartbeatTimeoutTimer);
+      this.heartbeatTimeoutTimer = undefined;
+    }
+    this.scheduleHeartbeat(socket, connectionId);
+  }
+
+  private forceDisconnect(socket: WebSocketLike, connectionId: number): void {
+    if (connectionId !== this.connectionId || this.socket !== socket) {
+      return;
+    }
+    this.clearHeartbeat();
+    this.socket = undefined;
+    this.connectionId += 1;
+    socket.terminate?.();
+    this.handleDisconnect();
+  }
+
+  private clearHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      this.clearTimeoutFn(this.heartbeatTimer);
+      this.heartbeatTimer = undefined;
+    }
+    if (this.heartbeatTimeoutTimer) {
+      this.clearTimeoutFn(this.heartbeatTimeoutTimer);
+      this.heartbeatTimeoutTimer = undefined;
     }
   }
 

@@ -29,6 +29,7 @@ const realtimeStatusChannel = "player:realtime:status";
 const realtimeEventChannel = "player:realtime:event";
 const realtimeSnapshotChannel = "player:realtime:snapshot";
 const MAX_QUEUED_REALTIME_EVENTS = 200;
+const REALTIME_EVENT_ENRICH_TIMEOUT_MS = 1_500;
 
 let apiClient: PlayerApiClient | undefined;
 let mainWindow: BrowserWindow | undefined;
@@ -134,6 +135,15 @@ function publishRealtimeEvent(event: PlayerRealtimeEvent): void {
   broadcast(realtimeEventChannel, event);
 }
 
+function publishRealtimeEventNowOrQueue(event: PlayerRealtimeEvent, sessionVersion: number): void {
+  if (sessionVersion !== realtimeSessionVersion) return;
+  if (pauseRealtimeEvents) {
+    queueRealtimeEvent(event);
+    return;
+  }
+  publishRealtimeEvent(event);
+}
+
 function publishRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto): void {
   broadcast(realtimeSnapshotChannel, snapshot);
 }
@@ -187,6 +197,13 @@ realtimeClient.onEvent((event) => {
     return;
   }
   const sessionVersion = realtimeSessionVersion;
+  if (!doesRealtimeEventNeedEnrich(event)) {
+    publishRealtimeEventNowOrQueue(event, sessionVersion);
+    return;
+  }
+  if (shouldPublishRealtimeEventBeforeEnrich(event)) {
+    publishRealtimeEventNowOrQueue(event, sessionVersion);
+  }
   publishEnrichedRealtimeEvent(event, sessionVersion);
 });
 
@@ -240,6 +257,8 @@ function publishEnrichedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion
       isPaused: () => pauseRealtimeEvents,
       queue: queueRealtimeEvent,
       publish: publishRealtimeEvent,
+      enrichTimeoutMs: REALTIME_EVENT_ENRICH_TIMEOUT_MS,
+      publishFallback: !shouldPublishRealtimeEventBeforeEnrich(event),
     }))
     .catch(() => undefined);
 }
@@ -250,8 +269,26 @@ function flushQueuedRealtimeEvents(sessionVersion: number): void {
   }
   const queued = queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length);
   for (const event of queued) {
+    if (!doesRealtimeEventNeedEnrich(event)) {
+      publishRealtimeEventNowOrQueue(event, sessionVersion);
+      continue;
+    }
+    if (shouldPublishRealtimeEventBeforeEnrich(event)) {
+      publishRealtimeEventNowOrQueue(event, sessionVersion);
+    }
     publishEnrichedRealtimeEvent(event, sessionVersion);
   }
+}
+
+function doesRealtimeEventNeedEnrich(event: PlayerRealtimeEvent): boolean {
+  return event.type === "friend_request_received"
+    || event.type === "friend_request_resolved"
+    || event.type === "match_room_created"
+    || event.type === "teams_assigned";
+}
+
+function shouldPublishRealtimeEventBeforeEnrich(event: PlayerRealtimeEvent): boolean {
+  return doesRealtimeEventNeedEnrich(event);
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();

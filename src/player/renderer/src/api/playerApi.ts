@@ -43,6 +43,7 @@ export interface PlayerPartyApi {
 
 export interface PlayerMatchRoomApi {
   getMatchmakingState(): Promise<PlayerMatchmakingStateDto>;
+  ackMatchRoomEntered(roomId: string): Promise<PlayerLiveMatchStateDto>;
   acceptReady(): Promise<PlayerLiveMatchStateDto>;
   declineReady(): Promise<PlayerLiveMatchStateDto>;
   applyVeto(roomId: string, action: "ban" | "pick", map: string): Promise<PlayerLiveMatchStateDto>;
@@ -77,5 +78,5 @@ export function hasPartyApi(api: Window["playerApi"]): api is PlayerApiWithParty
 }
 
 export function hasMatchRoomApi(api: Window["playerApi"]): api is PlayerApiWithMatchRoom {
-  return hasMethods(api, ["getMatchmakingState", "acceptReady", "declineReady", "applyVeto", "sendMatchChatMessage", "copyText"]);
+  return hasMethods(api, ["getMatchmakingState", "ackMatchRoomEntered", "acceptReady", "declineReady", "applyVeto", "sendMatchChatMessage", "copyText"]);
 }

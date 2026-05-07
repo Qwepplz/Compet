@@ -47,6 +47,7 @@ export const playerApi = {
   leaveParty: (): Promise<void> => invoke("party:leave"),
   startPartyMatchmaking: (): Promise<PlayerLiveMatchStateDto> => invoke("party:startMatchmaking"),
   getMatchmakingState: (): Promise<PlayerMatchmakingStateDto> => invoke("matchmaking:getState"),
+  ackMatchRoomEntered: (roomId: string): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:roomEntered", roomId),
   acceptReady: (): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:acceptReady"),
   declineReady: (): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:declineReady"),
   applyVeto: (roomId: string, action: "ban" | "pick", map: string): Promise<PlayerLiveMatchStateDto> =>

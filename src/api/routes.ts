@@ -104,6 +104,7 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("party matchmaking must use party owner start") ||
       error.message.includes("party matchmaking must be started by owner") ||
       error.message.includes("party invitation") ||
+      error.message.includes("ready check has not started") ||
       error.message.includes("match chat message is empty") ||
       error.message.includes("match room is closed") ||
       error.message.includes("account is not in match room") ||
@@ -461,6 +462,18 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const matchmaking = requireMatchmaking(deps);
     try {
       return await matchmaking.getState(auth.account.id);
+    } catch (error) {
+      mapMatchmakingServiceError(error);
+    }
+  });
+
+  app.post("/match-room/:id/entered", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const matchmaking = requireMatchmaking(deps);
+    const { id } = matchRoomParamsSchema.parse(request.params);
+    try {
+      return { room: await matchmaking.ackReadyRoomEntered(id, auth.account.id) };
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
