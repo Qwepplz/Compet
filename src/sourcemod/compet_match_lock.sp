@@ -8,6 +8,8 @@
 static const int DEFAULT_WARMUP_TIMEOUT_SECONDS = 600;
 static const int MIN_WARMUP_TIMEOUT_SECONDS = 5;
 static const int DEFAULT_DISCONNECT_GRACE_SECONDS = 60;
+static const int DEFAULT_NO_HUMAN_SHUTDOWN_SECONDS = 600;
+static const int MIN_NO_HUMAN_SHUTDOWN_SECONDS = 5;
 static const int GET5_STATE_KNIFE_ROUND = 4;
 static const int GET5_STATE_POSTGAME = 9;
 
@@ -26,47 +28,68 @@ bool g_WarmupWasActive = false;
 char g_MatchId[128] = "";
 ConVar g_WarmupTimeoutSecondsCvar = null;
 ConVar g_DisconnectGraceSecondsCvar = null;
+ConVar g_NoHumanShutdownSecondsCvar = null;
 Handle g_EnforceTimer = null;
 Handle g_WarmupTimeoutTimer = null;
 Handle g_DisconnectShutdownTimer = null;
+Handle g_NoHumanShutdownTimer = null;
 float g_WarmupDeadline = 0.0;
+float g_NoHumanShutdownDeadline = 0.0;
 int g_LastWarmupNoticeSeconds = -1;
 
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
   g_WarmupTimeoutSecondsCvar = CreateConVar("compet_warmup_timeout_seconds", "600", "Compet warmup shutdown timeout in seconds.", 0, true, float(MIN_WARMUP_TIMEOUT_SECONDS));
   g_DisconnectGraceSecondsCvar = CreateConVar("compet_disconnect_grace_seconds", "60", "Seconds to wait before shutting down after all assigned players disconnect before get5 starts.", 0, true, 0.0);
+  g_NoHumanShutdownSecondsCvar = CreateConVar("compet_no_human_shutdown_seconds", "600", "Seconds to wait before shutting down when no human players remain, regardless of match state.", 0, true, float(MIN_NO_HUMAN_SHUTDOWN_SECONDS));
   RegServerCmd("compet_lock_reset", Command_ResetLock);
   RegServerCmd("compet_lock_add", Command_AddPlayer);
   RegServerCmd("compet_lock_enable", Command_EnableLock);
   RegServerCmd("compet_lock_test_get5_started", Command_TestGet5Started);
   RegServerCmd("compet_lock_test_warmup_end", Command_TestWarmupEnd);
   RegServerCmd("compet_lock_test_empty_server", Command_TestEmptyServer);
+  RegServerCmd("compet_lock_test_no_humans", Command_TestNoHumans);
   AddCommandListener(Command_JoinTeam, "jointeam");
   AddCommandListener(Command_JoinTeam, "joingame");
   PrintToServer("[Compet] Match lock plugin loaded; waiting for compet_lock_reset.");
+}
+
+public void OnConfigsExecuted() {
+  ScheduleNoHumanShutdownIfEmpty();
 }
 
 public void OnPluginEnd() {
   StopEnforceTimer();
   StopWarmupTimeout();
   StopDisconnectShutdownTimer();
+  StopNoHumanShutdownTimer();
 }
 
 public void OnMapEnd() {
   g_EnforceTimer = null;
   g_WarmupTimeoutTimer = null;
   g_DisconnectShutdownTimer = null;
-  g_WarmupDeadline = 0.0;
-  g_WarmupWasActive = false;
-  g_LastWarmupNoticeSeconds = -1;
+  g_NoHumanShutdownTimer = null;
+}
+
+public void OnMapStart() {
+  if (g_NoHumanShutdownDeadline > 0.0) {
+    ScheduleNoHumanShutdownIfEmpty();
+  }
 }
 
 public void OnClientPostAdminCheck(int client) {
+  if (!IsFakeClient(client)) {
+    StopNoHumanShutdownTimer();
+  }
+
   if (!g_LockEnabled || IsFakeClient(client)) {
     return;
   }
 
+  if (!EnsureWarmupShutdownGuard()) {
+    return;
+  }
   if (IsAssignedClient(client)) {
     StopDisconnectShutdownTimer();
   }
@@ -75,6 +98,10 @@ public void OnClientPostAdminCheck(int client) {
 }
 
 public void OnClientDisconnect(int client) {
+  if (!IsFakeClient(client)) {
+    CreateTimer(0.2, Timer_CheckNoHumansAfterDisconnect, 0, TIMER_FLAG_NO_MAPCHANGE);
+  }
+
   if (!g_LockEnabled || g_Get5Started || IsFakeClient(client)) {
     return;
   }
@@ -164,6 +191,11 @@ public Action Command_TestEmptyServer(int args) {
   return Plugin_Handled;
 }
 
+public Action Command_TestNoHumans(int args) {
+  MaybeShutdownForNoHumans();
+  return Plugin_Handled;
+}
+
 public Action Command_JoinTeam(int client, const char[] command, int argc) {
   if (!g_LockEnabled || client <= 0 || !IsClientInGame(client) || IsFakeClient(client)) {
     return Plugin_Continue;
@@ -200,9 +232,20 @@ public Action Timer_CheckEmptyServerAfterDisconnect(Handle timer, any data) {
   return Plugin_Stop;
 }
 
+public Action Timer_CheckNoHumansAfterDisconnect(Handle timer, any data) {
+  ScheduleNoHumanShutdownIfEmpty();
+  return Plugin_Stop;
+}
+
 public Action Timer_DisconnectShutdown(Handle timer, any data) {
   g_DisconnectShutdownTimer = null;
   MaybeShutdownForEmptyServer();
+  return Plugin_Stop;
+}
+
+public Action Timer_NoHumanShutdown(Handle timer, any data) {
+  g_NoHumanShutdownTimer = null;
+  MaybeShutdownForNoHumans();
   return Plugin_Stop;
 }
 
@@ -376,6 +419,14 @@ int GetDisconnectGraceSeconds() {
   return seconds < 0 ? 0 : seconds;
 }
 
+int GetNoHumanShutdownSeconds() {
+  int seconds = DEFAULT_NO_HUMAN_SHUTDOWN_SECONDS;
+  if (g_NoHumanShutdownSecondsCvar != null) {
+    seconds = g_NoHumanShutdownSecondsCvar.IntValue;
+  }
+  return seconds < MIN_NO_HUMAN_SHUTDOWN_SECONDS ? MIN_NO_HUMAN_SHUTDOWN_SECONDS : seconds;
+}
+
 bool IsGameWarmupActive() {
   return GameRules_GetProp("m_bWarmupPeriod") != 0;
 }
@@ -406,6 +457,33 @@ void MaybeShutdownForWarmupEnd() {
     return;
   }
   ShutdownServer("Game warmup ended before get5 started; shutting down server.", "[Compet] Warmup ended before get5 started; shutting down server.");
+}
+
+bool EnsureWarmupShutdownGuard() {
+  if (!g_LockEnabled || g_Get5Started || g_MatchId[0] == '\0') {
+    return true;
+  }
+  MaybeMarkGet5StartedFromState("get5 active state detected while restoring warmup guard");
+  if (g_Get5Started) {
+    return true;
+  }
+  if (g_WarmupWasActive && !IsGameWarmupActive()) {
+    MaybeShutdownForWarmupEnd();
+    return false;
+  }
+  if (g_WarmupDeadline > 0.0) {
+    if (SecondsUntilWarmupShutdown() <= 0) {
+      MaybeShutdownForWarmupEnd();
+      return false;
+    }
+    if (g_WarmupTimeoutTimer == null) {
+      g_WarmupTimeoutTimer = CreateTimer(1.0, Timer_WarmupTick, 0, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
+      PrintToServer("[Compet] Warmup shutdown guard restored for match %s after server wake/map reload.", g_MatchId);
+    }
+    return true;
+  }
+  RestartWarmupTimeout();
+  return true;
 }
 
 void ScheduleDisconnectShutdownIfEmpty() {
@@ -439,11 +517,56 @@ void MaybeShutdownForEmptyServer() {
   ShutdownServer("All assigned players disconnected before get5 started; shutting down server.", "[Compet] All assigned players disconnected before get5 started; shutting down server.");
 }
 
+void ScheduleNoHumanShutdownIfEmpty() {
+  if (CountConnectedHumanPlayers() > 0) {
+    StopNoHumanShutdownTimer();
+    return;
+  }
+  if (g_NoHumanShutdownTimer != null) {
+    return;
+  }
+  if (g_NoHumanShutdownDeadline <= 0.0) {
+    int timeoutSeconds = GetNoHumanShutdownSeconds();
+    g_NoHumanShutdownDeadline = GetEngineTime() + float(timeoutSeconds);
+    PrintToServer("[Compet] No human players connected; shutting down in %d seconds unless someone joins.", timeoutSeconds);
+  }
+
+  int secondsRemaining = SecondsUntilNoHumanShutdown();
+  if (secondsRemaining <= 0) {
+    MaybeShutdownForNoHumans();
+    return;
+  }
+  g_NoHumanShutdownTimer = CreateTimer(float(secondsRemaining), Timer_NoHumanShutdown, 0, TIMER_FLAG_NO_MAPCHANGE);
+}
+
+void MaybeShutdownForNoHumans() {
+  if (CountConnectedHumanPlayers() > 0) {
+    StopNoHumanShutdownTimer();
+    return;
+  }
+  ShutdownServer("No human players connected for the configured timeout; shutting down server.", "[Compet] No human players connected for too long; shutting down server.");
+}
+
 void StopDisconnectShutdownTimer() {
   if (g_DisconnectShutdownTimer != null) {
     delete g_DisconnectShutdownTimer;
     g_DisconnectShutdownTimer = null;
   }
+}
+
+void StopNoHumanShutdownTimer() {
+  if (g_NoHumanShutdownTimer != null) {
+    delete g_NoHumanShutdownTimer;
+    g_NoHumanShutdownTimer = null;
+  }
+  g_NoHumanShutdownDeadline = 0.0;
+}
+
+int SecondsUntilNoHumanShutdown() {
+  if (g_NoHumanShutdownDeadline <= 0.0) {
+    return 0;
+  }
+  return RoundToCeil(g_NoHumanShutdownDeadline - GetEngineTime());
 }
 
 void ShutdownServer(const char[] serverMessage, const char[] chatMessage) {
@@ -478,6 +601,16 @@ int CountConnectedAssignedPlayers() {
   int count = 0;
   for (int client = 1; client <= MaxClients; client++) {
     if (IsAssignedClient(client)) {
+      count++;
+    }
+  }
+  return count;
+}
+
+int CountConnectedHumanPlayers() {
+  int count = 0;
+  for (int client = 1; client <= MaxClients; client++) {
+    if (IsClientConnected(client) && !IsFakeClient(client)) {
       count++;
     }
   }
