@@ -13,6 +13,7 @@ interface HomePageProps {
   partyInvitations: PlayerPartyInvitationDto[];
   queueSize: number;
   roomCount: number;
+  matchmakingPending?: boolean;
   onInviteFriend?: (accountId: string) => Promise<void>;
   onAcceptPartyInvite?: (invitationId: string) => Promise<void>;
   onDeclinePartyInvite?: (invitationId: string) => Promise<void>;
@@ -58,6 +59,7 @@ export function HomePage({
   partyInvitations,
   queueSize,
   roomCount,
+  matchmakingPending = false,
   onInviteFriend,
   onAcceptPartyInvite,
   onDeclinePartyInvite,
@@ -72,7 +74,8 @@ export function HomePage({
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
   const hasSteamBinding = Boolean(account?.steam64?.trim());
   const accountName = playerAccountLabel(account);
-  const primaryDisabled = !hasSteamBinding || !canStart || matchingPending;
+  const isMatchmakingPending = matchingPending || matchmakingPending;
+  const primaryDisabled = !hasSteamBinding || !canStart || isMatchmakingPending;
 
   async function inviteFriend(accountId: string) {
     if (!onInviteFriend) return;
@@ -116,7 +119,7 @@ export function HomePage({
   }
 
   async function startMatchmaking() {
-    if (!onStartMatchmaking || matchingPending) return;
+    if (!onStartMatchmaking || isMatchmakingPending) return;
     setMatchingPending(true);
     try {
       await onStartMatchmaking();
@@ -260,7 +263,7 @@ export function HomePage({
         {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
         <div className="faceit-queue-actions">
           {party ? (
-            <Button className="faceit-secondary-cta" onClick={() => void leaveParty()} disabled={!onLeaveParty || leavingParty || matchingPending} loading={leavingParty}>
+            <Button className="faceit-secondary-cta" onClick={() => void leaveParty()} disabled={!onLeaveParty || leavingParty || isMatchmakingPending} loading={leavingParty}>
               退出队伍
             </Button>
           ) : null}
@@ -269,9 +272,9 @@ export function HomePage({
             className="faceit-main-cta"
             onClick={() => void startMatchmaking()}
             disabled={primaryDisabled}
-            loading={matchingPending}
+            loading={isMatchmakingPending}
           >
-            {matchingPending ? "正在匹配" : "匹配比赛"}
+            {isMatchmakingPending ? "正在匹配" : "匹配比赛"}
           </Button>
         </div>
       </div>

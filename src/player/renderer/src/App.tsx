@@ -176,8 +176,9 @@ export function App() {
   const [friends, setFriends] = useState<PlayerFriendListDto>(emptyFriends);
   const [party, setParty] = useState<PlayerPartyDto | null>(null);
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
+  const [matchmakingFeedbackPending, setMatchmakingFeedbackPending] = useState(false);
   const [realtimeStatus, setRealtimeStatus] = useState<PlayerRealtimeStatusDto>(emptyRealtimeStatus);
-  const [stale, setStale] = useState(false);
+  const [, setStale] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [savedLogin, setSavedLogin] = useState<SavedPlayerLogin | null>(null);
   const [loginPending, setLoginPending] = useState(false);
@@ -188,6 +189,7 @@ export function App() {
   const resolvedPartyInvitationIds = useRef(new Set<string>());
   const enteredReadyRoomIds = useRef(new Set<string>());
   const playedMatchSoundRoomIds = useRef(new Set<string>());
+  const pendingMatchSoundRoomIds = useRef(new Set<string>());
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const realtimeApi = hasRealtimeApi(window.playerApi) ? window.playerApi : undefined;
@@ -209,6 +211,12 @@ export function App() {
   useEffect(() => {
     void restoreSession();
   }, []);
+
+  useEffect(() => {
+    if (activeMatchRoom) {
+      setMatchmakingFeedbackPending(false);
+    }
+  }, [activeMatchRoom?.id]);
 
   useEffect(() => {
     const audio = new Audio(matchFoundSoundUrl);
@@ -354,17 +362,48 @@ export function App() {
     }
   }
 
+  function primeMatchFoundSound() {
+    try {
+      const audio = matchFoundAudioRef.current ?? new Audio(matchFoundSoundUrl);
+      matchFoundAudioRef.current = audio;
+      audio.preload = "auto";
+      audio.volume = 1;
+      audio.load();
+      const muted = audio.muted;
+      audio.muted = true;
+      void audio.play()
+        .then(() => {
+          audio.pause();
+          audio.currentTime = 0;
+        })
+        .finally(() => {
+          audio.muted = muted;
+        });
+    } catch {
+      // Notification sound is best-effort and must not block matchmaking.
+    }
+  }
+
   function playMatchFoundSound(matchId: string) {
-    if (playedMatchSoundRoomIds.current.has(matchId)) return;
-    playedMatchSoundRoomIds.current.add(matchId);
+    if (playedMatchSoundRoomIds.current.has(matchId) || pendingMatchSoundRoomIds.current.has(matchId)) return;
+    pendingMatchSoundRoomIds.current.add(matchId);
     try {
       const audio = matchFoundAudioRef.current ?? new Audio(matchFoundSoundUrl);
       matchFoundAudioRef.current = audio;
       audio.pause();
       audio.currentTime = 0;
+      audio.muted = false;
       audio.volume = 1;
-      void audio.play().catch(() => undefined);
+      void audio.play()
+        .then(() => {
+          playedMatchSoundRoomIds.current.add(matchId);
+        })
+        .catch(() => undefined)
+        .finally(() => {
+          pendingMatchSoundRoomIds.current.delete(matchId);
+        });
     } catch {
+      pendingMatchSoundRoomIds.current.delete(matchId);
       // Notification sound is best-effort and must not block match state updates.
     }
   }
@@ -901,15 +940,23 @@ export function App() {
     }));
     playMatchFoundSound(nextRoom.id);
     setActiveView("match-room");
+    setMatchmakingFeedbackPending(false);
   }
 
   async function startMatchmakingFromHome() {
-    if (!partyApi || !canUseMatchmaking || hasActiveMatch) return;
+    if (!partyApi || !canUseMatchmaking || hasActiveMatch || matchmakingFeedbackPending) return;
     if (party && party.ownerAccountId !== account?.id) return;
-    if (!party) {
-      await createParty();
+    primeMatchFoundSound();
+    setMatchmakingFeedbackPending(true);
+    try {
+      if (!party) {
+        await createParty();
+      }
+      await startPartyMatchmaking();
+    } catch (error) {
+      setMatchmakingFeedbackPending(false);
+      message.error(error instanceof Error ? error.message : "开始匹配失败");
     }
-    await startPartyMatchmaking();
   }
 
   async function acceptReady() {
@@ -964,6 +1011,7 @@ export function App() {
         partyInvitations={matchmaking.partyInvitations}
         queueSize={matchmaking.queue.length}
         roomCount={matchmaking.rooms.length}
+        matchmakingPending={matchmakingFeedbackPending}
         onInviteFriend={partyApi && !hasActiveMatch ? inviteToParty : undefined}
         onAcceptPartyInvite={partyApi ? acceptPartyInvite : undefined}
         onDeclinePartyInvite={partyApi ? declinePartyInvite : undefined}
@@ -1103,7 +1151,6 @@ export function App() {
               {baseUrl}
             </span>
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
-            <span className={`player-status-pill ${stale ? "player-status-pill--warning" : ""}`}>{stale ? "数据待刷新" : "实时已同步"}</span>
             <Button onClick={() => setPasswordModalOpen(true)}>修改密码</Button>
             <Button onClick={() => void logout()}>退出登录</Button>
           </div>

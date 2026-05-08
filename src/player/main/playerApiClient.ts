@@ -22,6 +22,7 @@ import { isRealtimeCommandServiceError } from "./playerRealtimeClient.js";
 import { SteamProfileService, type SteamProfileResolver } from "./steamProfileService.js";
 
 const REQUEST_TIMEOUT_MS = 4_000;
+const MATCHMAKING_START_TIMEOUT_MS = 20_000;
 
 export interface PlayerLoginResult {
   token: string;
@@ -153,7 +154,12 @@ export class PlayerApiClient {
   }
 
   async startPartyMatchmaking(): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.request<{ room: PlayerLiveMatchStateDto }>("POST", "/party/matchmaking/start", {});
+    const response = await this.request<{ room: PlayerLiveMatchStateDto }>(
+      "POST",
+      "/party/matchmaking/start",
+      {},
+      MATCHMAKING_START_TIMEOUT_MS,
+    );
     return this.enrichRoom(response.room);
   }
 
@@ -346,14 +352,14 @@ export class PlayerApiClient {
     return (await this.steamProfiles.resolveMany([normalized])).get(normalized);
   }
 
-  private request<T>(method: string, route: string, body?: unknown): Promise<T> {
+  private request<T>(method: string, route: string, body?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {
     return requestJson<T>({
       baseUrl: this.baseUrl,
       method,
       route,
       body,
       token: this.token,
-      timeoutMs: REQUEST_TIMEOUT_MS,
+      timeoutMs,
       createResponseError: (message, statusCode) => new PlayerApiError(message, statusCode),
     });
   }

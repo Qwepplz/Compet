@@ -1,4 +1,4 @@
-import { Button } from "antd";
+import { Button, Spin } from "antd";
 import { useEffect, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
@@ -138,6 +138,7 @@ export function MatchRoomPage({
   const currentMap = selectedMap ?? room?.veto?.availableMaps[0] ?? "de_mirage";
   const roomPhase = phaseLabel(room?.phase);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
+  const [readyActionPending, setReadyActionPending] = useState<"accept" | "decline" | null>(null);
   const participantNames = new Map(
     [...(room?.teamA?.participants ?? []), ...(room?.teamB?.participants ?? [])]
       .flatMap((participant) => (participant.accountId ? [[participant.accountId, participantName(participant)] as const] : [])),
@@ -153,6 +154,26 @@ export function MatchRoomPage({
   ] as const);
   const actorTeamName = currentActor ? teamNameById.get(currentActor.actorTeamId) : undefined;
   const currentVetoPrompt = vetoPrompt(currentActor, canApplyCurrentVeto, isOwnTeamVeto);
+
+  async function handleAcceptReady() {
+    if (!onAcceptReady || !readyCountdownStarted || readyActionPending) return;
+    setReadyActionPending("accept");
+    try {
+      await onAcceptReady();
+    } finally {
+      setReadyActionPending(null);
+    }
+  }
+
+  async function handleDeclineReady() {
+    if (!onDeclineReady || !readyCountdownStarted || readyActionPending) return;
+    setReadyActionPending("decline");
+    try {
+      await onDeclineReady();
+    } finally {
+      setReadyActionPending(null);
+    }
+  }
 
   return (
     <div className="faceit-matchroom">
@@ -199,6 +220,14 @@ export function MatchRoomPage({
               </section>
             ) : null}
 
+            {room.phase === "queue" ? (
+              <section className="faceit-connect-panel" aria-live="polite">
+                <span>正在匹配</span>
+                <strong className="faceit-countdown"><Spin /></strong>
+                <small>正在确认匹配结果，请稍候。</small>
+              </section>
+            ) : null}
+
             {room.phase === "ready" ? (
               <section className="faceit-connect-panel">
                 <span>{readyCountdownStarted ? "准备倒计时" : "等待所有玩家进入房间"}</span>
@@ -213,10 +242,21 @@ export function MatchRoomPage({
                 </div>
                 {account?.id && room.humanAccountIds?.includes(account.id) ? (
                   <div className="faceit-action-row">
-                    <Button aria-label="准备" type="primary" onClick={() => void onAcceptReady?.()} disabled={!onAcceptReady || !readyCountdownStarted}>
+                    <Button
+                      aria-label="准备"
+                      type="primary"
+                      onClick={() => void handleAcceptReady()}
+                      disabled={!onAcceptReady || !readyCountdownStarted || Boolean(readyActionPending)}
+                      loading={readyActionPending === "accept"}
+                    >
                       准备
                     </Button>
-                    <Button aria-label="拒绝本场" onClick={() => void onDeclineReady?.()} disabled={!onDeclineReady || !readyCountdownStarted}>
+                    <Button
+                      aria-label="拒绝本场"
+                      onClick={() => void handleDeclineReady()}
+                      disabled={!onDeclineReady || !readyCountdownStarted || Boolean(readyActionPending)}
+                      loading={readyActionPending === "decline"}
+                    >
                       拒绝本场
                     </Button>
                   </div>
