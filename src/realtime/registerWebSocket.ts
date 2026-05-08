@@ -5,6 +5,7 @@ import type { AccountService } from "../accounts/accountService.js";
 import type { SessionService } from "../auth/sessionService.js";
 import type { PresenceService, PresenceSummary } from "../presence/presenceService.js";
 import type { RealtimeEventBus } from "./eventBus.js";
+import { executeRealtimeCommand, parseRealtimeCommand, type RealtimeCommandMatchmaking } from "./realtimeCommands.js";
 import { RealtimeSocketRegistry } from "./realtimeSocketRegistry.js";
 
 export interface WebSocketDeps {
@@ -12,8 +13,12 @@ export interface WebSocketDeps {
   sessions: SessionService;
   events?: RealtimeEventBus;
   presence?: PresenceService;
+  matchmaking?: RealtimeCommandMatchmaking;
 }
-interface WebSocketQuery { token?: string; }
+interface WebSocketQuery {
+  token?: string;
+  lastSeq?: string;
+}
 
 const SOCKET_CONNECTING = 0;
 const SOCKET_OPEN = 1;
@@ -53,7 +58,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
     socket.on("message", async (data) => {
       const account = await accountPromise;
       if (!account) return;
-      handleMessage(socket, data);
+      await handleMessage(socket, data, account.id, deps);
     });
 
     void accountPromise.then((account) => {
@@ -71,6 +76,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       sockets.register(account.id, socket);
       sendJson(socket, { type: "hello", accountId: account.id, serverTime: now() });
       sendJson(socket, { type: "server_status", status: "online", serverTime: now() });
+      replayEvents(socket, account.id, request.query.lastSeq, deps);
       if (deps.presence) {
         registeredAccountId = account.id;
         publishPresenceUpdated("connect", deps, deps.presence.register(account.id));
@@ -93,7 +99,7 @@ async function authorizeWebSocket(
   return account;
 }
 
-function handleMessage(socket: WebSocket, data: RawData): void {
+async function handleMessage(socket: WebSocket, data: RawData, accountId: string, deps: WebSocketDeps): Promise<void> {
   let message: unknown;
   try {
     message = JSON.parse(data.toString());
@@ -104,7 +110,29 @@ function handleMessage(socket: WebSocket, data: RawData): void {
 
   if (typeof message === "object" && message !== null && (message as { type?: unknown }).type === "ping") {
     sendJson(socket, { type: "pong", serverTime: now() });
+    return;
   }
+
+  const command = parseRealtimeCommand(message);
+  if (command) {
+    sendJson(socket, await executeRealtimeCommand(command, accountId, deps));
+  }
+}
+
+function replayEvents(socket: WebSocket, accountId: string, lastSeq: string | undefined, deps: WebSocketDeps): void {
+  const parsedLastSeq = Number(lastSeq);
+  if (!deps.events || !Number.isSafeInteger(parsedLastSeq) || parsedLastSeq <= 0) return;
+  const replay = deps.events.getEventsAfter(accountId, parsedLastSeq);
+  for (const event of replay.events) {
+    sendJson(socket, event);
+  }
+  sendJson(socket, {
+    type: "replay_complete",
+    afterSeq: parsedLastSeq,
+    gap: replay.gap,
+    lastSeq: replay.events.at(-1)?.seq ?? parsedLastSeq,
+    serverTime: now(),
+  });
 }
 
 function closeUnauthorized(socket: WebSocket): void {

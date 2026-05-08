@@ -8,6 +8,7 @@ import type {
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
   PlayerRealtimeSnapshotReason,
+  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
 import { registerPlayerIpc } from "./ipc.js";
@@ -142,10 +143,13 @@ function currentApiClient(): PlayerApiClient {
   return apiClient;
 }
 
-async function refreshRealtimeSnapshot(reason: PlayerRealtimeSnapshotReason): Promise<PlayerRealtimeSnapshotDto> {
+async function refreshRealtimeSnapshot(
+  reason: PlayerRealtimeSnapshotReason,
+  scope: PlayerRealtimeSnapshotScope = "full",
+): Promise<PlayerRealtimeSnapshotDto> {
   const sessionVersion = realtimeSessionVersion;
   pauseRealtimeEvents = true;
-  const snapshot = await currentApiClient().fetchRealtimeSnapshot(reason);
+  const snapshot = await currentApiClient().fetchRealtimeSnapshot(reason, scope);
   if (sessionVersion !== realtimeSessionVersion) {
     return snapshot;
   }
@@ -166,6 +170,10 @@ function connectRealtime(baseUrl: string, token: string): void {
   realtimeDeliveryQueue = Promise.resolve();
   queuedRealtimeEvents.length = 0;
   realtimeClient.connect(baseUrl, token);
+}
+
+function sendRealtimeCommand<T>(name: string, payload: unknown): Promise<T> {
+  return realtimeClient.sendCommand<T>(name, payload);
 }
 
 function disconnectRealtime(): void {
@@ -230,7 +238,7 @@ realtimeClient.onStatus((connection) => {
 
   pauseRealtimeEvents = true;
   publishRealtimeStatus({ connection, stale: true });
-  void refreshRealtimeSnapshot("reconnected").catch(() => {
+  void refreshRealtimeSnapshot("reconnected", "matchmaking").catch(() => {
     if (sessionVersion === realtimeSessionVersion) {
       publishRealtimeStatus({ connection: "connected", stale: true });
     }
@@ -294,6 +302,7 @@ if (!gotSingleInstanceLock) {
       loadSession,
       refreshRealtimeSnapshot,
       saveSession,
+      sendRealtimeCommand,
       setApiClient: (client) => {
         apiClient = client;
       },

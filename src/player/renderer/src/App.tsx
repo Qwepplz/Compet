@@ -12,6 +12,7 @@ import type {
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
+  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../../shared/types.js";
 import {
@@ -253,7 +254,7 @@ export function App() {
     const refreshExpiredVeto = () => {
       if (cancelled) return;
       attempts += 1;
-      void hydrateRealtimeState().finally(() => {
+      void hydrateRealtimeState("matchmaking").finally(() => {
         if (!cancelled && attempts < VETO_DEADLINE_REFRESH_MAX_ATTEMPTS) {
           retryTimer = window.setTimeout(refreshExpiredVeto, VETO_DEADLINE_REFRESH_RETRY_MS);
         }
@@ -313,10 +314,10 @@ export function App() {
     };
   }, [account?.id, activeView, currentRoom?.id, currentRoom?.phase, matchRoomApi]);
 
-  async function hydrateRealtimeState() {
+  async function hydrateRealtimeState(scope: PlayerRealtimeSnapshotScope = "full") {
     if (!realtimeApi) return;
     try {
-      const snapshot = await realtimeApi.refreshRealtimeSnapshot();
+      const snapshot = await realtimeApi.refreshRealtimeSnapshot(scope);
       applyRealtimeSnapshot(snapshot);
     } catch {
       // 保持恢复后的基础状态，不把实时快照失败当成登录失败。
@@ -324,14 +325,18 @@ export function App() {
   }
 
   function applyRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto) {
-    const snapshotParty = snapshot.party ?? snapshot.matchmaking.party ?? null;
-    setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends, resolvedFriendRequestIds.current));
-    setParty((current) => mergePartySnapshot(current, snapshotParty));
+    const hasPartySnapshot = snapshot.party !== undefined;
+    if (snapshot.friends) {
+      setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends!, resolvedFriendRequestIds.current));
+    }
+    if (hasPartySnapshot) {
+      setParty((current) => mergePartySnapshot(current, snapshot.party ?? null));
+    }
     setStale(false);
     setRealtimeStatus({ connection: "connected", stale: false });
     setMatchmaking((current) => {
       const nextRoom = getDisplayedMatchRoom(snapshot.matchmaking);
-      const nextParty = mergePartySnapshot(current.party, snapshotParty);
+      const nextParty = hasPartySnapshot ? mergePartySnapshot(current.party, snapshot.party ?? null) : current.party;
       return {
         queue: snapshot.matchmaking.queue,
         rooms: snapshot.matchmaking.rooms,

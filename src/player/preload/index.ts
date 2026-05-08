@@ -13,6 +13,7 @@ import type {
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
+  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
 
@@ -54,7 +55,8 @@ export const playerApi = {
     invoke("matchmaking:applyVeto", roomId, action, map),
   sendMatchChatMessage: (roomId: string, text: string): Promise<PlayerMatchChatMessageDto> =>
     invoke("matchmaking:sendChatMessage", roomId, text),
-  refreshRealtimeSnapshot: (): Promise<PlayerRealtimeSnapshotDto> => invoke("matchmaking:refreshSnapshot"),
+  refreshRealtimeSnapshot: (scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto> =>
+    invoke("matchmaking:refreshSnapshot", scope),
   onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) =>
     subscribe("player:realtime:event", listener),
   onRealtimeStatus: (listener: (status: PlayerRealtimeStatusDto) => void): (() => void) =>

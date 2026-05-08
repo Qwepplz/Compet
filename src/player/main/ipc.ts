@@ -1,5 +1,5 @@
 import { clipboard, ipcMain, shell } from "electron";
-import type { PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason } from "../shared/types.js";
+import type { PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason, PlayerRealtimeSnapshotScope } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { SteamProfileService } from "./steamProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
@@ -23,8 +23,9 @@ interface IpcDeps {
   disconnectRealtime: () => void;
   getApiClient: () => PlayerApiClient;
   loadSession: () => Promise<PersistedSession | null>;
-  refreshRealtimeSnapshot: (reason: PlayerRealtimeSnapshotReason) => Promise<PlayerRealtimeSnapshotDto>;
+  refreshRealtimeSnapshot: (reason: PlayerRealtimeSnapshotReason, scope?: PlayerRealtimeSnapshotScope) => Promise<PlayerRealtimeSnapshotDto>;
   saveSession: (session: PersistedSession) => Promise<void>;
+  sendRealtimeCommand: <T>(name: string, payload: unknown) => Promise<T>;
   setApiClient: (client: PlayerApiClient | undefined) => void;
 }
 
@@ -32,17 +33,20 @@ export interface RestoreSessionResult extends RestoredPlayerSession {
   baseUrl: string;
 }
 
-function createPlayerApiClient(baseUrl: string, token?: string): PlayerApiClient {
-  return new PlayerApiClient(baseUrl, token, new SteamProfileService({ fetchFn: electronNetFetch }));
+function createPlayerApiClient(baseUrl: string, token: string | undefined, deps: IpcDeps): PlayerApiClient {
+  return new PlayerApiClient(baseUrl, token, new SteamProfileService({ fetchFn: electronNetFetch }), deps.sendRealtimeCommand);
 }
 
 function withSavedAuth<T>(deps: IpcDeps, operation: (client: PlayerApiClient) => Promise<T>): Promise<T> {
-  return withAuthRetry({ ...deps, createPlayerApiClient }, operation);
+  return withAuthRetry({
+    ...deps,
+    createPlayerApiClient: (baseUrl, token) => createPlayerApiClient(baseUrl, token, deps),
+  }, operation);
 }
 
 export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("auth:login", async (_event, baseUrl: string, username: string, password: string) => {
-    const client = createPlayerApiClient(baseUrl);
+    const client = createPlayerApiClient(baseUrl, undefined, deps);
     const result = await client.login(username, password);
     deps.setApiClient(client);
     await deps.saveSession({ baseUrl, token: result.token, username, password });
@@ -91,7 +95,8 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     withSavedAuth(deps, (client) => client.applyVeto(roomId, action, map)));
   ipcMain.handle("matchmaking:sendChatMessage", (_event, roomId: string, text: string) =>
     withSavedAuth(deps, (client) => client.sendMatchChatMessage(roomId, text)));
-  ipcMain.handle("matchmaking:refreshSnapshot", () => withSavedAuth(deps, () => deps.refreshRealtimeSnapshot("manual")));
+  ipcMain.handle("matchmaking:refreshSnapshot", (_event, scope?: PlayerRealtimeSnapshotScope) =>
+    withSavedAuth(deps, () => deps.refreshRealtimeSnapshot("manual", scope)));
 
   ipcMain.handle("player:copyText", (_event, text: string) => {
     clipboard.writeText(text);
@@ -103,7 +108,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     if (!persisted?.baseUrl) return null;
 
     if (persisted.token) {
-      const client = createPlayerApiClient(persisted.baseUrl, persisted.token);
+      const client = createPlayerApiClient(persisted.baseUrl, persisted.token, deps);
       if (persisted.username && persisted.password) {
         client.setLoginCredentials(persisted.username, persisted.password);
       }
@@ -124,7 +129,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
       return null;
     }
 
-    const client = createPlayerApiClient(persisted.baseUrl);
+    const client = createPlayerApiClient(persisted.baseUrl, undefined, deps);
     try {
       const loginResult = await client.login(persisted.username, persisted.password);
       deps.setApiClient(client);

@@ -11,6 +11,12 @@ export interface JsonRequestOptions {
   createResponseError?: (message: string, statusCode: number) => Error;
 }
 
+const sharedHttpsAgent = new https.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 1_000,
+  maxSockets: 64,
+});
+
 function readHttpErrorMessage(data: unknown, fallback: string): string {
   if (typeof data !== "object" || data === null) return fallback;
   const envelope = data as { message?: unknown; error?: { message?: unknown } };
@@ -27,6 +33,7 @@ export function requestJson<T>(options: JsonRequestOptions): Promise<T> {
   return new Promise((resolve, reject) => {
     const req = https.request(url, {
       method: options.method,
+      agent: sharedHttpsAgent,
       rejectUnauthorized: false,
       headers: {
         ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),

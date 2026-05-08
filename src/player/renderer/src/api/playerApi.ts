@@ -9,11 +9,12 @@ import type {
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
+  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../../../shared/types.js";
 
 export interface PlayerRealtimeApi {
-  refreshRealtimeSnapshot(): Promise<PlayerRealtimeSnapshotDto>;
+  refreshRealtimeSnapshot(scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto>;
   onRealtimeEvent(listener: (event: PlayerRealtimeEvent) => void): () => void;
   onRealtimeStatus(listener: (status: PlayerRealtimeStatusDto) => void): () => void;
   onRealtimeSnapshot(listener: (snapshot: PlayerRealtimeSnapshotDto) => void): () => void;

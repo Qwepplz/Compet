@@ -16,7 +16,9 @@ import type {
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
   PlayerRealtimeSnapshotReason,
+  PlayerRealtimeSnapshotScope,
 } from "../shared/types.js";
+import { isRealtimeCommandServiceError } from "./playerRealtimeClient.js";
 import { SteamProfileService, type SteamProfileResolver } from "./steamProfileService.js";
 
 const REQUEST_TIMEOUT_MS = 4_000;
@@ -38,6 +40,8 @@ export interface RestoredPlayerSession {
   matchmaking: PlayerMatchmakingStateDto;
 }
 
+export type PlayerRealtimeCommandSender = <T>(name: string, payload: unknown) => Promise<T>;
+
 export class PlayerApiError extends Error {
   constructor(message: string, readonly statusCode?: number) {
     super(message);
@@ -56,6 +60,7 @@ export class PlayerApiClient {
     private readonly baseUrl: string,
     private token?: string,
     private readonly steamProfiles: SteamProfileResolver = new SteamProfileService(),
+    private readonly realtimeCommandSender?: PlayerRealtimeCommandSender,
   ) {}
 
   getBaseUrl(): string {
@@ -161,36 +166,54 @@ export class PlayerApiClient {
   }
 
   async ackMatchRoomEntered(roomId: string): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.request<{ room: PlayerLiveMatchStateDto }>("POST", `/match-room/${encodeURIComponent(roomId)}/entered`, {});
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+      "matchRoom.entered",
+      { roomId },
+      () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/entered`, {}),
+    );
     return this.enrichRoom(response.room);
   }
 
   async acceptReady(): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.request<{ room: PlayerLiveMatchStateDto }>("POST", "/matchmaking/ready", {});
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+      "matchmaking.acceptReady",
+      {},
+      () => this.request("POST", "/matchmaking/ready", {}),
+    );
     return this.enrichRoom(response.room);
   }
 
   async declineReady(): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.request<{ room: PlayerLiveMatchStateDto }>("POST", "/matchmaking/ready/decline", {});
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+      "matchmaking.declineReady",
+      {},
+      () => this.request("POST", "/matchmaking/ready/decline", {}),
+    );
     return this.enrichRoom(response.room);
   }
 
   async applyVeto(roomId: string, action: VetoAction, map: string): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.request<{ room: PlayerLiveMatchStateDto }>("POST", `/match-room/${encodeURIComponent(roomId)}/veto`, {
-      action,
-      map,
-    });
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+      "matchRoom.applyVeto",
+      { roomId, action, map },
+      () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/veto`, { action, map }),
+    );
     return this.enrichRoom(response.room);
   }
 
   async sendMatchChatMessage(roomId: string, text: string): Promise<PlayerMatchChatMessageDto> {
-    const response = await this.request<{ message: PlayerMatchChatMessageDto }>("POST", `/match-room/${encodeURIComponent(roomId)}/chat`, {
-      text,
-    });
+    const response = await this.commandOrRequest<{ message: PlayerMatchChatMessageDto }>(
+      "matchRoom.sendChatMessage",
+      { roomId, text },
+      () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/chat`, { text }),
+    );
     return response.message;
   }
 
-  async fetchRealtimeSnapshot(reason: PlayerRealtimeSnapshotReason): Promise<PlayerRealtimeSnapshotDto> {
+  async fetchRealtimeSnapshot(reason: PlayerRealtimeSnapshotReason, scope: PlayerRealtimeSnapshotScope = "full"): Promise<PlayerRealtimeSnapshotDto> {
+    if (scope === "matchmaking") {
+      return { reason, matchmaking: await this.getMatchmakingState() };
+    }
     const [friends, party, matchmaking] = await Promise.all([
       this.listFriends(),
       this.getParty(),
@@ -333,6 +356,20 @@ export class PlayerApiClient {
       timeoutMs: REQUEST_TIMEOUT_MS,
       createResponseError: (message, statusCode) => new PlayerApiError(message, statusCode),
     });
+  }
+
+  private async commandOrRequest<T>(name: string, payload: unknown, fallback: () => Promise<T>): Promise<T> {
+    if (!this.realtimeCommandSender) {
+      return fallback();
+    }
+    try {
+      return await this.realtimeCommandSender<T>(name, payload);
+    } catch (error) {
+      if (isRealtimeCommandServiceError(error)) {
+        throw new PlayerApiError(error.message, error.statusCode);
+      }
+      return fallback();
+    }
   }
 }
 

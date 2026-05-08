@@ -12,6 +12,7 @@ import type {
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
+  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
 
@@ -119,12 +120,18 @@ export function createPreviewPlayerApi() {
     room,
   });
 
-  const snapshot = (): PlayerRealtimeSnapshotDto => ({
-    reason: "manual",
-    friends: previewFriends,
-    party,
-    matchmaking: matchmaking(),
-  });
+  const snapshot = (scope: PlayerRealtimeSnapshotScope = "full"): PlayerRealtimeSnapshotDto =>
+    scope === "matchmaking"
+      ? {
+          reason: "manual",
+          matchmaking: matchmaking(),
+        }
+      : {
+          reason: "manual",
+          friends: previewFriends,
+          party,
+          matchmaking: matchmaking(),
+        };
 
   const publishSnapshot = () => {
     const next = snapshot();
@@ -251,7 +258,8 @@ export function createPreviewPlayerApi() {
       publishSnapshot();
       return message;
     },
-    refreshRealtimeSnapshot: async (): Promise<PlayerRealtimeSnapshotDto> => snapshot(),
+    refreshRealtimeSnapshot: async (scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto> =>
+      snapshot(scope),
     onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) => {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);

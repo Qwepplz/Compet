@@ -2,6 +2,7 @@ import WebSocket, { type RawData } from "ws";
 import type { PlayerRealtimeConnection, PlayerRealtimeEvent } from "../shared/types.js";
 
 interface WebSocketLike {
+  readonly readyState: number;
   close(): void;
   send(data: string): void;
   terminate?(): void;
@@ -21,10 +22,25 @@ interface PlayerRealtimeClientOptions {
 }
 
 type TimerHandle = ReturnType<typeof setTimeout>;
+type PendingCommand = {
+  resolve: (value: unknown) => void;
+  reject: (error: Error) => void;
+  timeout: TimerHandle;
+};
+
+export interface RealtimeCommandServiceError extends Error {
+  realtimeCommandServiceError: true;
+  statusCode?: number;
+}
 
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000] as const;
 const DEFAULT_HEARTBEAT_INTERVAL_MS = 6_000;
 const DEFAULT_HEARTBEAT_TIMEOUT_MS = 12_000;
+const DEFAULT_COMMAND_TIMEOUT_MS = 4_000;
+
+export function isRealtimeCommandServiceError(error: unknown): error is RealtimeCommandServiceError {
+  return typeof error === "object" && error !== null && (error as { realtimeCommandServiceError?: unknown }).realtimeCommandServiceError === true;
+}
 
 export class PlayerRealtimeClient {
   private readonly createSocket: (url: string) => WebSocketLike;
@@ -35,6 +51,7 @@ export class PlayerRealtimeClient {
   private readonly clearTimeoutFn: typeof clearTimeout;
   private readonly eventListeners = new Set<(event: PlayerRealtimeEvent) => void>();
   private readonly statusListeners = new Set<(status: PlayerRealtimeConnection) => void>();
+  private readonly pendingCommands = new Map<string, PendingCommand>();
 
   private baseUrl?: string;
   private token?: string;
@@ -45,6 +62,8 @@ export class PlayerRealtimeClient {
   private reconnectAttempt = 0;
   private manualDisconnect = false;
   private connectionId = 0;
+  private commandSeq = 0;
+  private lastSeq = 0;
 
   constructor(options: PlayerRealtimeClientOptions = {}) {
     this.createSocket = options.createSocket ?? ((url) => new WebSocket(url, { rejectUnauthorized: false }));
@@ -63,6 +82,7 @@ export class PlayerRealtimeClient {
     this.closeSocket(false);
     this.baseUrl = baseUrl;
     this.token = token;
+    this.lastSeq = 0;
     this.manualDisconnect = false;
     this.reconnectAttempt = 0;
     this.openSocket(true);
@@ -72,9 +92,33 @@ export class PlayerRealtimeClient {
     this.baseUrl = undefined;
     this.token = undefined;
     this.reconnectAttempt = 0;
+    this.lastSeq = 0;
     this.manualDisconnect = true;
     this.closeSocket(false);
     this.emitStatus("disconnected");
+  }
+
+  sendCommand<T>(name: string, payload: unknown): Promise<T> {
+    if (!this.socket || this.socket.readyState !== 1) {
+      return Promise.reject(new Error("Realtime command unavailable"));
+    }
+
+    const commandId = `cmd_${Date.now()}_${++this.commandSeq}`;
+    const message = JSON.stringify({ type: "command", commandId, name, payload });
+    return new Promise<T>((resolve, reject) => {
+      const timeout = this.setTimeoutFn(() => {
+        this.pendingCommands.delete(commandId);
+        reject(new Error("Realtime command timed out"));
+      }, DEFAULT_COMMAND_TIMEOUT_MS);
+      this.pendingCommands.set(commandId, { resolve: resolve as (value: unknown) => void, reject, timeout });
+      try {
+        this.socket?.send(message);
+      } catch (error) {
+        this.clearTimeoutFn(timeout);
+        this.pendingCommands.delete(commandId);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   onEvent(listener: (event: PlayerRealtimeEvent) => void): () => void {
@@ -118,8 +162,15 @@ export class PlayerRealtimeClient {
         return;
       }
       this.acknowledgeHeartbeat(socket, connectionId);
-      const event = sanitizeRealtimeEvent(data);
+      const message = parseRealtimeMessage(data);
+      if (this.handleCommandAck(message)) {
+        return;
+      }
+      const event = sanitizeRealtimeEvent(message);
       if (event) {
+        if (typeof event.seq === "number" && event.seq > this.lastSeq) {
+          this.lastSeq = event.seq;
+        }
         this.emitEvent(event);
       }
     });
@@ -173,6 +224,7 @@ export class PlayerRealtimeClient {
     if (socket) {
       socket.close();
     }
+    this.rejectPendingCommands(new Error("Realtime command unavailable"));
     if (clearListeners) {
       this.eventListeners.clear();
       this.statusListeners.clear();
@@ -258,47 +310,83 @@ export class PlayerRealtimeClient {
     const url = new URL("/ws", baseUrl);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("token", token);
+    if (this.lastSeq > 0) {
+      url.searchParams.set("lastSeq", String(this.lastSeq));
+    }
     return url.toString();
+  }
+
+  private handleCommandAck(message: unknown): boolean {
+    if (typeof message !== "object" || message === null) return false;
+    const ack = message as { type?: unknown; commandId?: unknown; ok?: unknown; result?: unknown; error?: { message?: unknown; statusCode?: unknown } };
+    if (ack.type !== "command_ack" || typeof ack.commandId !== "string") return false;
+
+    const pending = this.pendingCommands.get(ack.commandId);
+    if (!pending) return true;
+    this.pendingCommands.delete(ack.commandId);
+    this.clearTimeoutFn(pending.timeout);
+    if (ack.ok === true) {
+      pending.resolve(ack.result);
+      return true;
+    }
+
+    const error = new Error(typeof ack.error?.message === "string" ? ack.error.message : "Realtime command failed") as RealtimeCommandServiceError;
+    error.realtimeCommandServiceError = true;
+    if (typeof ack.error?.statusCode === "number") {
+      error.statusCode = ack.error.statusCode;
+    }
+    pending.reject(error);
+    return true;
+  }
+
+  private rejectPendingCommands(error: Error): void {
+    for (const [commandId, pending] of this.pendingCommands) {
+      this.clearTimeoutFn(pending.timeout);
+      pending.reject(error);
+      this.pendingCommands.delete(commandId);
+    }
   }
 }
 
-function sanitizeRealtimeEvent(payload: RawData): PlayerRealtimeEvent | undefined {
-  const text = rawDataToString(payload);
+function parseRealtimeMessage(payload: RawData): unknown {
   try {
-    const message = JSON.parse(text) as Record<string, unknown>;
-    if (typeof message.type !== "string") {
-      return undefined;
-    }
-    switch (message.type) {
-      case "presence_updated":
-      case "friend_list_refresh":
-        return message as PlayerRealtimeEvent;
-      case "friend_request_received":
-      case "friend_request_resolved":
-      case "party_updated":
-      case "party_invite_received":
-      case "party_invite_resolved":
-      case "queue_updated":
-      case "ready_check_started":
-      case "ready_check_updated":
-      case "match_room_created":
-      case "teams_assigned":
-      case "veto_started":
-      case "veto_tick":
-      case "map_banned":
-      case "map_picked":
-      case "match_chat_message":
-      case "server_preparing":
-      case "connect_ready":
-      case "match_live":
-      case "match_completed":
-      case "match_failed":
-        return stripAudience(message) as PlayerRealtimeEvent;
-      default:
-        return undefined;
-    }
+    return JSON.parse(rawDataToString(payload)) as unknown;
   } catch {
     return undefined;
+  }
+}
+
+function sanitizeRealtimeEvent(message: unknown): PlayerRealtimeEvent | undefined {
+  if (typeof message !== "object" || message === null || typeof (message as { type?: unknown }).type !== "string") {
+    return undefined;
+  }
+  switch ((message as { type: string }).type) {
+    case "presence_updated":
+    case "friend_list_refresh":
+      return message as PlayerRealtimeEvent;
+    case "friend_request_received":
+    case "friend_request_resolved":
+    case "party_updated":
+    case "party_invite_received":
+    case "party_invite_resolved":
+    case "queue_updated":
+    case "ready_check_started":
+    case "ready_check_updated":
+    case "match_room_created":
+    case "teams_assigned":
+    case "veto_started":
+    case "veto_tick":
+    case "map_banned":
+    case "map_picked":
+    case "match_chat_message":
+    case "server_preparing":
+    case "connect_ready":
+    case "match_live":
+    case "match_completed":
+    case "match_failed":
+      return stripAudience(message as { accountIds?: string[] }) as PlayerRealtimeEvent;
+    default:
+      return undefined;
   }
 }
 

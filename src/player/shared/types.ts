@@ -12,6 +12,7 @@ import type { PublicVetoState, VetoHistoryEntry } from "../../matchmaking/vetoSe
 
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
 export type PlayerRealtimeSnapshotReason = "manual" | "reconnected";
+export type PlayerRealtimeSnapshotScope = "full" | "matchmaking";
 
 export type PlayerFriendSearchResultDto = FriendSearchResult;
 export type PlayerFriendDto = FriendDto;
@@ -44,51 +45,53 @@ export interface PlayerMatchmakingStateDto {
 
 export interface PlayerRealtimeSnapshotDto {
   reason: PlayerRealtimeSnapshotReason;
-  friends: PlayerFriendListDto;
-  party: PlayerPartyDto | null;
+  friends?: PlayerFriendListDto;
+  party?: PlayerPartyDto | null;
   matchmaking: PlayerMatchmakingStateDto;
 }
 
+type PlayerRealtimeEventWithSeq<T> = T & { seq?: number };
+
 export type PlayerRealtimeEvent =
-  | {
+  | PlayerRealtimeEventWithSeq<{
       type: "presence_updated";
       accountId: string;
       online: boolean;
       connectionCount: number;
       lastSeenAt?: string;
-    }
-  | { type: "friend_request_received"; accountId: string; request: PlayerFriendRequestDto }
-  | { type: "friend_request_resolved"; accountId: string; request: PlayerFriendRequestDto }
-  | { type: "friend_list_refresh"; accountId: string }
-  | { type: "party_updated"; party: PlayerPartyDto | null }
-  | { type: "party_invite_received"; invitation: PlayerPartyInvitationDto }
-  | { type: "party_invite_resolved"; invitation: PlayerPartyInvitationDto }
-  | { type: "queue_updated"; queue: PlayerQueueEntryDto[] }
-  | {
+    }>
+  | PlayerRealtimeEventWithSeq<{ type: "friend_request_received"; accountId: string; request: PlayerFriendRequestDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "friend_request_resolved"; accountId: string; request: PlayerFriendRequestDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "friend_list_refresh"; accountId: string }>
+  | PlayerRealtimeEventWithSeq<{ type: "party_updated"; party: PlayerPartyDto | null }>
+  | PlayerRealtimeEventWithSeq<{ type: "party_invite_received"; invitation: PlayerPartyInvitationDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "party_invite_resolved"; invitation: PlayerPartyInvitationDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "queue_updated"; queue: PlayerQueueEntryDto[] }>
+  | PlayerRealtimeEventWithSeq<{
       type: "ready_check_started";
       matchId: string;
       roomId: string;
       deadlineAt: string;
       ready: PlayerReadyStateDto[];
       humanParticipants: PlayerMatchParticipantDto[];
-    }
-  | {
+    }>
+  | PlayerRealtimeEventWithSeq<{
       type: "ready_check_updated";
       matchId: string;
       roomId: string;
       deadlineAt: string;
       ready: PlayerReadyStateDto[];
       humanParticipants: PlayerMatchParticipantDto[];
-    }
-  | { type: "match_room_created"; matchId: string; room: PlayerLiveMatchStateDto }
-  | { type: "teams_assigned"; matchId: string; teamA: PlayerMatchTeamDto; teamB: PlayerMatchTeamDto }
-  | { type: "veto_started"; matchId: string; veto: PlayerVetoStateDto }
-  | { type: "veto_tick"; matchId: string; deadlineAt: string }
-  | { type: "map_banned"; matchId: string; entry: PlayerVetoHistoryEntryDto; veto?: PlayerVetoStateDto }
-  | { type: "map_picked"; matchId: string; entry: PlayerVetoHistoryEntryDto; veto?: PlayerVetoStateDto }
-  | { type: "match_chat_message"; matchId: string; message: PlayerMatchChatMessageDto }
-  | { type: "server_preparing"; matchId: string }
-  | { type: "connect_ready"; matchId: string; connect: PlayerConnectDto }
-  | { type: "match_live"; matchId: string }
-  | { type: "match_completed"; matchId: string; result?: MatchSeriesResult }
-  | { type: "match_failed"; matchId: string; error: string };
+    }>
+  | PlayerRealtimeEventWithSeq<{ type: "match_room_created"; matchId: string; room: PlayerLiveMatchStateDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "teams_assigned"; matchId: string; teamA: PlayerMatchTeamDto; teamB: PlayerMatchTeamDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "veto_started"; matchId: string; veto: PlayerVetoStateDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "veto_tick"; matchId: string; deadlineAt: string }>
+  | PlayerRealtimeEventWithSeq<{ type: "map_banned"; matchId: string; entry: PlayerVetoHistoryEntryDto; veto?: PlayerVetoStateDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "map_picked"; matchId: string; entry: PlayerVetoHistoryEntryDto; veto?: PlayerVetoStateDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "match_chat_message"; matchId: string; message: PlayerMatchChatMessageDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "server_preparing"; matchId: string }>
+  | PlayerRealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; connect: PlayerConnectDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "match_live"; matchId: string }>
+  | PlayerRealtimeEventWithSeq<{ type: "match_completed"; matchId: string; result?: MatchSeriesResult }>
+  | PlayerRealtimeEventWithSeq<{ type: "match_failed"; matchId: string; error: string }>;
