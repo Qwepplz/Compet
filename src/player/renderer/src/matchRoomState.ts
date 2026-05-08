@@ -22,6 +22,14 @@ export function hasActiveMatchRoom(matchmaking: PlayerMatchmakingStateDto): bool
   return Boolean(getActiveMatchRoom(matchmaking));
 }
 
+export function isAccountInReadyRoom(room: PlayerLiveMatchStateDto | null, accountId: string | undefined): boolean {
+  if (!room || room.phase !== "ready" || !accountId) return false;
+  if (room.humanAccountIds?.includes(accountId)) return true;
+  if (room.ready?.some((entry) => entry.accountId === accountId)) return true;
+  return [...room.teamA.participants, ...room.teamB.participants]
+    .some((participant) => participant.kind === "human" && participant.accountId === accountId);
+}
+
 export function getVetoDeadlineRefreshDelayMs(
   room: PlayerLiveMatchStateDto | null,
   nowMs: number,

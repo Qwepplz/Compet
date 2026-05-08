@@ -1,4 +1,4 @@
-import { Button, Modal } from "antd";
+import { Button, Modal, message } from "antd";
 import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto, PlayerPartyInvitationDto } from "../../../shared/types.js";
@@ -83,6 +83,8 @@ export function HomePage({
     try {
       await onInviteFriend(accountId);
       setInviteOpen(false);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : "发送队伍邀请失败");
     } finally {
       setBusyInviteId(null);
     }
@@ -93,6 +95,8 @@ export function HomePage({
     setBusyPartyInvitationId(invitationId);
     try {
       await onAcceptPartyInvite(invitationId);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : "接受队伍邀请失败");
     } finally {
       setBusyPartyInvitationId(null);
     }
@@ -103,6 +107,8 @@ export function HomePage({
     setBusyPartyInvitationId(invitationId);
     try {
       await onDeclinePartyInvite(invitationId);
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : "拒绝队伍邀请失败");
     } finally {
       setBusyPartyInvitationId(null);
     }

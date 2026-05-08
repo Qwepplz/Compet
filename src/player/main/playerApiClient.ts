@@ -160,7 +160,7 @@ export class PlayerApiClient {
       {},
       MATCHMAKING_START_TIMEOUT_MS,
     );
-    return this.enrichRoom(response.room);
+    return response.room;
   }
 
   async getMatchmakingState(): Promise<PlayerMatchmakingStateDto> {
@@ -177,7 +177,7 @@ export class PlayerApiClient {
       { roomId },
       () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/entered`, {}),
     );
-    return this.enrichRoom(response.room);
+    return response.room;
   }
 
   async acceptReady(): Promise<PlayerLiveMatchStateDto> {
@@ -186,7 +186,7 @@ export class PlayerApiClient {
       {},
       () => this.request("POST", "/matchmaking/ready", {}),
     );
-    return this.enrichRoom(response.room);
+    return response.room;
   }
 
   async declineReady(): Promise<PlayerLiveMatchStateDto> {
@@ -195,7 +195,7 @@ export class PlayerApiClient {
       {},
       () => this.request("POST", "/matchmaking/ready/decline", {}),
     );
-    return this.enrichRoom(response.room);
+    return response.room;
   }
 
   async applyVeto(roomId: string, action: VetoAction, map: string): Promise<PlayerLiveMatchStateDto> {
@@ -204,7 +204,7 @@ export class PlayerApiClient {
       { roomId, action, map },
       () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/veto`, { action, map }),
     );
-    return this.enrichRoom(response.room);
+    return response.room;
   }
 
   async sendMatchChatMessage(roomId: string, text: string): Promise<PlayerMatchChatMessageDto> {

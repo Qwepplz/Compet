@@ -35,6 +35,10 @@ const MAX_PARTY_HUMANS = 10;
 const READY_TIMEOUT_MS = 60_000;
 const MAX_MATCH_CHAT_MESSAGES = 100;
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
+
+function isSoloOpenParty(party: PartyRecord): boolean {
+  return (party.status ?? "open") === "open" && party.memberAccountIds.length === 1;
+}
 type ReadyTimeoutHandle = ReturnType<typeof setTimeout>;
 type ReadyTimeoutScheduler = (handler: () => void, timeoutMs: number) => ReadyTimeoutHandle;
 type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
@@ -128,7 +132,7 @@ export class MatchmakingService {
   async getPartyForAccount(accountId: string): Promise<PartyRecord | undefined> {
     await this.requireAccount(accountId);
     const parties = await this.deps.store.listParties();
-    return parties.find((party) => party.memberAccountIds.includes(accountId));
+    return parties.find((party) => party.memberAccountIds.includes(accountId) && !isSoloOpenParty(party));
   }
 
   joinParty(partyId: string, accountId: string): Promise<PartyRecord> {
@@ -139,7 +143,7 @@ export class MatchmakingService {
       if (!party) throw new Error(`party not found: ${partyId}`);
       this.requireOpenParty(party);
       if (party.memberAccountIds.includes(accountId)) return party;
-      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(accountId))) {
+      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate))) {
         throw new Error("account is already in another party");
       }
       const invitations = await this.deps.store.listInvitations();
@@ -152,7 +156,11 @@ export class MatchmakingService {
       const resolvedAt = this.now();
       const updated = { ...party, memberAccountIds: [...party.memberAccountIds, accountId], updatedAt: resolvedAt };
       const resolvedInvitations = this.resolveAcceptedInvitationAndExpireOthers(invitations, invitation, resolvedAt);
-      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === partyId ? updated : candidate)));
+      await this.deps.store.saveParties(
+        parties
+          .filter((candidate) => candidate.id === partyId || !candidate.memberAccountIds.includes(accountId) || !isSoloOpenParty(candidate))
+          .map((candidate) => (candidate.id === partyId ? updated : candidate)),
+      );
       await this.deps.store.saveInvitations(resolvedInvitations);
       await this.emitResolvedInvitations(invitations, resolvedInvitations);
       await this.emitPartyUpdated(updated);
@@ -197,7 +205,7 @@ export class MatchmakingService {
       this.requireOpenParty(party);
       if (party.memberAccountIds.length >= MAX_PARTY_HUMANS) throw new Error("party is full");
       if (party.memberAccountIds.includes(toAccountId)) throw new Error("account is already a party member");
-      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(toAccountId))) {
+      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(toAccountId) && !isSoloOpenParty(candidate))) {
         throw new Error("account is already in another party");
       }
       const invitations = await this.deps.store.listInvitations();
@@ -450,7 +458,7 @@ export class MatchmakingService {
     const rooms = this.pruneTerminalRooms(await this.deps.store.listRooms())
       .filter((room) => this.roomHasAccount(room, accountId))
       .map((room) => this.toPublicRoom(room));
-    const party = (await this.deps.store.listParties()).find((candidate) => candidate.memberAccountIds.includes(accountId)) ?? null;
+    const party = (await this.deps.store.listParties()).find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
     const partyInvitations = (await this.deps.store.listInvitations()).filter(
       (invitation) => invitation.toAccountId === accountId && invitation.status === "pending",
     );

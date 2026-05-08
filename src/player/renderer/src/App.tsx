@@ -28,10 +28,12 @@ import {
   getActiveMatchRoom,
   getDisplayedMatchRoom,
   getVetoDeadlineRefreshDelayMs,
+  isAccountInReadyRoom,
   isTerminalMatchPhase,
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
+import { getVisiblePartyForHome } from "./partyDisplay.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import {
   mergeFriendListSnapshot,
@@ -168,6 +170,32 @@ function buildKnownPlayerProfiles(account: AccountView | null, friends: PlayerFr
   return profiles;
 }
 
+function partyMemberDisplayName(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): string {
+  if (accountId === account?.id) return playerAccountLabel(account);
+  const friend = friends.friends.find((entry) => entry.accountId === accountId);
+  return friend?.steamPersonaName ?? friend?.displayName ?? "玩家";
+}
+
+function notifyPartyMembershipChange(
+  previous: PlayerPartyDto | null,
+  next: PlayerPartyDto | null,
+  currentAccountId: string | undefined,
+  account: AccountView | null,
+  friends: PlayerFriendListDto,
+): void {
+  if (!previous || !currentAccountId || previous.id !== next?.id) return;
+  const previousMembers = previous.memberAccountIds;
+  const nextMembers = next.memberAccountIds;
+  if (previousMembers.length < 2 && nextMembers.length < 2) return;
+
+  for (const joinedAccountId of nextMembers.filter((memberId) => !previousMembers.includes(memberId) && memberId !== currentAccountId)) {
+    void message.info(`${partyMemberDisplayName(joinedAccountId, account, friends)} 已加入队伍`);
+  }
+  for (const leftAccountId of previousMembers.filter((memberId) => !nextMembers.includes(memberId) && memberId !== currentAccountId)) {
+    void message.info(`${partyMemberDisplayName(leftAccountId, account, friends)} 已退出队伍`);
+  }
+}
+
 export function App() {
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<PlayerView>("login");
@@ -199,6 +227,7 @@ export function App() {
   const matchRoomApi = hasMatchRoomApi(window.playerApi) ? window.playerApi : undefined;
   const currentRoom = getCurrentRoom(matchmaking);
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
+  const visibleHomeParty = getVisiblePartyForHome(party);
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
   const sidebarMatchRoom = currentRoomWithKnownProfiles && !isTerminalMatchPhase(currentRoomWithKnownProfiles.phase)
@@ -288,10 +317,10 @@ export function App() {
   ]);
 
   useEffect(() => {
-    if (!matchRoomApi || activeView !== "match-room" || !account?.id || !currentRoom || currentRoom.phase !== "ready") return;
-    if (!currentRoom.humanAccountIds?.includes(account.id)) return;
+    const readyRoom = currentRoom;
+    if (!matchRoomApi || activeView !== "match-room" || !account?.id || !readyRoom || !isAccountInReadyRoom(readyRoom, account.id)) return;
 
-    const entryKey = `${currentRoom.id}:${account.id}`;
+    const entryKey = `${readyRoom.id}:${account.id}`;
     if (enteredReadyRoomIds.current.has(entryKey)) return;
 
     let cancelled = false;
@@ -299,7 +328,7 @@ export function App() {
     const markReadyRoomEntered = async (attempt = 0) => {
       enteredReadyRoomIds.current.add(entryKey);
       try {
-        const nextRoom = await matchRoomApi.ackMatchRoomEntered(currentRoom.id);
+        const nextRoom = await matchRoomApi.ackMatchRoomEntered(readyRoom.id);
         if (!cancelled) {
           updateCurrentRoom(nextRoom.id, () => nextRoom);
         }
@@ -477,7 +506,11 @@ export function App() {
         }
         return;
       case "party_updated":
-        setParty((current) => (event.party ? mergePartySnapshot(current, event.party) : null));
+        setParty((current) => {
+          const nextParty = event.party ? mergePartySnapshot(current, event.party) : null;
+          notifyPartyMembershipChange(current, nextParty, account?.id, account, friends);
+          return nextParty;
+        });
         setMatchmaking((current) => ({
           ...current,
           party: event.party ? mergePartySnapshot(current.party, event.party) : null,
@@ -891,6 +924,7 @@ export function App() {
       await createParty();
     }
     await partyApi.inviteToParty(targetAccountId);
+    void message.success("队伍邀请已发送");
   }
 
   async function acceptPartyInvite(invitationId: string) {
@@ -903,6 +937,7 @@ export function App() {
       party: nextParty,
       partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
     }));
+    void message.success("已加入队伍");
   }
 
   async function declinePartyInvite(invitationId: string) {
@@ -913,6 +948,7 @@ export function App() {
       ...current,
       partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
     }));
+    void message.info("已拒绝队伍邀请");
   }
 
   async function leaveParty() {
@@ -1007,7 +1043,7 @@ export function App() {
         account={account}
         baseUrl={baseUrl}
         friends={friends}
-        party={party}
+        party={visibleHomeParty}
         partyInvitations={matchmaking.partyInvitations}
         queueSize={matchmaking.queue.length}
         roomCount={matchmaking.rooms.length}
