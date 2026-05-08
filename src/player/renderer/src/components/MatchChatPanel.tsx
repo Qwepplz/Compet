@@ -5,6 +5,7 @@ import type {
   PlayerMatchChatMessageDto,
   PlayerVetoHistoryEntryDto,
 } from "../../../shared/types.js";
+import { formatMapName } from "../mapDisplay.js";
 
 interface MatchChatPanelProps {
   accountId: string;
@@ -114,10 +115,6 @@ function vetoEntryToItem(room: PlayerLiveMatchStateDto, entry: PlayerVetoHistory
     text: `${teamName} ${actionText} ${formatMapName(entry.map)}`,
     createdAt: entry.at,
   };
-}
-
-function formatMapName(map: string): string {
-  return map.replace(/^de_/, "").replace(/_/g, " ").toUpperCase();
 }
 
 function formatTime(value: string): string {

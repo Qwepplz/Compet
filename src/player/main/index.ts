@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog } from "electron";
 import path from "node:path";
 import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
+import { configureRemoteDesktopRendering } from "../../desktop/main/remoteRendering.js";
 import { SavedLoginStore, type SavedLoginRecord } from "../../desktop/main/savedLoginStore.js";
 import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main/windowEntry.js";
 import type {
@@ -40,20 +41,6 @@ let realtimeDeliveryQueue = Promise.resolve();
 let quitAfterSessionCleanup = false;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
-
-function configureRemoteDesktopRendering(): void {
-  app.disableHardwareAcceleration();
-  app.commandLine.appendSwitch("disable-gpu");
-  app.commandLine.appendSwitch("disable-gpu-compositing");
-  app.commandLine.appendSwitch("disable-direct-composition");
-  app.commandLine.appendSwitch("disable-accelerated-2d-canvas");
-  app.commandLine.appendSwitch("disable-accelerated-video-decode");
-  app.commandLine.appendSwitch("disable-accelerated-video-encode");
-  app.commandLine.appendSwitch("disable-webgl");
-  app.commandLine.appendSwitch("disable-webgl2");
-  app.commandLine.appendSwitch("disable-features", "DirectComposition,DirectCompositionVideoOverlays,HardwareMediaKeyHandling,Vulkan");
-  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
-}
 
 function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   queuedRealtimeEvents.push(nextEvent);

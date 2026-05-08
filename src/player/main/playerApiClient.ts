@@ -1,6 +1,6 @@
-import https from "node:https";
 import type { AccountView } from "../../manager/shared/types.js";
 import type { VetoAction } from "../../matchmaking/vetoService.js";
+import { requestJson } from "../../shared/httpJsonClient.js";
 import type {
   PlayerFriendDto,
   PlayerFriendListDto,
@@ -43,14 +43,6 @@ export class PlayerApiError extends Error {
     super(message);
     this.name = "PlayerApiError";
   }
-}
-
-function readHttpErrorMessage(data: unknown, fallback: string): string {
-  if (typeof data !== "object" || data === null) return fallback;
-  const envelope = data as { message?: unknown; error?: { message?: unknown } };
-  if (typeof envelope.message === "string") return envelope.message;
-  if (typeof envelope.error?.message === "string") return envelope.error.message;
-  return fallback;
 }
 
 export function isSessionInvalidError(error: unknown): boolean {
@@ -332,44 +324,14 @@ export class PlayerApiClient {
   }
 
   private request<T>(method: string, route: string, body?: unknown): Promise<T> {
-    const url = new URL(route, this.baseUrl);
-    const payload = body === undefined ? undefined : JSON.stringify(body);
-    return new Promise((resolve, reject) => {
-      const req = https.request(url, {
-        method,
-        rejectUnauthorized: false,
-        headers: {
-          ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
-          ...(this.token ? { authorization: `Bearer ${this.token}` } : {}),
-        },
-      }, (res) => {
-        const chunks: Buffer[] = [];
-        res.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        res.on("end", () => {
-          const statusCode = res.statusCode ?? 500;
-          const text = Buffer.concat(chunks).toString("utf8");
-          let data: unknown = {};
-          if (text) {
-            try {
-              data = JSON.parse(text);
-            } catch {
-              reject(new PlayerApiError(statusCode >= 400 ? `HTTP ${statusCode}` : "Invalid JSON response", statusCode));
-              return;
-            }
-          }
-          if (statusCode >= 400) {
-            reject(new PlayerApiError(readHttpErrorMessage(data, `HTTP ${statusCode}`), statusCode));
-            return;
-          }
-          resolve(data as T);
-        });
-      });
-      req.setTimeout(REQUEST_TIMEOUT_MS, () => {
-        req.destroy(new Error(`Request timeout after ${REQUEST_TIMEOUT_MS}ms`));
-      });
-      req.on("error", reject);
-      if (payload) req.write(payload);
-      req.end();
+    return requestJson<T>({
+      baseUrl: this.baseUrl,
+      method,
+      route,
+      body,
+      token: this.token,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      createResponseError: (message, statusCode) => new PlayerApiError(message, statusCode),
     });
   }
 }

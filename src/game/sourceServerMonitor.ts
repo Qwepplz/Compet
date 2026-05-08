@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { promisify } from "node:util";
+import { delay } from "../shared/async.js";
 
 export interface SourceServerExitMonitorSpec {
   host: string;
@@ -100,7 +101,4 @@ export async function querySourceServer(host: string, port: number, timeoutMs: n
       if (error) done(false);
     });
   });
-}
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

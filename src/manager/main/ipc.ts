@@ -6,6 +6,7 @@ import type { ManagerConfig, SavedLoginCredentials, ServiceStatus } from "../sha
 import { ServiceApiClient } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
 import { runLocalDiagnostics } from "./diagnostics.js";
+import { delay } from "../../shared/async.js";
 
 export interface IpcDeps {
   configStore: FileConfigStore;
@@ -147,8 +148,4 @@ export async function waitForServiceReady(
   }
 
   return service.status();
-}
-
-function delay(milliseconds: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }

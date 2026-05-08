@@ -2,6 +2,7 @@ import path from "node:path";
 import { app, BrowserWindow, dialog } from "electron";
 import { SavedLoginStore } from "../../desktop/main/savedLoginStore.js";
 import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
+import { configureRemoteDesktopRendering } from "../../desktop/main/remoteRendering.js";
 import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main/windowEntry.js";
 import { FileConfigStore } from "./configStore.js";
 import { FileLogStore } from "./logStore.js";
@@ -56,20 +57,6 @@ service.on("status", (status) => appendLog("manager", "info", `service state ${s
 let isQuitPromptOpen = false;
 let isQuitConfirmed = false;
 let mainWindow: BrowserWindow | undefined;
-
-function configureRemoteDesktopRendering(): void {
-  app.disableHardwareAcceleration();
-  app.commandLine.appendSwitch("disable-gpu");
-  app.commandLine.appendSwitch("disable-gpu-compositing");
-  app.commandLine.appendSwitch("disable-direct-composition");
-  app.commandLine.appendSwitch("disable-accelerated-2d-canvas");
-  app.commandLine.appendSwitch("disable-accelerated-video-decode");
-  app.commandLine.appendSwitch("disable-accelerated-video-encode");
-  app.commandLine.appendSwitch("disable-webgl");
-  app.commandLine.appendSwitch("disable-webgl2");
-  app.commandLine.appendSwitch("disable-features", "DirectComposition,DirectCompositionVideoOverlays,HardwareMediaKeyHandling,Vulkan");
-  app.commandLine.appendSwitch("disable-backgrounding-occluded-windows");
-}
 
 async function createWindow(): Promise<void> {
   appendBootLog(bootLogFile, "creating BrowserWindow");

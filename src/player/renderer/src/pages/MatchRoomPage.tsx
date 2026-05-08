@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
+import { formatMapName } from "../mapDisplay.js";
 import { participantDisplayName } from "../playerDisplay.js";
 
 interface MatchRoomPageProps {
@@ -24,10 +25,6 @@ function formatCountdown(deadlineAt: string | undefined, nowMs: number, maxSecon
   const minutes = Math.floor(displayedSeconds / 60).toString().padStart(2, "0");
   const seconds = (displayedSeconds % 60).toString().padStart(2, "0");
   return `${minutes}:${seconds}`;
-}
-
-function formatMapName(map: string): string {
-  return map.replace(/^de_/, "").replace(/_/g, " ").toUpperCase();
 }
 
 function phaseLabel(phase?: PlayerLiveMatchStateDto["phase"]): string {
