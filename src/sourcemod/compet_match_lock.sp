@@ -48,8 +48,18 @@ public void OnPluginStart() {
 }
 
 public void OnPluginEnd() {
+  StopEnforceTimer();
   StopWarmupTimeout();
   StopDisconnectShutdownTimer();
+}
+
+public void OnMapEnd() {
+  g_EnforceTimer = null;
+  g_WarmupTimeoutTimer = null;
+  g_DisconnectShutdownTimer = null;
+  g_WarmupDeadline = 0.0;
+  g_WarmupWasActive = false;
+  g_LastWarmupNoticeSeconds = -1;
 }
 
 public void OnClientPostAdminCheck(int client) {
