@@ -208,7 +208,7 @@ function disconnectRealtime(): void {
 }
 
 realtimeClient.onEvent((event) => {
-  if (pauseRealtimeEvents) {
+  if (pauseRealtimeEvents && !canPublishRealtimeEventWhileSnapshotting(event)) {
     queueRealtimeEvent(event);
     return;
   }
