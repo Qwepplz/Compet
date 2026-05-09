@@ -59,6 +59,7 @@ export class PlayerRealtimeClient {
   private reconnectTimer?: TimerHandle;
   private heartbeatTimer?: TimerHandle;
   private heartbeatTimeoutTimer?: TimerHandle;
+  private connectionReadyTimer?: TimerHandle;
   private reconnectAttempt = 0;
   private manualDisconnect = false;
   private connectionId = 0;
@@ -153,10 +154,12 @@ export class PlayerRealtimeClient {
         return;
       }
       connectionReady = true;
+      this.clearConnectionReadyTimeout();
       this.reconnectAttempt = 0;
       this.emitStatus("connected");
       this.scheduleHeartbeat(socket, connectionId);
     };
+    this.scheduleConnectionReadyTimeout(socket, connectionId);
 
     socket.on("message", (data) => {
       if (connectionId !== this.connectionId || this.socket !== socket) {
@@ -184,6 +187,7 @@ export class PlayerRealtimeClient {
       if (connectionId !== this.connectionId || this.socket !== socket) {
         return;
       }
+      this.clearConnectionReadyTimeout();
       this.clearHeartbeat();
       this.socket = undefined;
       this.handleDisconnect();
@@ -221,6 +225,7 @@ export class PlayerRealtimeClient {
       this.clearTimeoutFn(this.reconnectTimer);
       this.reconnectTimer = undefined;
     }
+    this.clearConnectionReadyTimeout();
     this.clearHeartbeat();
 
     const socket = this.socket;
@@ -281,6 +286,7 @@ export class PlayerRealtimeClient {
     if (connectionId !== this.connectionId || this.socket !== socket) {
       return;
     }
+    this.clearConnectionReadyTimeout();
     this.clearHeartbeat();
     this.socket = undefined;
     this.connectionId += 1;
@@ -296,6 +302,24 @@ export class PlayerRealtimeClient {
     if (this.heartbeatTimeoutTimer) {
       this.clearTimeoutFn(this.heartbeatTimeoutTimer);
       this.heartbeatTimeoutTimer = undefined;
+    }
+  }
+
+  private scheduleConnectionReadyTimeout(socket: WebSocketLike, connectionId: number): void {
+    if (this.heartbeatTimeoutMs <= 0) {
+      return;
+    }
+    this.clearConnectionReadyTimeout();
+    this.connectionReadyTimer = this.setTimeoutFn(() => {
+      this.connectionReadyTimer = undefined;
+      this.forceDisconnect(socket, connectionId);
+    }, this.heartbeatTimeoutMs);
+  }
+
+  private clearConnectionReadyTimeout(): void {
+    if (this.connectionReadyTimer) {
+      this.clearTimeoutFn(this.connectionReadyTimer);
+      this.connectionReadyTimer = undefined;
     }
   }
 

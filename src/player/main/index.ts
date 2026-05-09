@@ -144,6 +144,7 @@ function canPublishRealtimeEventWhileSnapshotting(event: PlayerRealtimeEvent): b
     case "party_updated":
     case "party_invite_received":
     case "party_invite_resolved":
+    case "match_room_created":
       return true;
     default:
       return false;

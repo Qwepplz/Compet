@@ -370,11 +370,21 @@ export function App() {
     setStale(false);
     setRealtimeStatus({ connection: "connected", stale: false });
     setMatchmaking((current) => {
-      const nextRoom = getDisplayedMatchRoom(snapshot.matchmaking);
+      const snapshotRoom = getDisplayedMatchRoom(snapshot.matchmaking);
+      const currentActiveRoom = getActiveMatchRoom(current);
+      const preservedCurrentRoom = currentActiveRoom
+        && !snapshot.matchmaking.rooms.some((room) => room.id === currentActiveRoom.id)
+        && snapshot.matchmaking.room?.id !== currentActiveRoom.id
+        ? currentActiveRoom
+        : null;
+      const nextRooms = preservedCurrentRoom
+        ? upsertRoom(snapshot.matchmaking.rooms, preservedCurrentRoom)
+        : snapshot.matchmaking.rooms;
+      const nextRoom = snapshotRoom ?? preservedCurrentRoom;
       const nextParty = mergePartySnapshot(current.party, partySnapshot ?? null);
       return {
         queue: snapshot.matchmaking.queue,
-        rooms: snapshot.matchmaking.rooms,
+        rooms: nextRooms,
         party: nextParty,
         partyInvitations: mergePartyInvitationsSnapshot(
           current.partyInvitations,
