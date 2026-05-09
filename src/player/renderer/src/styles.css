@@ -114,7 +114,31 @@ input {
 .player-app-brand {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 10px;
+  min-width: 0;
+}
+
+.player-app-avatar {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  border-radius: 50%;
+  background: #262626;
+  color: #d8d8d8;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.player-app-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.player-app-brand-copy {
   min-width: 0;
 }
 
@@ -330,10 +354,10 @@ input {
 
 .faceit-play-hero {
   display: grid;
-  grid-template-columns: minmax(280px, 1fr) minmax(320px, 420px) minmax(220px, 320px);
+  grid-template-columns: minmax(320px, 520px);
   gap: 14px;
   align-items: center;
-  min-height: 160px;
+  min-height: 132px;
   border-bottom: 1px solid #222;
 }
 
@@ -1130,9 +1154,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .player-social-row {
   display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
+  grid-template-columns: 40px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px 10px;
+  min-height: 64px;
   padding: 10px;
   background: #121212;
   border: 1px solid #1f1f1f;
@@ -1143,13 +1168,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   width: 40px;
   height: 40px;
   font-size: 16px;
-}
-
-.player-social-row > .ant-btn,
-.player-social-row > .player-social-row-actions,
-.player-social-row > .player-social-meta {
-  grid-column: 2;
-  justify-self: start;
 }
 
 .player-social-row-main {
@@ -1176,6 +1194,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+  justify-self: end;
 }
 
 .player-social-empty-state,

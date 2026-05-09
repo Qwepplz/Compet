@@ -7,12 +7,9 @@ import { playerAccountLabel } from "../playerDisplay.js";
 
 interface HomePageProps {
   account: AccountView | null;
-  baseUrl: string;
   friends: PlayerFriendListDto;
   party: PlayerPartyDto | null;
   partyInvitations: PlayerPartyInvitationDto[];
-  queueSize: number;
-  roomCount: number;
   matchmakingPending?: boolean;
   onInviteFriend?: (accountId: string) => Promise<void>;
   onAcceptPartyInvite?: (invitationId: string) => Promise<void>;
@@ -53,12 +50,9 @@ function canInviteFriend(friend: PlayerFriendDto, party: PlayerPartyDto | null, 
 
 export function HomePage({
   account,
-  baseUrl,
   friends,
   party,
   partyInvitations,
-  queueSize,
-  roomCount,
   matchmakingPending = false,
   onInviteFriend,
   onAcceptPartyInvite,
@@ -73,7 +67,6 @@ export function HomePage({
   const [matchingPending, setMatchingPending] = useState(false);
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
   const hasSteamBinding = Boolean(account?.steam64?.trim());
-  const accountName = playerAccountLabel(account);
   const isMatchmakingPending = matchingPending || matchmakingPending;
   const primaryDisabled = !hasSteamBinding || !canStart || isMatchmakingPending;
 
@@ -138,24 +131,10 @@ export function HomePage({
     <div className="faceit-play">
       <h2 className="player-sr-only">作战中心</h2>
       <div className="faceit-play-hero">
-        <div className="faceit-player-identity">
-          <SteamAvatar className="faceit-rank-ring" avatarUrl={account?.steamAvatarUrl} label={accountName} />
-          <div>
-            <h1>{accountName}</h1>
-            <p>{hasSteamBinding ? `Steam64 ${account?.steam64}` : "未绑定 Steam64，不能进入匹配队列"}</p>
-          </div>
-        </div>
-
         <div className="faceit-match-summary">
           <span>匹配队列</span>
           <strong>5v5 · BO1</strong>
           <p>Ready check、地图禁选和进服信息会在匹配成功后进入比赛房间。</p>
-        </div>
-
-        <div className="faceit-match-summary faceit-match-summary--compact">
-          <span>当前连接</span>
-          <strong>{baseUrl}</strong>
-          <p>服务端只负责匹配和下发 connect 信息。</p>
         </div>
       </div>
 
@@ -263,8 +242,6 @@ export function HomePage({
       <div className="faceit-queue-bar">
         <div className="faceit-queue-tabs">
           <strong>匹配</strong>
-          <span>队列 {queueSize}</span>
-          <span>房间 {roomCount}</span>
         </div>
         {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
         <div className="faceit-queue-actions">

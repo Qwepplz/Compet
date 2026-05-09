@@ -343,6 +343,8 @@ export class MatchmakingService {
         humanAccountIds: humans.map((participant) => participant.accountId ?? participant.id),
         botParticipantIds: participants.filter((participant) => participant.kind === "bot").map((participant) => participant.id),
         ready: this.buildReadyStates(humans),
+        readyDeadlineAt: this.buildReadyDeadlineAt(startedAt),
+        readyEnteredAccountIds: [],
         partyId: party.id,
         chat: [],
         createdAt: startedAt,
@@ -353,8 +355,11 @@ export class MatchmakingService {
       await this.deps.store.saveRooms(rooms);
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
       await this.expirePendingInvitationsForParty(party.id);
+      this.scheduleReadyTimeout(room);
       await this.emitPartyUpdated(updatedParty);
       await this.emit({ type: "match_room_created", matchId: room.id, accountIds: this.roomAudience(room), room: this.toPublicRoom(room) }, room.id);
+      await this.emit(this.toReadyEvent("ready_check_started", room));
+      await this.emit(this.toReadyEvent("ready_check_updated", room));
       return this.toPublicRoom(room);
     });
   }

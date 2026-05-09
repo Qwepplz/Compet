@@ -24,6 +24,7 @@ import {
 } from "./api/playerApi.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
 import { MatchChatPanel } from "./components/MatchChatPanel.js";
+import { SteamAvatar } from "./components/SteamAvatar.js";
 import {
   getActiveMatchRoom,
   getDisplayedMatchRoom,
@@ -1061,12 +1062,9 @@ export function App() {
     return (
       <HomePage
         account={account}
-        baseUrl={baseUrl}
         friends={friends}
         party={visibleHomeParty}
         partyInvitations={matchmaking.partyInvitations}
-        queueSize={matchmaking.queue.length}
-        roomCount={matchmaking.rooms.length}
         matchmakingPending={matchmakingFeedbackPending}
         onInviteFriend={partyApi && !hasActiveMatch ? inviteToParty : undefined}
         onAcceptPartyInvite={partyApi ? acceptPartyInvite : undefined}
@@ -1187,8 +1185,11 @@ export function App() {
       <div className="player-app-frame">
         <div className="player-app-topbar">
           <div className="player-app-brand">
-            <div className="player-kicker">Compet Player</div>
-            <strong>{accountLabel}</strong>
+            <SteamAvatar className="player-app-avatar" avatarUrl={account?.steamAvatarUrl} label={accountLabel} />
+            <div className="player-app-brand-copy">
+              <div className="player-kicker">Compet Player</div>
+              <strong>{accountLabel}</strong>
+            </div>
           </div>
 
           <div className="player-app-nav">

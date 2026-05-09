@@ -44,6 +44,12 @@ export interface RestoredPlayerSession {
 
 export type PlayerRealtimeCommandSender = <T>(name: string, payload: unknown) => Promise<T>;
 
+export interface PlayerRealtimeEventsResult {
+  events: PlayerRealtimeEvent[];
+  gap: boolean;
+  latestSeq: number;
+}
+
 export class PlayerApiError extends Error {
   constructor(message: string, readonly statusCode?: number) {
     super(message);
@@ -114,52 +120,86 @@ export class PlayerApiClient {
     return this.request<PlayerFriendListDto>("GET", "/friends").then((friends) => this.enrichFriendList(friends));
   }
 
-  sendFriendRequest(accountId: string): Promise<PlayerFriendRequestDto> {
-    return this.request<{ request: PlayerFriendRequestDto }>("POST", "/friends/requests", { accountId })
-      .then((response) => this.enrichFriendRequest(response.request));
+  async sendFriendRequest(accountId: string): Promise<PlayerFriendRequestDto> {
+    const response = await this.commandOrRequest<{ request: PlayerFriendRequestDto }>(
+      "friends.sendRequest",
+      { accountId },
+      () => this.request("POST", "/friends/requests", { accountId }),
+    );
+    return this.enrichFriendRequest(response.request);
   }
 
-  acceptFriendRequest(requestId: string): Promise<PlayerFriendListDto> {
-    return this.request<PlayerFriendListDto>("POST", `/friends/requests/${encodeURIComponent(requestId)}/accept`, {})
-      .then((friends) => this.enrichFriendList(friends));
+  async acceptFriendRequest(requestId: string): Promise<PlayerFriendListDto> {
+    const response = await this.commandOrRequest<{ friends: PlayerFriendListDto }>(
+      "friends.acceptRequest",
+      { requestId },
+      () => this.request<PlayerFriendListDto>("POST", `/friends/requests/${encodeURIComponent(requestId)}/accept`, {})
+        .then((friends) => ({ friends })),
+    );
+    return this.enrichFriendList(response.friends);
   }
 
   declineFriendRequest(requestId: string): Promise<void> {
-    return this.request("POST", `/friends/requests/${encodeURIComponent(requestId)}/decline`, {});
+    return this.commandOrRequest(
+      "friends.declineRequest",
+      { requestId },
+      () => this.request("POST", `/friends/requests/${encodeURIComponent(requestId)}/decline`, {}),
+    );
   }
 
   getParty(): Promise<PlayerPartyDto | null> {
     return this.request<{ party: PlayerPartyDto | null }>("GET", "/party").then((response) => response.party);
   }
 
-  createParty(): Promise<PlayerPartyDto> {
-    return this.request<{ party: PlayerPartyDto }>("POST", "/party/create", {}).then((response) => response.party);
+  async createParty(): Promise<PlayerPartyDto> {
+    const response = await this.commandOrRequest<{ party: PlayerPartyDto }>(
+      "party.create",
+      {},
+      () => this.request("POST", "/party/create", {}),
+    );
+    return response.party;
   }
 
-  inviteToParty(accountId: string): Promise<PlayerPartyInvitationDto> {
-    return this.request<{ invitation: PlayerPartyInvitationDto }>("POST", "/party/invite", { accountId })
-      .then((response) => response.invitation);
+  async inviteToParty(accountId: string): Promise<PlayerPartyInvitationDto> {
+    const response = await this.commandOrRequest<{ invitation: PlayerPartyInvitationDto }>(
+      "party.invite",
+      { accountId },
+      () => this.request("POST", "/party/invite", { accountId }),
+    );
+    return response.invitation;
   }
 
-  acceptPartyInvite(invitationId: string): Promise<PlayerPartyDto> {
-    return this.request<{ party: PlayerPartyDto }>("POST", `/party/invitations/${encodeURIComponent(invitationId)}/accept`, {})
-      .then((response) => response.party);
+  async acceptPartyInvite(invitationId: string): Promise<PlayerPartyDto> {
+    const response = await this.commandOrRequest<{ party: PlayerPartyDto }>(
+      "party.acceptInvite",
+      { invitationId },
+      () => this.request("POST", `/party/invitations/${encodeURIComponent(invitationId)}/accept`, {}),
+    );
+    return response.party;
   }
 
   declinePartyInvite(invitationId: string): Promise<void> {
-    return this.request("POST", `/party/invitations/${encodeURIComponent(invitationId)}/decline`, {});
+    return this.commandOrRequest(
+      "party.declineInvite",
+      { invitationId },
+      () => this.request("POST", `/party/invitations/${encodeURIComponent(invitationId)}/decline`, {}),
+    );
   }
 
   leaveParty(): Promise<void> {
-    return this.request("POST", "/party/leave", {});
+    return this.commandOrRequest("party.leave", {}, () => this.request("POST", "/party/leave", {}));
   }
 
   async startPartyMatchmaking(): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.request<{ room: PlayerLiveMatchStateDto }>(
-      "POST",
-      "/party/matchmaking/start",
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+      "party.startMatchmaking",
       {},
-      MATCHMAKING_START_TIMEOUT_MS,
+      () => this.request(
+        "POST",
+        "/party/matchmaking/start",
+        {},
+        MATCHMAKING_START_TIMEOUT_MS,
+      ),
     );
     return response.room;
   }
@@ -227,6 +267,21 @@ export class PlayerApiClient {
       this.getMatchmakingState(),
     ]);
     return { reason, friends, party, matchmaking };
+  }
+
+  async fetchRealtimeEvents(afterSeq: number, timeoutMs: number): Promise<PlayerRealtimeEventsResult> {
+    const query = new URLSearchParams({ afterSeq: String(afterSeq), timeoutMs: String(timeoutMs) });
+    const response = await this.request<{ events: Array<PlayerRealtimeEvent & { accountIds?: string[] }>; gap: boolean; latestSeq?: number }>(
+      "GET",
+      `/realtime/events?${query.toString()}`,
+      undefined,
+      timeoutMs + REQUEST_TIMEOUT_MS,
+    );
+    return {
+      gap: response.gap,
+      latestSeq: typeof response.latestSeq === "number" ? response.latestSeq : afterSeq,
+      events: response.events.map(stripRealtimeAudience),
+    };
   }
 
   async enrichRealtimeEvent(event: PlayerRealtimeEvent): Promise<PlayerRealtimeEvent> {
@@ -395,6 +450,11 @@ export class PlayerApiClient {
       return fallback();
     }
   }
+}
+
+function stripRealtimeAudience(event: PlayerRealtimeEvent & { accountIds?: string[] }): PlayerRealtimeEvent {
+  const { accountIds: _accountIds, ...rest } = event;
+  return rest as PlayerRealtimeEvent;
 }
 
 function collectRoomSteam64s(room: PlayerLiveMatchStateDto): string[] {

@@ -32,6 +32,8 @@ const realtimeEventChannel = "player:realtime:event";
 const realtimeSnapshotChannel = "player:realtime:snapshot";
 const MAX_QUEUED_REALTIME_EVENTS = 200;
 const REALTIME_EVENT_ENRICH_TIMEOUT_MS = 1_500;
+const REALTIME_EVENT_POLL_TIMEOUT_MS = 25_000;
+const REALTIME_EVENT_POLL_RETRY_MS = 1_000;
 
 let apiClient: PlayerApiClient | undefined;
 let mainWindow: BrowserWindow | undefined;
@@ -40,6 +42,7 @@ let connectedInCurrentSession = false;
 let pauseRealtimeEvents = false;
 let realtimeDeliveryQueue = Promise.resolve();
 let quitAfterSessionCleanup = false;
+let lastDeliveredRealtimeSeq = 0;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 
@@ -48,6 +51,17 @@ function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   if (queuedRealtimeEvents.length > MAX_QUEUED_REALTIME_EVENTS) {
     queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length - MAX_QUEUED_REALTIME_EVENTS);
   }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function acceptRealtimeEvent(event: PlayerRealtimeEvent): boolean {
+  if (typeof event.seq !== "number") return true;
+  if (event.seq <= lastDeliveredRealtimeSeq) return false;
+  lastDeliveredRealtimeSeq = event.seq;
+  return true;
 }
 
 async function loadSession(): Promise<(SavedLoginRecord & { baseUrl: string }) | null> {
@@ -190,8 +204,10 @@ function connectRealtime(baseUrl: string, token: string): void {
   connectedInCurrentSession = false;
   pauseRealtimeEvents = false;
   realtimeDeliveryQueue = Promise.resolve();
+  lastDeliveredRealtimeSeq = 0;
   queuedRealtimeEvents.length = 0;
   realtimeClient.connect(baseUrl, token);
+  void pollRealtimeEvents(realtimeSessionVersion);
 }
 
 function sendRealtimeCommand<T>(name: string, payload: unknown): Promise<T> {
@@ -203,17 +219,22 @@ function disconnectRealtime(): void {
   connectedInCurrentSession = false;
   pauseRealtimeEvents = false;
   realtimeDeliveryQueue = Promise.resolve();
+  lastDeliveredRealtimeSeq = 0;
   queuedRealtimeEvents.length = 0;
   realtimeClient.disconnect();
   publishRealtimeStatus({ connection: "disconnected", stale: false });
 }
 
-realtimeClient.onEvent((event) => {
+function receiveRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion: number): void {
+  if (sessionVersion !== realtimeSessionVersion || !acceptRealtimeEvent(event)) return;
+  deliverAcceptedRealtimeEvent(event, sessionVersion);
+}
+
+function deliverAcceptedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion: number): void {
   if (pauseRealtimeEvents && !canPublishRealtimeEventWhileSnapshotting(event)) {
     queueRealtimeEvent(event);
     return;
   }
-  const sessionVersion = realtimeSessionVersion;
   if (!doesRealtimeEventNeedEnrich(event)) {
     publishRealtimeEventNowOrQueue(event, sessionVersion);
     return;
@@ -222,6 +243,36 @@ realtimeClient.onEvent((event) => {
     publishRealtimeEventNowOrQueue(event, sessionVersion);
   }
   publishEnrichedRealtimeEvent(event, sessionVersion);
+}
+
+async function pollRealtimeEvents(sessionVersion: number): Promise<void> {
+  while (sessionVersion === realtimeSessionVersion) {
+    try {
+      const result = await currentApiClient().fetchRealtimeEvents(lastDeliveredRealtimeSeq, REALTIME_EVENT_POLL_TIMEOUT_MS);
+      if (sessionVersion !== realtimeSessionVersion) return;
+      if (result.gap) {
+        await refreshRealtimeSnapshot("reconnected");
+        if (sessionVersion !== realtimeSessionVersion) return;
+      }
+      if (!connectedInCurrentSession) connectedInCurrentSession = true;
+      pauseRealtimeEvents = false;
+      publishRealtimeStatus({ connection: "connected", stale: false });
+      flushQueuedRealtimeEvents(sessionVersion);
+      for (const event of result.events) {
+        receiveRealtimeEvent(event, sessionVersion);
+      }
+      if (result.latestSeq > lastDeliveredRealtimeSeq) {
+        lastDeliveredRealtimeSeq = result.latestSeq;
+      }
+    } catch {
+      if (sessionVersion !== realtimeSessionVersion) return;
+      await delay(REALTIME_EVENT_POLL_RETRY_MS);
+    }
+  }
+}
+
+realtimeClient.onEvent((event) => {
+  receiveRealtimeEvent(event, realtimeSessionVersion);
 });
 
 realtimeClient.onStatus((connection) => {

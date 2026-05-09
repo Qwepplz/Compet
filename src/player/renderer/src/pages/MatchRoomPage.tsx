@@ -230,7 +230,7 @@ export function MatchRoomPage({
 
             {room.phase === "ready" ? (
               <section className="faceit-connect-panel">
-                <span>{readyCountdownStarted ? "准备倒计时" : "等待所有玩家进入房间"}</span>
+                <span>{readyCountdownStarted ? "准备倒计时" : "准备倒计时启动中"}</span>
                 <strong className="faceit-countdown">{readyCountdownStarted ? formatCountdown(room.readyDeadlineAt, nowMs) : "--:--"}</strong>
                 <div className="faceit-ready-list">
                   {(room.ready ?? []).map((entry) => (

@@ -1,4 +1,13 @@
 export type RealtimeCommand =
+  | { type: "command"; commandId: string; name: "friends.sendRequest"; payload: { accountId: string } }
+  | { type: "command"; commandId: string; name: "friends.acceptRequest"; payload: { requestId: string } }
+  | { type: "command"; commandId: string; name: "friends.declineRequest"; payload: { requestId: string } }
+  | { type: "command"; commandId: string; name: "party.create"; payload: Record<string, never> }
+  | { type: "command"; commandId: string; name: "party.invite"; payload: { accountId: string } }
+  | { type: "command"; commandId: string; name: "party.acceptInvite"; payload: { invitationId: string } }
+  | { type: "command"; commandId: string; name: "party.declineInvite"; payload: { invitationId: string } }
+  | { type: "command"; commandId: string; name: "party.leave"; payload: Record<string, never> }
+  | { type: "command"; commandId: string; name: "party.startMatchmaking"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "matchmaking.acceptReady"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "matchmaking.declineReady"; payload: Record<string, never> }
   | {
@@ -39,7 +48,19 @@ export interface RealtimeCommandAckFailure {
 
 export type RealtimeCommandAck = RealtimeCommandAckSuccess | RealtimeCommandAckFailure;
 
+export interface RealtimeCommandFriends {
+  sendRequest(fromAccountId: string, toAccountId: string): Promise<unknown>;
+  acceptRequest(accountId: string, requestId: string): Promise<unknown>;
+  declineRequest(accountId: string, requestId: string): Promise<unknown>;
+}
+
 export interface RealtimeCommandMatchmaking {
+  createParty(ownerAccountId: string): Promise<unknown>;
+  inviteToParty(ownerAccountId: string, toAccountId: string): Promise<unknown>;
+  acceptPartyInvite(accountId: string, invitationId: string): Promise<unknown>;
+  declinePartyInvite(accountId: string, invitationId: string): Promise<unknown>;
+  leaveParty(accountId: string): Promise<unknown>;
+  startPartyMatchmaking(ownerAccountId: string): Promise<unknown>;
   acceptReady(accountId: string): Promise<unknown>;
   declineReady(accountId: string): Promise<unknown>;
   ackReadyRoomEntered(roomId: string, accountId: string): Promise<unknown>;
@@ -48,6 +69,7 @@ export interface RealtimeCommandMatchmaking {
 }
 
 export interface RealtimeCommandDeps {
+  friends?: RealtimeCommandFriends;
   matchmaking?: RealtimeCommandMatchmaking;
 }
 
@@ -57,6 +79,24 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
   if (record.type !== "command" || typeof record.commandId !== "string" || typeof record.name !== "string") return undefined;
   const payload = typeof record.payload === "object" && record.payload !== null ? record.payload as Record<string, unknown> : {};
   switch (record.name) {
+    case "friends.sendRequest":
+    case "party.invite":
+      return typeof payload.accountId === "string"
+        ? { type: "command", commandId: record.commandId, name: record.name, payload: { accountId: payload.accountId } }
+        : undefined;
+    case "friends.acceptRequest":
+    case "friends.declineRequest":
+      return typeof payload.requestId === "string"
+        ? { type: "command", commandId: record.commandId, name: record.name, payload: { requestId: payload.requestId } }
+        : undefined;
+    case "party.acceptInvite":
+    case "party.declineInvite":
+      return typeof payload.invitationId === "string"
+        ? { type: "command", commandId: record.commandId, name: record.name, payload: { invitationId: payload.invitationId } }
+        : undefined;
+    case "party.create":
+    case "party.leave":
+    case "party.startMatchmaking":
     case "matchmaking.acceptReady":
     case "matchmaking.declineReady":
       return { type: "command", commandId: record.commandId, name: record.name, payload: {} };
@@ -84,23 +124,49 @@ export async function executeRealtimeCommand(
   accountId: string,
   deps: RealtimeCommandDeps,
 ): Promise<RealtimeCommandAck> {
+  const friends = deps.friends;
   const matchmaking = deps.matchmaking;
-  if (!matchmaking) {
-    return {
-      type: "command_ack",
-      commandId: command.commandId,
-      ok: false,
-      error: { message: "Realtime command unavailable", statusCode: 503 },
-    };
-  }
 
   try {
     switch (command.name) {
+      case "friends.sendRequest":
+        if (!friends) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { request: await friends.sendRequest(accountId, command.payload.accountId) } };
+      case "friends.acceptRequest":
+        if (!friends) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { friends: await friends.acceptRequest(accountId, command.payload.requestId) } };
+      case "friends.declineRequest":
+        if (!friends) return commandUnavailable(command.commandId);
+        await friends.declineRequest(accountId, command.payload.requestId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
+      case "party.create":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { party: await matchmaking.createParty(accountId) } };
+      case "party.invite":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { invitation: await matchmaking.inviteToParty(accountId, command.payload.accountId) } };
+      case "party.acceptInvite":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { party: await matchmaking.acceptPartyInvite(accountId, command.payload.invitationId) } };
+      case "party.declineInvite":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        await matchmaking.declinePartyInvite(accountId, command.payload.invitationId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
+      case "party.leave":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        await matchmaking.leaveParty(accountId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
+      case "party.startMatchmaking":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.startPartyMatchmaking(accountId) } };
       case "matchmaking.acceptReady":
+        if (!matchmaking) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.acceptReady(accountId) } };
       case "matchmaking.declineReady":
+        if (!matchmaking) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.declineReady(accountId) } };
       case "matchRoom.entered":
+        if (!matchmaking) return commandUnavailable(command.commandId);
         return {
           type: "command_ack",
           commandId: command.commandId,
@@ -108,6 +174,7 @@ export async function executeRealtimeCommand(
           result: { room: await matchmaking.ackReadyRoomEntered(command.payload.roomId, accountId) },
         };
       case "matchRoom.applyVeto":
+        if (!matchmaking) return commandUnavailable(command.commandId);
         return {
           type: "command_ack",
           commandId: command.commandId,
@@ -115,6 +182,7 @@ export async function executeRealtimeCommand(
           result: { room: await matchmaking.applyVeto({ roomId: command.payload.roomId, accountId, action: command.payload.action, map: command.payload.map }) },
         };
       case "matchRoom.sendChatMessage":
+        if (!matchmaking) return commandUnavailable(command.commandId);
         return {
           type: "command_ack",
           commandId: command.commandId,
@@ -133,4 +201,13 @@ export async function executeRealtimeCommand(
       },
     };
   }
+}
+
+function commandUnavailable(commandId: string): RealtimeCommandAckFailure {
+  return {
+    type: "command_ack",
+    commandId,
+    ok: false,
+    error: { message: "Realtime command unavailable", statusCode: 503 },
+  };
 }

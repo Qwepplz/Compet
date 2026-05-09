@@ -8,6 +8,7 @@ export type RealtimeEvent =
   | RealtimeEventWithSeq<{
       type: "presence_updated";
       accountId: string;
+      accountIds?: string[];
       online: boolean;
       connectionCount: number;
       lastSeenAt?: string;

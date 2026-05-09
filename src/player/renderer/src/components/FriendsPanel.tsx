@@ -200,8 +200,8 @@ export function FriendsPanel({
                     <span className={friend.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
                       {friend.online ? "在线" : "离线"}
                     </span>
+                    {!friend.online && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt)}</span> : null}
                   </div>
-                  {!friend.online && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt)}</span> : null}
                 </div>
               ))}
             </div>

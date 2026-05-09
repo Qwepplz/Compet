@@ -7,6 +7,7 @@ import type { SessionService } from "../auth/sessionService.js";
 import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
+import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { VetoAction } from "../matchmaking/vetoService.js";
 import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unauthorized } from "./httpErrors.js";
@@ -19,6 +20,7 @@ export interface RouteDeps {
   auth: AuthService;
   friends?: FriendService;
   matchmaking?: MatchmakingService;
+  events?: RealtimeEventBus;
 }
 
 type PublicAccount = Omit<AccountRecord, "passwordHash">;
@@ -43,6 +45,10 @@ const queueSchema = z.object({ partyId: z.string().min(1).optional() }).default(
 const friendSearchQuerySchema = z.object({ q: z.string().default("") }).default({ q: "" });
 const friendRequestSchema = z.object({ accountId: z.string().min(1) });
 const matchRoomParamsSchema = z.object({ id: z.string().min(1) });
+const realtimeEventsQuerySchema = z.object({
+  afterSeq: z.coerce.number().int().min(0).default(0),
+  timeoutMs: z.coerce.number().int().min(0).max(30_000).default(25_000),
+}).default({ afterSeq: 0, timeoutMs: 25_000 });
 const vetoSchema = z.object({ action: z.enum(["ban", "pick"]), map: z.string().min(1) });
 const matchChatSchema = z.object({ text: z.string().trim().min(1).max(300) });
 
@@ -80,6 +86,11 @@ function requireMatchmaking(deps: RouteDeps): MatchmakingService {
 function requireFriends(deps: RouteDeps): FriendService {
   if (!deps.friends) throw new HttpError(503, "service_unavailable", "Friend service unavailable");
   return deps.friends;
+}
+
+function requireRealtimeEvents(deps: RouteDeps): RealtimeEventBus {
+  if (!deps.events) throw new HttpError(503, "service_unavailable", "Realtime event service unavailable");
+  return deps.events;
 }
 
 function mapMatchmakingServiceError(error: unknown): never {
@@ -146,6 +157,14 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     certificateFingerprintSha256: deps.certificateFingerprintSha256,
     websocketPath: "/ws",
   }));
+
+  app.get("/realtime/events", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const events = requireRealtimeEvents(deps);
+    const { afterSeq, timeoutMs } = realtimeEventsQuerySchema.parse(request.query ?? {});
+    return events.waitForEventsAfter(auth.account.id, afterSeq, timeoutMs);
+  });
 
   app.post("/auth/login", async (request) => {
     const username = readStringField(request.body, "username");

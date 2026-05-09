@@ -3,6 +3,7 @@ import type { RawData, WebSocket } from "ws";
 import type { AccountRecord } from "../accounts/accountTypes.js";
 import type { AccountService } from "../accounts/accountService.js";
 import type { SessionService } from "../auth/sessionService.js";
+import type { FriendService } from "../friends/friendService.js";
 import type { PresenceService, PresenceSummary } from "../presence/presenceService.js";
 import type { RealtimeEventBus } from "./eventBus.js";
 import { executeRealtimeCommand, parseRealtimeCommand, type RealtimeCommandMatchmaking } from "./realtimeCommands.js";
@@ -13,6 +14,7 @@ export interface WebSocketDeps {
   sessions: SessionService;
   events?: RealtimeEventBus;
   presence?: PresenceService;
+  friends?: FriendService;
   matchmaking?: RealtimeCommandMatchmaking;
 }
 interface WebSocketQuery {
@@ -43,7 +45,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
     const cleanup = () => {
       sockets.unregister(socket);
       if (registeredAccountId && deps.presence) {
-        publishPresenceUpdated("disconnect", deps, deps.presence.unregister(registeredAccountId));
+        void publishPresenceUpdated("disconnect", deps, deps.presence.unregister(registeredAccountId));
         registeredAccountId = undefined;
       }
       if (authorizationCheck) {
@@ -79,7 +81,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       replayEvents(socket, account.id, request.query.lastSeq, deps);
       if (deps.presence) {
         registeredAccountId = account.id;
-        publishPresenceUpdated("connect", deps, deps.presence.register(account.id));
+        void publishPresenceUpdated("connect", deps, deps.presence.register(account.id));
       }
     });
   });
@@ -147,11 +149,11 @@ function sendJson(socket: WebSocket, payload: unknown): void {
   }
 }
 
-function publishPresenceUpdated(
+async function publishPresenceUpdated(
   phase: "connect" | "disconnect",
-  deps: Pick<WebSocketDeps, "events">,
+  deps: Pick<WebSocketDeps, "events" | "friends">,
   summary: PresenceSummary,
-): void {
+): Promise<void> {
   if (!deps.events) return;
   if (phase === "connect" && (!summary.online || summary.connectionCount !== 1)) return;
   if (phase === "disconnect" && (summary.online || summary.connectionCount !== 0)) return;
@@ -159,10 +161,25 @@ function publishPresenceUpdated(
   deps.events.publish({
     type: "presence_updated",
     accountId: summary.accountId,
+    accountIds: await resolvePresenceAudience(deps, summary.accountId),
     online: summary.online,
     connectionCount: summary.connectionCount,
     lastSeenAt: summary.lastSeenAt,
   });
+}
+
+async function resolvePresenceAudience(deps: Pick<WebSocketDeps, "friends">, accountId: string): Promise<string[]> {
+  const audience = new Set([accountId]);
+  if (!deps.friends) return [...audience];
+  try {
+    const friendList = await deps.friends.listFriends(accountId);
+    for (const friend of friendList.friends) {
+      audience.add(friend.accountId);
+    }
+  } catch {
+    // Presence should still reach the account itself if friend lookup fails.
+  }
+  return [...audience];
 }
 
 function now(): string {
