@@ -244,7 +244,7 @@ export class MatchmakingService {
       const party = parties.find((candidate) => candidate.id === invitation.partyId);
       if (!party) throw new Error(`party not found: ${invitation.partyId}`);
       this.requireOpenParty(party);
-      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(accountId))) {
+      if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate))) {
         throw new Error("account is already in another party");
       }
       if (!party.memberAccountIds.includes(accountId) && party.memberAccountIds.length >= MAX_PARTY_HUMANS) throw new Error("party is full");
@@ -254,7 +254,11 @@ export class MatchmakingService {
         ? { ...party, updatedAt: resolvedAt }
         : { ...party, memberAccountIds: [...party.memberAccountIds, accountId], updatedAt: resolvedAt };
       const resolvedInvitations = this.resolveAcceptedInvitationAndExpireOthers(invitations, invitation, resolvedAt);
-      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updated : candidate)));
+      await this.deps.store.saveParties(
+        parties
+          .filter((candidate) => candidate.id === party.id || !candidate.memberAccountIds.includes(accountId) || !isSoloOpenParty(candidate))
+          .map((candidate) => (candidate.id === party.id ? updated : candidate)),
+      );
       await this.deps.store.saveInvitations(resolvedInvitations);
       await this.emitResolvedInvitations(invitations, resolvedInvitations);
       await this.emitPartyUpdated(updated);
