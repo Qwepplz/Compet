@@ -362,18 +362,16 @@ export function App() {
   }
 
   function applyRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto) {
-    const hasPartySnapshot = snapshot.party !== undefined;
+    const partySnapshot = snapshot.party !== undefined ? snapshot.party : snapshot.matchmaking.party;
     if (snapshot.friends) {
       setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends!, resolvedFriendRequestIds.current));
     }
-    if (hasPartySnapshot) {
-      setParty((current) => mergePartySnapshot(current, snapshot.party ?? null));
-    }
+    setParty((current) => mergePartySnapshot(current, partySnapshot ?? null));
     setStale(false);
     setRealtimeStatus({ connection: "connected", stale: false });
     setMatchmaking((current) => {
       const nextRoom = getDisplayedMatchRoom(snapshot.matchmaking);
-      const nextParty = hasPartySnapshot ? mergePartySnapshot(current.party, snapshot.party ?? null) : current.party;
+      const nextParty = mergePartySnapshot(current.party, partySnapshot ?? null);
       return {
         queue: snapshot.matchmaking.queue,
         rooms: snapshot.matchmaking.rooms,
@@ -499,6 +497,12 @@ export function App() {
           incomingRequests: current.incomingRequests.filter((request) => request.id !== event.request.id),
           outgoingRequests: current.outgoingRequests.filter((request) => request.id !== event.request.id),
         }));
+        if (
+          event.request.status === "accepted"
+          && (event.request.fromAccountId === account?.id || event.request.toAccountId === account?.id)
+        ) {
+          void refreshFriendsList();
+        }
         return;
       case "friend_list_refresh":
         if (event.accountId === account?.id) {
@@ -535,6 +539,12 @@ export function App() {
           ...current,
           partyInvitations: removePartyInvitation(current.partyInvitations, event.invitation.id),
         }));
+        if (
+          event.invitation.status === "accepted"
+          && (event.invitation.fromAccountId === account?.id || event.invitation.toAccountId === account?.id)
+        ) {
+          void hydrateRealtimeState("matchmaking");
+        }
         return;
       case "queue_updated":
         setMatchmaking((current) => ({

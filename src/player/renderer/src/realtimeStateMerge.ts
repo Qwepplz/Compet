@@ -26,7 +26,7 @@ export function mergePartyInvitationsSnapshot(
 
 export function mergePartySnapshot(current: PlayerPartyDto | null, snapshot: PlayerPartyDto | null): PlayerPartyDto | null {
   if (!current) return snapshot;
-  if (!snapshot) return current;
+  if (!snapshot) return null;
   if (current.id !== snapshot.id) return snapshot;
 
   const currentTime = partyTimestamp(current);

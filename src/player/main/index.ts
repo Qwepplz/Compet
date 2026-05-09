@@ -149,18 +149,25 @@ async function refreshRealtimeSnapshot(
 ): Promise<PlayerRealtimeSnapshotDto> {
   const sessionVersion = realtimeSessionVersion;
   pauseRealtimeEvents = true;
-  const snapshot = await currentApiClient().fetchRealtimeSnapshot(reason, scope);
-  if (sessionVersion !== realtimeSessionVersion) {
-    return snapshot;
-  }
+  try {
+    const snapshot = await currentApiClient().fetchRealtimeSnapshot(reason, scope);
+    if (sessionVersion !== realtimeSessionVersion) {
+      return snapshot;
+    }
 
-  publishRealtimeSnapshot(snapshot);
-  pauseRealtimeEvents = realtimeStatus.connection !== "connected";
-  if (realtimeStatus.connection === "connected") {
-    publishRealtimeStatus({ connection: "connected", stale: false });
-    flushQueuedRealtimeEvents(sessionVersion);
+    publishRealtimeSnapshot(snapshot);
+    if (realtimeStatus.connection === "connected") {
+      publishRealtimeStatus({ connection: "connected", stale: false });
+    }
+    return snapshot;
+  } finally {
+    if (sessionVersion === realtimeSessionVersion) {
+      pauseRealtimeEvents = realtimeStatus.connection !== "connected";
+      if (realtimeStatus.connection === "connected") {
+        flushQueuedRealtimeEvents(sessionVersion);
+      }
+    }
   }
-  return snapshot;
 }
 
 function connectRealtime(baseUrl: string, token: string): void {
