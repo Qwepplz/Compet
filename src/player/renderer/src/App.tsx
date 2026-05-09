@@ -753,7 +753,7 @@ export function App() {
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
-      await hydrateRealtimeState();
+      void hydrateRealtimeState();
     } catch (error) {
       message.error(error instanceof Error ? error.message : "恢复会话失败");
       await loadSavedLogin();
@@ -814,7 +814,7 @@ export function App() {
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
-      await hydrateRealtimeState();
+      void hydrateRealtimeState();
     } catch (error) {
       message.error(error instanceof Error ? error.message : "登录失败");
     } finally {
@@ -849,7 +849,7 @@ export function App() {
         setRealtimeStatus(emptyRealtimeStatus);
         setStale(false);
         setActiveView(viewFromSession(restored.account, restored.matchmaking));
-        await hydrateRealtimeState();
+        void hydrateRealtimeState();
       } else {
         setPasswordModalOpen(false);
       }

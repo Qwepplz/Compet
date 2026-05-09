@@ -19,10 +19,11 @@ import type {
   PlayerRealtimeSnapshotScope,
 } from "../shared/types.js";
 import { isRealtimeCommandServiceError } from "./playerRealtimeClient.js";
-import { SteamProfileService, type SteamProfileResolver } from "./steamProfileService.js";
+import { SteamProfileService, type SteamProfile, type SteamProfileResolver } from "./steamProfileService.js";
 
 const REQUEST_TIMEOUT_MS = 4_000;
 const MATCHMAKING_START_TIMEOUT_MS = 20_000;
+const STEAM_PROFILE_ENRICH_TIMEOUT_MS = 350;
 
 export interface PlayerLoginResult {
   token: string;
@@ -290,7 +291,7 @@ export class PlayerApiClient {
       return steam64 ? [steam64] : [];
     });
     if (steam64s.length === 0) return items.map((item) => this.sanitizeFriendDisplay(item));
-    const profiles = await this.steamProfiles.resolveMany(steam64s);
+    const profiles = await this.resolveSteamProfiles(steam64s);
     return items.map((item) => {
       const steam64 = item.steam64?.trim();
       const profile = steam64 ? profiles.get(steam64) : undefined;
@@ -326,7 +327,7 @@ export class PlayerApiClient {
   private async enrichRoom(room: PlayerLiveMatchStateDto): Promise<PlayerLiveMatchStateDto> {
     const steam64s = collectRoomSteam64s(room);
     if (steam64s.length === 0) return room;
-    const profiles = await this.steamProfiles.resolveMany(steam64s);
+    const profiles = await this.resolveSteamProfiles(steam64s);
     if (profiles.size === 0) return room;
     return {
       ...room,
@@ -338,7 +339,7 @@ export class PlayerApiClient {
   private async enrichTeams(teamA: PlayerMatchTeamDto, teamB: PlayerMatchTeamDto): Promise<{ teamA: PlayerMatchTeamDto; teamB: PlayerMatchTeamDto }> {
     const steam64s = collectParticipantSteam64s([...teamA.participants, ...teamB.participants]);
     if (steam64s.length === 0) return { teamA, teamB };
-    const profiles = await this.steamProfiles.resolveMany(steam64s);
+    const profiles = await this.resolveSteamProfiles(steam64s);
     if (profiles.size === 0) return { teamA, teamB };
     return {
       teamA: enrichTeam(teamA, profiles),
@@ -349,7 +350,24 @@ export class PlayerApiClient {
   private async resolveSteamProfile(steam64?: string) {
     const normalized = steam64?.trim();
     if (!normalized) return undefined;
-    return (await this.steamProfiles.resolveMany([normalized])).get(normalized);
+    return (await this.resolveSteamProfiles([normalized])).get(normalized);
+  }
+
+  private async resolveSteamProfiles(steam64s: string[]): Promise<Map<string, SteamProfile>> {
+    if (steam64s.length === 0) return new Map();
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.steamProfiles.resolveMany(steam64s),
+        new Promise<Map<string, SteamProfile>>((resolve) => {
+          timeoutId = setTimeout(() => resolve(new Map()), STEAM_PROFILE_ENRICH_TIMEOUT_MS);
+        }),
+      ]);
+    } catch {
+      return new Map();
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+    }
   }
 
   private request<T>(method: string, route: string, body?: unknown, timeoutMs = REQUEST_TIMEOUT_MS): Promise<T> {

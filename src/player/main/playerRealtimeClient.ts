@@ -147,15 +147,16 @@ export class PlayerRealtimeClient {
     const connectionId = ++this.connectionId;
     const socket = this.createSocket(this.buildRealtimeUrl(this.baseUrl, this.token));
     this.socket = socket;
-
-    socket.on("open", () => {
-      if (connectionId !== this.connectionId || this.socket !== socket) {
+    let connectionReady = false;
+    const markConnectionReady = () => {
+      if (connectionReady || connectionId !== this.connectionId || this.socket !== socket) {
         return;
       }
+      connectionReady = true;
       this.reconnectAttempt = 0;
       this.emitStatus("connected");
       this.scheduleHeartbeat(socket, connectionId);
-    });
+    };
 
     socket.on("message", (data) => {
       if (connectionId !== this.connectionId || this.socket !== socket) {
@@ -163,6 +164,10 @@ export class PlayerRealtimeClient {
       }
       this.acknowledgeHeartbeat(socket, connectionId);
       const message = parseRealtimeMessage(data);
+      if (isConnectionReadyMessage(message)) {
+        markConnectionReady();
+        return;
+      }
       if (this.handleCommandAck(message)) {
         return;
       }
@@ -354,6 +359,13 @@ function parseRealtimeMessage(payload: RawData): unknown {
   } catch {
     return undefined;
   }
+}
+
+function isConnectionReadyMessage(message: unknown): boolean {
+  if (typeof message !== "object" || message === null) return false;
+  const type = (message as { type?: unknown }).type;
+  if (type === "hello") return true;
+  return type === "server_status" && (message as { status?: unknown }).status === "online";
 }
 
 function sanitizeRealtimeEvent(message: unknown): PlayerRealtimeEvent | undefined {

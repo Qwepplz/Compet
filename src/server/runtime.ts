@@ -35,6 +35,8 @@ export interface Runtime {
   records: MatchRecordStore;
 }
 
+const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
+
 export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   const recordsDir = path.join(config.dataDir, "records");
   await mkdir(recordsDir, { recursive: true });
@@ -88,10 +90,25 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   });
   matchmaking = matchmakingService;
   await completeRoomsIfGameServerUnavailable(matchmakingService, config.gameServer.portRange.start);
+  const offlineCleanupGraceMs = resolveOfflineCleanupGraceMs();
+  const offlineCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
   events.subscribe((event) => {
-    if (event.type === "presence_updated" && !event.online) {
-      void friends.expireDisconnectedRequests(event.accountId).catch(() => undefined);
+    if (event.type !== "presence_updated") return;
+    const existingTimer = offlineCleanupTimers.get(event.accountId);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
+      offlineCleanupTimers.delete(event.accountId);
     }
+    if (event.online) return;
+
+    const timer = setTimeout(() => {
+      offlineCleanupTimers.delete(event.accountId);
+      if (presence.isOnline(event.accountId)) return;
+      void friends.expireDisconnectedRequests(event.accountId).catch(() => undefined);
+      void matchmakingService.handleAccountOffline(event.accountId).catch(() => undefined);
+    }, offlineCleanupGraceMs);
+    timer.unref?.();
+    offlineCleanupTimers.set(event.accountId, timer);
   });
 
   const auth = new AuthService(accounts, sessions, new InMemoryLoginRateLimiter());
@@ -106,8 +123,23 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     certificateFingerprintSha256: certificate.fingerprintSha256,
     https: { key: certificate.keyPem, cert: certificate.certPem },
   });
+  app.addHook("onClose", (_instance, done) => {
+    for (const timer of offlineCleanupTimers.values()) {
+      clearTimeout(timer);
+    }
+    offlineCleanupTimers.clear();
+    done();
+  });
 
   return { app, accounts, sessions, auth, certificate, friends, matchmaking: matchmakingService, events, records };
+}
+
+function resolveOfflineCleanupGraceMs(): number {
+  const configured = Number(process.env.COMPET_OFFLINE_CLEANUP_GRACE_MS);
+  if (Number.isFinite(configured) && configured >= 0) {
+    return configured;
+  }
+  return DEFAULT_OFFLINE_CLEANUP_GRACE_MS;
 }
 
 async function completeRoomsIfGameServerUnavailable(matchmaking: MatchmakingService, port: number): Promise<void> {

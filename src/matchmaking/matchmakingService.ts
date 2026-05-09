@@ -195,6 +195,42 @@ export class MatchmakingService {
     });
   }
 
+  handleAccountOffline(accountId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.expirePendingInvitationsForAccount(accountId);
+      const rooms = await this.deps.store.listRooms();
+      const readyRoom = this.findReadyRoomForAccount(rooms, accountId);
+      if (readyRoom) {
+        await this.failReadyRoom(rooms, readyRoom, "player offline");
+      }
+
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => (
+        candidate.memberAccountIds.includes(accountId)
+        && (candidate.status ?? "open") === "open"
+      ));
+      if (!party) return;
+
+      const remainingMemberIds = party.memberAccountIds.filter((memberId) => memberId !== accountId);
+      const ownerLeft = party.ownerAccountId === accountId;
+      const nextParty: PartyRecord | undefined = remainingMemberIds.length > 0
+        ? {
+            ...party,
+            ownerAccountId: ownerLeft ? remainingMemberIds[0]! : party.ownerAccountId,
+            memberAccountIds: remainingMemberIds,
+            updatedAt: this.now(),
+          }
+        : undefined;
+      const updated = nextParty
+        ? parties.map((candidate) => (candidate.id === party.id ? nextParty : candidate))
+        : parties.filter((candidate) => candidate.id !== party.id);
+
+      await this.deps.store.saveParties(updated);
+      if (ownerLeft) await this.expirePendingInvitationsForParty(party.id);
+      await this.emit({ type: "party_updated", accountIds: [accountId, ...remainingMemberIds], party: nextParty ?? null });
+    });
+  }
+
   inviteToParty(ownerAccountId: string, toAccountId: string): Promise<PartyInvitationDto> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(toAccountId);
@@ -216,7 +252,6 @@ export class MatchmakingService {
       const friendList = await this.deps.friends?.listFriends(ownerAccountId);
       const friend = friendList?.friends.find((candidate) => candidate.accountId === toAccountId);
       if (!friend) throw new Error("party invite target is not a friend");
-      if (!friend.online) throw new Error("party invite target is offline");
 
       const invitation: PartyInvitationRecord = {
         id: this.idFactory(),

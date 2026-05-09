@@ -125,7 +125,7 @@ function publishRealtimeEvent(event: PlayerRealtimeEvent): void {
 
 function publishRealtimeEventNowOrQueue(event: PlayerRealtimeEvent, sessionVersion: number): void {
   if (sessionVersion !== realtimeSessionVersion) return;
-  if (pauseRealtimeEvents) {
+  if (pauseRealtimeEvents && !canPublishRealtimeEventWhileSnapshotting(event)) {
     queueRealtimeEvent(event);
     return;
   }
@@ -134,6 +134,20 @@ function publishRealtimeEventNowOrQueue(event: PlayerRealtimeEvent, sessionVersi
 
 function publishRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto): void {
   broadcast(realtimeSnapshotChannel, snapshot);
+}
+
+function canPublishRealtimeEventWhileSnapshotting(event: PlayerRealtimeEvent): boolean {
+  switch (event.type) {
+    case "friend_request_received":
+    case "friend_request_resolved":
+    case "friend_list_refresh":
+    case "party_updated":
+    case "party_invite_received":
+    case "party_invite_resolved":
+      return true;
+    default:
+      return false;
+  }
 }
 
 function currentApiClient(): PlayerApiClient {
