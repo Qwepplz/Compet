@@ -15,6 +15,7 @@ import { registerPlayerIpc } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
 import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
+import { getRealtimeStatusAfterPollFailure, shouldApplyRealtimePollFailure } from "./realtimeStatus.js";
 import { revokePlayerSessionForExit } from "./sessionShutdown.js";
 
 const bootLogFile = "compet-player-client-boot.log";
@@ -45,6 +46,7 @@ let quitAfterSessionCleanup = false;
 let lastDeliveredRealtimeSeq = 0;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
+let realtimeStatusRevision = 0;
 
 function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   queuedRealtimeEvents.push(nextEvent);
@@ -130,6 +132,7 @@ function publishRealtimeStatus(next: PlayerRealtimeStatusDto): void {
     return;
   }
   realtimeStatus = next;
+  realtimeStatusRevision += 1;
   broadcast(realtimeStatusChannel, next);
 }
 
@@ -247,6 +250,7 @@ function deliverAcceptedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion
 
 async function pollRealtimeEvents(sessionVersion: number): Promise<void> {
   while (sessionVersion === realtimeSessionVersion) {
+    const pollStartedStatusRevision = realtimeStatusRevision;
     try {
       const result = await currentApiClient().fetchRealtimeEvents(lastDeliveredRealtimeSeq, REALTIME_EVENT_POLL_TIMEOUT_MS);
       if (sessionVersion !== realtimeSessionVersion) return;
@@ -266,6 +270,13 @@ async function pollRealtimeEvents(sessionVersion: number): Promise<void> {
       }
     } catch {
       if (sessionVersion !== realtimeSessionVersion) return;
+      if (!shouldApplyRealtimePollFailure(pollStartedStatusRevision, realtimeStatusRevision)) {
+        await delay(REALTIME_EVENT_POLL_RETRY_MS);
+        continue;
+      }
+      const nextStatus = getRealtimeStatusAfterPollFailure(realtimeStatus, connectedInCurrentSession);
+      pauseRealtimeEvents = nextStatus.connection !== "disconnected";
+      publishRealtimeStatus(nextStatus);
       await delay(REALTIME_EVENT_POLL_RETRY_MS);
     }
   }

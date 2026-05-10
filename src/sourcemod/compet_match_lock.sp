@@ -335,8 +335,10 @@ void MarkGet5Started(const char[] reason) {
     return;
   }
   g_Get5Started = true;
-  PrintToServer("[Compet] %s; automatic shutdown cancelled for match %s.", reason, g_MatchId);
-  PrintToChatAll("[Compet] get5 has started; automatic warmup shutdown cancelled.");
+  g_LockEnabled = false;
+  StopEnforceTimer();
+  PrintToServer("[Compet] %s; pre-get5 team lock disabled for match %s.", reason, g_MatchId);
+  PrintToChatAll("[Compet] get5 has started; pre-match team lock disabled.");
   StopWarmupTimeout();
   StopDisconnectShutdownTimer();
 }
