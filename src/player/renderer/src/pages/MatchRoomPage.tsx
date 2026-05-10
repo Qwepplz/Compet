@@ -135,7 +135,6 @@ export function MatchRoomPage({
   const canApplyCurrentVeto = Boolean(
     account?.id && currentActor?.actorType === "human" && currentActor.actorAccountId === account.id,
   );
-  const currentMap = selectedMap ?? room?.veto?.availableMaps[0] ?? "de_mirage";
   const roomPhase = phaseLabel(room?.phase);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
   const [readyActionPending, setReadyActionPending] = useState<"accept" | "decline" | null>(null);
@@ -192,7 +191,7 @@ export function MatchRoomPage({
         <div className="faceit-match-status">
           <strong>5v5 · BO1</strong>
           <span>{roomPhase}</span>
-          <small>{formatMapName(currentMap)}</small>
+          {selectedMap ? <small>{formatMapName(selectedMap)}</small> : null}
         </div>
         <div className="faceit-team-summary faceit-team-summary--right">
           <strong>{room?.teamB?.name ?? "Team B"}</strong>
