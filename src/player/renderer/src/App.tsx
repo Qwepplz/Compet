@@ -31,6 +31,7 @@ import {
   getVetoDeadlineRefreshDelayMs,
   isAccountInReadyRoom,
   isTerminalMatchPhase,
+  mergeReadyRoomProgress,
   mergeTeamsAssignedRoom,
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
@@ -59,6 +60,7 @@ const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected
 const VETO_DEADLINE_REFRESH_GRACE_MS = 1_500;
 const VETO_DEADLINE_REFRESH_RETRY_MS = 2_000;
 const VETO_DEADLINE_REFRESH_MAX_ATTEMPTS = 8;
+const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
 
 function getCurrentRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
   return getDisplayedMatchRoom(matchmaking);
@@ -319,6 +321,22 @@ export function App() {
   ]);
 
   useEffect(() => {
+    if (!account || !realtimeApi || activeView !== "match-room" || currentRoom?.phase !== "ready") return;
+
+    let cancelled = false;
+    const refreshReadyRoom = () => {
+      if (cancelled) return;
+      void hydrateRealtimeState("matchmaking");
+    };
+
+    const refreshTimer = window.setInterval(refreshReadyRoom, READY_ROOM_SNAPSHOT_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(refreshTimer);
+    };
+  }, [account, activeView, currentRoom?.id, currentRoom?.phase, realtimeApi]);
+
+  useEffect(() => {
     const readyRoom = currentRoom;
     if (!matchRoomApi || activeView !== "match-room" || !account?.id || !readyRoom || !isAccountInReadyRoom(readyRoom, account.id)) return;
 
@@ -372,16 +390,23 @@ export function App() {
     setStale(false);
     setRealtimeStatus({ connection: "connected", stale: false });
     setMatchmaking((current) => {
-      const snapshotRoom = getDisplayedMatchRoom(snapshot.matchmaking);
+      const mergeSnapshotRoomProgress = (room: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto => {
+        const currentRoom = current.room?.id === room.id ? current.room : current.rooms.find((candidate) => candidate.id === room.id);
+        return currentRoom ? mergeReadyRoomProgress(currentRoom, room) : room;
+      };
+      const snapshotRooms = snapshot.matchmaking.rooms.map(mergeSnapshotRoomProgress);
+      const snapshotRoom = snapshot.matchmaking.room
+        ? mergeSnapshotRoomProgress(snapshot.matchmaking.room)
+        : snapshotRooms.at(-1) ?? null;
       const currentActiveRoom = getActiveMatchRoom(current);
       const preservedCurrentRoom = currentActiveRoom
-        && !snapshot.matchmaking.rooms.some((room) => room.id === currentActiveRoom.id)
-        && snapshot.matchmaking.room?.id !== currentActiveRoom.id
+        && !snapshotRooms.some((room) => room.id === currentActiveRoom.id)
+        && snapshotRoom?.id !== currentActiveRoom.id
         ? currentActiveRoom
         : null;
       const nextRooms = preservedCurrentRoom
-        ? upsertRoom(snapshot.matchmaking.rooms, preservedCurrentRoom)
-        : snapshot.matchmaking.rooms;
+        ? upsertRoom(snapshotRooms, preservedCurrentRoom)
+        : snapshotRooms;
       const nextRoom = snapshotRoom ?? preservedCurrentRoom;
       const nextParty = mergePartySnapshot(current.party, partySnapshot ?? null);
       return {
@@ -455,7 +480,7 @@ export function App() {
     setMatchmaking((current) => {
       const sourceRoom = current.room?.id === matchId ? current.room : current.rooms.find((room) => room.id === matchId);
       if (!sourceRoom) return current;
-      const nextRoom = mergeRoomSteamProfileData(sourceRoom, updater(sourceRoom));
+      const nextRoom = mergeRoomSteamProfileData(sourceRoom, mergeReadyRoomProgress(sourceRoom, updater(sourceRoom)));
       if (isTerminalMatchPhase(sourceRoom.phase) && !isTerminalMatchPhase(nextRoom.phase)) {
         return current;
       }
@@ -1016,12 +1041,14 @@ export function App() {
     if (!matchRoomApi || !currentRoom) return;
     const nextRoom = await matchRoomApi.acceptReady();
     updateCurrentRoom(nextRoom.id, () => nextRoom);
+    await hydrateRealtimeState("matchmaking");
   }
 
   async function declineReady() {
     if (!matchRoomApi || !currentRoom) return;
     const nextRoom = await matchRoomApi.declineReady();
     updateCurrentRoom(nextRoom.id, () => nextRoom);
+    await hydrateRealtimeState("matchmaking");
   }
 
   async function applyVeto(roomId: string, action: "ban" | "pick", map: string) {

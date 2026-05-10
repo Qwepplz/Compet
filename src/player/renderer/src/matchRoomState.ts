@@ -27,6 +27,22 @@ export function mergeTeamsAssignedRoom(
   return { ...room, phase, teamA, teamB };
 }
 
+export function mergeReadyRoomProgress(
+  previous: PlayerLiveMatchStateDto,
+  next: PlayerLiveMatchStateDto,
+): PlayerLiveMatchStateDto {
+  if (previous.id !== next.id || previous.phase !== "ready" || next.phase !== "ready") return next;
+  const previousReadyByAccount = new Map((previous.ready ?? []).map((entry) => [entry.accountId, entry]));
+  let changed = false;
+  const ready = (next.ready ?? []).map((entry) => {
+    const previousEntry = previousReadyByAccount.get(entry.accountId);
+    if (!previousEntry?.ready || entry.ready) return entry;
+    changed = true;
+    return { ...entry, ready: true, respondedAt: entry.respondedAt ?? previousEntry.respondedAt };
+  });
+  return changed ? { ...next, ready } : next;
+}
+
 export function hasActiveMatchRoom(matchmaking: PlayerMatchmakingStateDto): boolean {
   return Boolean(getActiveMatchRoom(matchmaking));
 }
