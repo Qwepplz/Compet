@@ -4,6 +4,7 @@ import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { formatMapName } from "../mapDisplay.js";
+import { isAccountInReadyRoom } from "../matchRoomState.js";
 import { participantDisplayName } from "../playerDisplay.js";
 
 interface MatchRoomPageProps {
@@ -137,6 +138,7 @@ export function MatchRoomPage({
   );
   const roomPhase = phaseLabel(room?.phase);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
+  const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
   const [readyActionPending, setReadyActionPending] = useState<"accept" | "decline" | null>(null);
   const participantNames = new Map(
     [...(room?.teamA?.participants ?? []), ...(room?.teamB?.participants ?? [])]
@@ -239,7 +241,7 @@ export function MatchRoomPage({
                     </div>
                   ))}
                 </div>
-                {account?.id && room.humanAccountIds?.includes(account.id) ? (
+                {canUseReadyActions ? (
                   <div className="faceit-action-row">
                     <Button
                       aria-label="准备"
