@@ -1,4 +1,4 @@
-import type { PlayerLiveMatchStateDto, PlayerMatchmakingStateDto } from "../../shared/types.js";
+import type { PlayerLiveMatchStateDto, PlayerMatchmakingStateDto, PlayerMatchTeamDto } from "../../shared/types.js";
 
 const VETO_STEP_MS = 30_000;
 const BOT_AUTO_VETO_WINDOW_MS = 10_000;
@@ -16,6 +16,15 @@ export function getActiveMatchRoom(matchmaking: PlayerMatchmakingStateDto): Play
 
 export function getDisplayedMatchRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
   return matchmaking.room ?? matchmaking.rooms.at(-1) ?? null;
+}
+
+export function mergeTeamsAssignedRoom(
+  room: PlayerLiveMatchStateDto,
+  teamA: PlayerMatchTeamDto,
+  teamB: PlayerMatchTeamDto,
+): PlayerLiveMatchStateDto {
+  const phase = room.phase === "ready" || room.phase === "match_room" ? "match_room" : room.phase;
+  return { ...room, phase, teamA, teamB };
 }
 
 export function hasActiveMatchRoom(matchmaking: PlayerMatchmakingStateDto): boolean {

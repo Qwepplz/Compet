@@ -31,6 +31,7 @@ import {
   getVetoDeadlineRefreshDelayMs,
   isAccountInReadyRoom,
   isTerminalMatchPhase,
+  mergeTeamsAssignedRoom,
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
@@ -587,12 +588,7 @@ export function App() {
         setActiveView((current) => (current === "home" ? "match-room" : current));
         return;
       case "teams_assigned":
-        updateCurrentRoom(event.matchId, (room) => ({
-          ...room,
-          phase: "match_room",
-          teamA: event.teamA,
-          teamB: event.teamB,
-        }));
+        updateCurrentRoom(event.matchId, (room) => mergeTeamsAssignedRoom(room, event.teamA, event.teamB));
         return;
       case "veto_started":
         updateCurrentRoom(event.matchId, (room) => ({
