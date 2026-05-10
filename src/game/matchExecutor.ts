@@ -36,6 +36,12 @@ const COMPET_LOCK_PLUGIN_FILE = "compet_match_lock.smx";
 const COMPET_LOCK_SOURCE_FILE = "compet_match_lock.sp";
 const GET5_AUTOLOAD_COMMENT = "// Compet managed get5 autoload";
 const WARMUP_CFG_COMMENT = "// Compet managed warmup hook";
+const TEAMLOGO_CFG_COMMENT = "// Compet managed team logo hook";
+const TEAMLOGO_CFG_LINES = [
+  TEAMLOGO_CFG_COMMENT,
+  "teamlogo_randomlogos 0",
+  "teamlogo_teamnames 0",
+];
 const WARMUP_CFG_LINES = [
   WARMUP_CFG_COMMENT,
   "mp_do_warmup_period 1",
@@ -148,7 +154,9 @@ function formatServerExitMonitorOutput(
 function buildMatchStartupCfg(matchPlan: MatchPlan, safeMatchId: string): string {
   return [
     `sv_password ${quoteConsoleString(matchPlan.connectPassword)}`,
+    ...TEAMLOGO_CFG_LINES.slice(1),
     ...buildTeamNameCommands(matchPlan),
+    ...buildTeamLogoCommands(matchPlan),
     `compet_lock_reset ${quoteConsoleString(safeMatchId)}`,
     ...buildCompetLockCommands(matchPlan),
     "compet_lock_enable 1",
@@ -162,6 +170,15 @@ function buildTeamNameCommands(matchPlan: MatchPlan): string[] {
   return [
     `mp_teamname_1 ${quoteConsoleString(ctTeam?.name ?? "")}`,
     `mp_teamname_2 ${quoteConsoleString(tTeam?.name ?? "")}`,
+  ];
+}
+
+function buildTeamLogoCommands(matchPlan: MatchPlan): string[] {
+  const ctTeam = [matchPlan.teamA, matchPlan.teamB].find((team) => team.gameSide === "ct");
+  const tTeam = [matchPlan.teamA, matchPlan.teamB].find((team) => team.gameSide === "t");
+  return [
+    ctTeam?.logo ? `mp_teamlogo_1 ${ctTeam.logo}` : `mp_teamlogo_1 ${quoteConsoleString("")}`,
+    tTeam?.logo ? `mp_teamlogo_2 ${tTeam.logo}` : `mp_teamlogo_2 ${quoteConsoleString("")}`,
   ];
 }
 
@@ -297,6 +314,7 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
   const noRandomBotsHook = `exec ${NO_RANDOM_BOTS_CFG_PATH}`;
   const noRandomBotsComment = "// Compet managed no random bot hook";
   const managedWarmupLines = new Set(WARMUP_CFG_LINES);
+  const managedTeamLogoLines = new Set(TEAMLOGO_CFG_LINES);
   const lines = current.length > 0 ? current.split(/\r?\n/) : [];
   const nextLines = trimTrailingBlankLines(lines.filter((line) => {
     const trimmed = line.trim();
@@ -304,10 +322,14 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
       && trimmed !== activeMatchHook
       && trimmed !== noRandomBotsComment
       && trimmed !== noRandomBotsHook
-      && !managedWarmupLines.has(trimmed);
+      && !managedWarmupLines.has(trimmed)
+      && !managedTeamLogoLines.has(trimmed)
+      && !trimmed.startsWith("teamlogo_randomlogos ")
+      && !trimmed.startsWith("teamlogo_teamnames ");
   }));
   appendManagedLines(nextLines, [
     ...WARMUP_CFG_LINES,
+    ...TEAMLOGO_CFG_LINES,
     noRandomBotsComment,
     noRandomBotsHook,
     activeMatchComment,

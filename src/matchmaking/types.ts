@@ -20,6 +20,7 @@ export interface MatchTeam {
   id: TeamSide;
   gameSide: GameSide;
   name: string;
+  logo?: string;
   participants: MatchParticipant[];
 }
 

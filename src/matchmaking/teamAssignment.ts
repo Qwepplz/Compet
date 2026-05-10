@@ -24,6 +24,11 @@ export interface AssignTeamsResult {
   selectedBots: BotCandidate[];
 }
 
+interface PickedTeamRoster {
+  name: string;
+  logo?: string;
+}
+
 export function assignTeams(input: AssignTeamsInput): AssignTeamsResult {
   const random = input.random ?? Math.random;
   const shuffledHumans = shuffle(input.humans, random).slice(0, 10);
@@ -39,11 +44,11 @@ export function assignTeams(input: AssignTeamsInput): AssignTeamsResult {
   const usedBotIds = new Set<string>();
   const botParticipants = selectedBots.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, proBotNames));
   const participants = distributeParticipants(shuffledHumans, botParticipants, random);
-  const [teamAName, teamBName] = pickTeamNames(input.botRosters, random);
+  const [teamARoster, teamBRoster] = pickTeamRosters(input.botRosters, random);
 
   return {
-    teamA: createTeam("teamA", "t", teamAName, participants.slice(0, 5), random),
-    teamB: createTeam("teamB", "ct", teamBName, participants.slice(5, 10), random),
+    teamA: createTeam("teamA", "t", teamARoster, participants.slice(0, 5), random),
+    teamB: createTeam("teamB", "ct", teamBRoster, participants.slice(5, 10), random),
     selectedBots,
   };
 }
@@ -64,12 +69,19 @@ function randomIndex(maxExclusive: number, random: () => number): number {
   return Math.min(Math.max(index, 0), maxExclusive - 1);
 }
 
-function pickTeamNames(botRosters: readonly BotRosterTeam[] | undefined, random: () => number): [string, string] {
-  const rosterNames = Array.from(new Set((botRosters ?? []).map((roster) => roster.name.trim()).filter(Boolean)));
-  const selected = shuffle(rosterNames, random).slice(0, 2);
-  const teamAName = selected[0] ?? "Team A";
-  const teamBName = selected[1] ?? (teamAName === "Team B" ? "Team A" : "Team B");
-  return [teamAName, teamBName];
+function pickTeamRosters(botRosters: readonly BotRosterTeam[] | undefined, random: () => number): [PickedTeamRoster, PickedTeamRoster] {
+  const rosterByName = new Map<string, PickedTeamRoster>();
+  for (const roster of botRosters ?? []) {
+    const name = roster.name.trim();
+    if (name && !rosterByName.has(name)) {
+      rosterByName.set(name, { name, ...(roster.logo ? { logo: roster.logo } : {}) });
+    }
+  }
+
+  const selected = shuffle([...rosterByName.values()], random).slice(0, 2);
+  const teamA = selected[0] ?? { name: "Team A" };
+  const teamB = selected[1] ?? { name: teamA.name === "Team B" ? "Team A" : "Team B" };
+  return [teamA, teamB];
 }
 
 function buildProBotNames(botRosters: readonly BotRosterTeam[] | undefined): ReadonlySet<string> {
@@ -207,11 +219,12 @@ function toBotParticipant(
   };
 }
 
-function createTeam(id: "teamA" | "teamB", gameSide: "t" | "ct", name: string, participants: MatchParticipant[], random: () => number): MatchTeam {
+function createTeam(id: "teamA" | "teamB", gameSide: "t" | "ct", roster: PickedTeamRoster, participants: MatchParticipant[], random: () => number): MatchTeam {
   return {
     id,
     gameSide,
-    name,
+    name: roster.name,
+    ...(roster.logo ? { logo: roster.logo } : {}),
     participants: markCaptain(participants, random),
   };
 }
