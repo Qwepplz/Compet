@@ -238,7 +238,9 @@ async function removeGet5AutoloadCfg(serverRoot: string): Promise<void> {
 function findBundledSourceModAsset(fileName: string): string | undefined {
   const candidates = [
     path.join(process.cwd(), "sourcemod", fileName),
+    path.join(process.cwd(), "..", "sourcemod", fileName),
     path.join(process.cwd(), "src", "sourcemod", fileName),
+    path.join(__dirname, "..", "sourcemod", fileName),
   ];
   return candidates.find((candidate) => existsSync(candidate));
 }

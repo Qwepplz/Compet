@@ -823,23 +823,14 @@ export class MatchmakingService {
     const steam64 = account.steam64.trim();
     if (!steam64) throw new Error("steam64 required for matchmaking");
 
-    let steamProfile: { personaName: string; avatarUrl?: string } | undefined;
-    try {
-      steamProfile = (await this.deps.steamProfiles?.resolveMany([steam64]))?.get(steam64);
-    } catch {
-      steamProfile = undefined;
-    }
-    const steamPersonaName = steamProfile?.personaName.trim() || undefined;
     const accountDisplayName = account.displayName.trim();
 
     return {
       id: account.id,
       kind: "human",
-      displayName: steamPersonaName ?? (accountDisplayName || steam64),
+      displayName: accountDisplayName || steam64,
       steam64,
       accountId: account.id,
-      steamPersonaName,
-      steamAvatarUrl: steamProfile?.avatarUrl,
     };
   }
 

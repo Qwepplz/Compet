@@ -389,6 +389,7 @@ export function App() {
     setParty((current) => mergePartySnapshot(current, partySnapshot ?? null));
     setStale(false);
     setRealtimeStatus({ connection: "connected", stale: false });
+    const snapshotActiveRoom = getActiveMatchRoom(snapshot.matchmaking);
     setMatchmaking((current) => {
       const mergeSnapshotRoomProgress = (room: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto => {
         const currentRoom = current.room?.id === room.id ? current.room : current.rooms.find((candidate) => candidate.id === room.id);
@@ -398,7 +399,7 @@ export function App() {
       const snapshotRoom = snapshot.matchmaking.room
         ? mergeSnapshotRoomProgress(snapshot.matchmaking.room)
         : snapshotRooms.at(-1) ?? null;
-      const currentActiveRoom = getActiveMatchRoom(current);
+      const currentActiveRoom = snapshotActiveRoom ? getActiveMatchRoom(current) : null;
       const preservedCurrentRoom = currentActiveRoom
         && !snapshotRooms.some((room) => room.id === currentActiveRoom.id)
         && snapshotRoom?.id !== currentActiveRoom.id
@@ -421,7 +422,7 @@ export function App() {
         room: nextRoom,
       };
     });
-    if (getActiveMatchRoom(snapshot.matchmaking)) {
+    if (snapshotActiveRoom) {
       setActiveView((current) => (current === "home" ? "match-room" : current));
     }
   }
@@ -1048,6 +1049,9 @@ export function App() {
     if (!matchRoomApi || !currentRoom) return;
     const nextRoom = await matchRoomApi.declineReady();
     updateCurrentRoom(nextRoom.id, () => nextRoom);
+    if (isTerminalMatchPhase(nextRoom.phase)) {
+      setActiveView("home");
+    }
     await hydrateRealtimeState("matchmaking");
   }
 
