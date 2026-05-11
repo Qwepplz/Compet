@@ -39,11 +39,14 @@
     "@types/selfsigned": "^2.0.4",
     "@types/ws": "^8.18.1",
     "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^22.3.27",
+    "electron": "^42.0.1",
     "electron-vite": "^5.0.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vite": "^7.3.2",
     "ws": "^8.20.0"
+  },
+  "overrides": {
+    "fast-uri": "3.1.2"
   }
 }

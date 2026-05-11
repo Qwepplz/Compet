@@ -5,7 +5,15 @@ import react from "@vitejs/plugin-react";
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
-    build: { rollupOptions: { input: resolve(__dirname, "src/manager/main/index.ts") } },
+    build: {
+      rollupOptions: {
+        input: resolve(__dirname, "src/manager/main/index.ts"),
+        output: {
+          format: "cjs",
+          entryFileNames: "index.cjs",
+        },
+      },
+    },
   },
   preload: {
     plugins: [externalizeDepsPlugin()],

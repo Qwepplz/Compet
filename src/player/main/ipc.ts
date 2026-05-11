@@ -17,6 +17,16 @@ interface PersistedSession extends SavedPlayerLogin {
 
 const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 
+export function isSafeSteamConnectUrl(connectUrl: string): boolean {
+  if (typeof connectUrl !== "string" || /[\r\n]/.test(connectUrl)) return false;
+  try {
+    const parsed = new URL(connectUrl);
+    return parsed.protocol === "steam:" && parsed.hostname === "connect" && parsed.pathname.length > 1;
+  } catch {
+    return false;
+  }
+}
+
 interface IpcDeps {
   clearSession: () => Promise<void>;
   connectRealtime: (baseUrl: string, token: string) => void;
@@ -101,7 +111,10 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("player:copyText", (_event, text: string) => {
     clipboard.writeText(text);
   });
-  ipcMain.handle("player:openConnectUrl", (_event, connectUrl: string) => shell.openExternal(connectUrl));
+  ipcMain.handle("player:openConnectUrl", (_event, connectUrl: string) => {
+    if (!isSafeSteamConnectUrl(connectUrl)) throw new Error("Invalid Steam connect URL");
+    return shell.openExternal(connectUrl);
+  });
 
   ipcMain.handle("session:restore", async (): Promise<RestoreSessionResult | null> => {
     const persisted = await deps.loadSession();

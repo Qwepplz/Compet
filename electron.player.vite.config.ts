@@ -7,7 +7,13 @@ export default defineConfig({
     plugins: [externalizeDepsPlugin()],
     build: {
       outDir: "out-player/main",
-      rollupOptions: { input: resolve(__dirname, "src/player/main/index.ts") },
+      rollupOptions: {
+        input: resolve(__dirname, "src/player/main/index.ts"),
+        output: {
+          format: "cjs",
+          entryFileNames: "index.cjs",
+        },
+      },
     },
   },
   preload: {
