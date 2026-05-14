@@ -38,6 +38,7 @@ export interface PublicVetoState {
 
 export interface VetoState extends PublicVetoState {
   captains?: Record<TeamSide, VetoCaptain>;
+  firstActorTeamId?: TeamSide;
 }
 
 export const VETO_STEP_MS = 30_000;
@@ -91,14 +92,16 @@ export function createVetoState(input: {
 
   const availableMaps = input.mapPool.slice();
   const finalMap = availableMaps.length === 1 ? availableMaps[0] : undefined;
+  const firstActorTeamId = random() < 0.5 ? "teamA" : "teamB";
   const state: VetoState = finalMap
-    ? { matchId: input.matchId, mapPool: input.mapPool.slice(), availableMaps, history: [], captains, finalMap }
+    ? { matchId: input.matchId, mapPool: input.mapPool.slice(), availableMaps, history: [], firstActorTeamId, captains, finalMap }
     : {
         matchId: input.matchId,
         mapPool: input.mapPool.slice(),
         availableMaps,
         history: [],
-        current: nextCurrent(captains.teamA, input.now),
+        firstActorTeamId,
+        current: nextCurrent(captains[firstActorTeamId], input.now),
         captains,
       };
   return normalizeVetoState(state);
@@ -171,6 +174,7 @@ function applyBan(state: VetoState, input: { map: string; now: string; actorType
         mapPool: state.mapPool.slice(),
         availableMaps,
         history,
+        firstActorTeamId: state.firstActorTeamId,
         captains: state.captains,
         finalMap,
       }
@@ -179,7 +183,8 @@ function applyBan(state: VetoState, input: { map: string; now: string; actorType
         mapPool: state.mapPool.slice(),
         availableMaps,
         history,
-        current: nextCurrent(getCaptain(state, otherTeam(current.actorTeamId)), input.now),
+        firstActorTeamId: state.firstActorTeamId,
+        current: nextCurrent(getCaptain(state, nextVetoTeamId(state, history.length)), input.now),
         captains: state.captains,
       };
   return nextState;
@@ -301,6 +306,20 @@ function chooseRandomIndex(length: number, random: () => number): number {
     return 0;
   }
   return Math.min(length - 1, Math.max(0, Math.floor(random() * length)));
+}
+
+function nextVetoTeamId(state: VetoState, completedBanCount: number): TeamSide {
+  const firstActorTeamId = state.firstActorTeamId ?? state.history[0]?.actorTeamId ?? "teamA";
+  const secondActorTeamId = otherTeam(firstActorTeamId);
+  const order: TeamSide[] = [
+    firstActorTeamId,
+    firstActorTeamId,
+    secondActorTeamId,
+    secondActorTeamId,
+    firstActorTeamId,
+    secondActorTeamId,
+  ];
+  return order[completedBanCount] ?? secondActorTeamId;
 }
 
 function otherTeam(teamId: TeamSide): TeamSide {
