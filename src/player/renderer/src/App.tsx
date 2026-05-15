@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Form, Input, Modal, Spin, message } from "antd";
+import { Button, Card, Form, Input, Modal, Spin, Switch, message } from "antd";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type {
   PlayerFriendListDto,
@@ -36,6 +36,7 @@ import {
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
+import { loadMatchSoundEnabled, saveMatchSoundEnabled } from "./matchSoundPreference.js";
 import { getVisiblePartyForHome } from "./partyDisplay.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import {
@@ -209,6 +210,7 @@ export function App() {
   const [party, setParty] = useState<PlayerPartyDto | null>(null);
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
   const [matchmakingFeedbackPending, setMatchmakingFeedbackPending] = useState(false);
+  const [matchSoundEnabled, setMatchSoundEnabled] = useState(() => loadMatchSoundEnabled());
   const [realtimeStatus, setRealtimeStatus] = useState<PlayerRealtimeStatusDto>(emptyRealtimeStatus);
   const [, setStale] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -223,6 +225,7 @@ export function App() {
   const playedMatchSoundRoomIds = useRef(new Set<string>());
   const pendingMatchSoundRoomIds = useRef(new Set<string>());
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
+  const matchSoundEnabledRef = useRef(matchSoundEnabled);
 
   const realtimeApi = hasRealtimeApi(window.playerApi) ? window.playerApi : undefined;
   const savedLoginApi = hasSavedLoginApi(window.playerApi) ? window.playerApi : undefined;
@@ -252,15 +255,33 @@ export function App() {
   }, [activeMatchRoom?.id]);
 
   useEffect(() => {
+    if (!matchSoundEnabled) return;
     const audio = new Audio(matchFoundSoundUrl);
     audio.preload = "auto";
     audio.volume = 1;
     matchFoundAudioRef.current = audio;
     return () => {
       audio.pause();
-      matchFoundAudioRef.current = null;
+      if (matchFoundAudioRef.current === audio) {
+        matchFoundAudioRef.current = null;
+      }
     };
-  }, []);
+  }, [matchSoundEnabled]);
+
+  useEffect(() => {
+    matchSoundEnabledRef.current = matchSoundEnabled;
+    saveMatchSoundEnabled(matchSoundEnabled);
+  }, [matchSoundEnabled]);
+
+  useEffect(() => {
+    if (matchSoundEnabled) return;
+    const audio = matchFoundAudioRef.current;
+    if (audio) {
+      audio.pause();
+      audio.currentTime = 0;
+    }
+    pendingMatchSoundRoomIds.current.clear();
+  }, [matchSoundEnabled]);
 
   useEffect(() => {
     if (!account || !realtimeApi) return;
@@ -428,6 +449,7 @@ export function App() {
   }
 
   function primeMatchFoundSound() {
+    if (!matchSoundEnabledRef.current) return;
     try {
       const audio = matchFoundAudioRef.current ?? new Audio(matchFoundSoundUrl);
       matchFoundAudioRef.current = audio;
@@ -450,7 +472,7 @@ export function App() {
   }
 
   function playMatchFoundSound(matchId: string) {
-    if (playedMatchSoundRoomIds.current.has(matchId) || pendingMatchSoundRoomIds.current.has(matchId)) return;
+    if (!matchSoundEnabledRef.current || playedMatchSoundRoomIds.current.has(matchId) || pendingMatchSoundRoomIds.current.has(matchId)) return;
     pendingMatchSoundRoomIds.current.add(matchId);
     try {
       const audio = matchFoundAudioRef.current ?? new Audio(matchFoundSoundUrl);
@@ -1235,6 +1257,17 @@ export function App() {
               {baseUrl}
             </span>
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
+            <label className="player-sound-toggle">
+              <span>匹配音效</span>
+              <Switch
+                aria-label="匹配音效"
+                checked={matchSoundEnabled}
+                checkedChildren="开"
+                unCheckedChildren="关"
+                onChange={setMatchSoundEnabled}
+                size="small"
+              />
+            </label>
             <Button onClick={() => setPasswordModalOpen(true)}>修改密码</Button>
             <Button onClick={() => void logout()}>退出登录</Button>
           </div>

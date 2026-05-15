@@ -225,6 +225,16 @@ input {
   color: #7e7e7e;
 }
 
+.player-sound-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #d7d7d7;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
 .player-app-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
