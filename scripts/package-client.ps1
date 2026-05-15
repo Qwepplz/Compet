@@ -9,6 +9,7 @@ $supersededZip = Join-Path $artifacts "Compet-Client.zip"
 $supersededTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $clientExe = "Compet Player Client.exe"
+$rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $preferred7z = "E:\EXCHANGE\github-C\lzma2600\bin\x64\7zr.exe"
 
 function Get-ArchiveEntryPath {
@@ -39,6 +40,41 @@ function Get-SevenZipCommand {
     if ($command) { return $command.Source }
   }
   throw "7z executable not found. Set COMPET_7Z or install 7z/7zr."
+}
+
+function Get-PackageVersion {
+  $packageJson = Get-Content -LiteralPath (Join-Path $repo "package.json") -Raw | ConvertFrom-Json
+  $version = [string]$packageJson.version
+  if ($version -match '^\d+\.\d+\.\d+$') {
+    return "$version.0"
+  }
+  return $version
+}
+
+function Set-ExeVersionInfo {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [Parameter(Mandatory = $true)][string]$Description,
+    [Parameter(Mandatory = $true)][string]$ProductName,
+    [Parameter(Mandatory = $true)][string]$OriginalFilename,
+    [Parameter(Mandatory = $true)][string]$InternalName
+  )
+
+  if (-not (Test-Path -LiteralPath $rcedit)) {
+    throw "Missing rcedit executable: $rcedit"
+  }
+
+  $version = Get-PackageVersion
+  & $rcedit $ExePath `
+    --set-version-string "CompanyName" "Qwepplz" `
+    --set-version-string "FileDescription" $Description `
+    --set-version-string "ProductName" $ProductName `
+    --set-version-string "OriginalFilename" $OriginalFilename `
+    --set-version-string "InternalName" $InternalName `
+    --set-version-string "LegalCopyright" "Copyright (C) 2026 Qwepplz" `
+    --set-file-version $version `
+    --set-product-version $version
+  if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
 }
 
 function Convert-ArchivePath {
@@ -126,7 +162,14 @@ foreach ($relative in $required) {
 }
 
 Copy-Item -Path (Join-Path $electronDist "*") -Destination $stage -Recurse
-Move-Item -LiteralPath (Join-Path $stage "electron.exe") -Destination (Join-Path $stage $clientExe)
+$clientExePath = Join-Path $stage $clientExe
+Move-Item -LiteralPath (Join-Path $stage "electron.exe") -Destination $clientExePath
+Set-ExeVersionInfo `
+  -ExePath $clientExePath `
+  -Description "Compet Player Client" `
+  -ProductName "Compet Player Client" `
+  -OriginalFilename $clientExe `
+  -InternalName "Compet Player Client"
 Remove-UnusedElectronFiles -RootDir $stage
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 
