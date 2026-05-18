@@ -1,6 +1,7 @@
 import { app, BrowserWindow, dialog } from "electron";
 import path from "node:path";
 import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
+import { delay } from "../../shared/async.js";
 import { configureRemoteDesktopRendering } from "../../desktop/main/remoteRendering.js";
 import { SavedLoginStore, type SavedLoginRecord } from "../../desktop/main/savedLoginStore.js";
 import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main/windowEntry.js";
@@ -53,10 +54,6 @@ function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   if (queuedRealtimeEvents.length > MAX_QUEUED_REALTIME_EVENTS) {
     queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length - MAX_QUEUED_REALTIME_EVENTS);
   }
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function acceptRealtimeEvent(event: PlayerRealtimeEvent): boolean {

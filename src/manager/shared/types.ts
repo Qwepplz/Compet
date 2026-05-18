@@ -1,3 +1,6 @@
+import type { AccountRole } from "../../accounts/accountTypes.js";
+
+export type { AccountRole } from "../../accounts/accountTypes.js";
 export type ServiceState = "stopped" | "starting" | "running" | "stopping" | "failed";
 export type LogLevel = "info" | "warn" | "error" | "debug";
 export type DiagnosticStatus = "pass" | "warn" | "fail" | "unavailable";
@@ -52,8 +55,6 @@ export interface SavedLoginCredentials {
   username?: string;
   password?: string;
 }
-
-export type AccountRole = "admin" | "player";
 
 export interface AccountView {
   id: string;

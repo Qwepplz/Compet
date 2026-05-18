@@ -1,4 +1,5 @@
 import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
+import { SerialQueue } from "../storage/serialQueue.js";
 
 export interface SessionRecord {
   id: string;
@@ -15,15 +16,9 @@ export interface SessionsFile {
 }
 
 export class JsonSessionRepository {
-  private writeQueue: Promise<unknown> = Promise.resolve();
+  private readonly writeQueue = new SerialQueue();
 
   private constructor(private readonly filePath: string) {}
-
-  private enqueueWrite<T>(run: () => Promise<T>): Promise<T> {
-    const next = this.writeQueue.then(run, run);
-    this.writeQueue = next.catch(() => undefined);
-    return next;
-  }
 
   static async create(filePath: string): Promise<JsonSessionRepository> {
     await ensureJsonFile<SessionsFile>(filePath, { sessions: [] });
@@ -35,11 +30,11 @@ export class JsonSessionRepository {
   }
 
   async saveAll(sessions: SessionRecord[]): Promise<void> {
-    await this.enqueueWrite(() => writeJsonFileAtomic(this.filePath, { sessions }));
+    await this.writeQueue.enqueue(() => writeJsonFileAtomic(this.filePath, { sessions }));
   }
 
   async upsert(session: SessionRecord): Promise<SessionRecord> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const sessions = await this.list();
       const index = sessions.findIndex((item) => item.id === session.id);
       const next = index === -1 || !sessions[index].revokedAt || session.revokedAt
@@ -53,7 +48,7 @@ export class JsonSessionRepository {
   }
 
   async replaceActiveForAccount(session: SessionRecord, revokedAt: string): Promise<SessionRecord> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const sessions = await this.list();
       const next = sessions.map((item) => {
         if (item.accountId !== session.accountId || item.revokedAt) return item;
@@ -66,7 +61,7 @@ export class JsonSessionRepository {
   }
 
   async insertIfNoActiveForAccount(session: SessionRecord, now: string, staleBefore?: string): Promise<SessionRecord> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const sessions = await this.list();
       let hasActive = false;
       for (let index = 0; index < sessions.length; index += 1) {
@@ -87,7 +82,7 @@ export class JsonSessionRepository {
   }
 
   async updateById(id: string, update: (session: SessionRecord) => SessionRecord | undefined): Promise<SessionRecord | undefined> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const sessions = await this.list();
       const index = sessions.findIndex((item) => item.id === id);
       if (index === -1) return undefined;
@@ -100,7 +95,7 @@ export class JsonSessionRepository {
   }
 
   async updateActiveUniqueByTokenHash(tokenHash: string, seenAt: string): Promise<SessionRecord | undefined> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const sessions = await this.list();
       const index = sessions.findIndex((item) => item.tokenHash === tokenHash);
       if (index === -1) return undefined;
@@ -128,7 +123,7 @@ export class JsonSessionRepository {
   }
 
   async revokeForAccount(accountId: string, revokedAt: string): Promise<number> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const sessions = await this.list();
       let count = 0;
       const next = sessions.map((session) => {

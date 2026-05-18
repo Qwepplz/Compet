@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import { hashPassword } from "../auth/passwordHasher.js";
+import { SerialQueue } from "../storage/serialQueue.js";
 import type { AccountRecord, AccountRole } from "./accountTypes.js";
 import type { JsonAccountRepository } from "./accountRepository.js";
 
@@ -23,15 +24,9 @@ function normalizeSteam64(role: AccountRole, steam64: string | undefined): strin
 }
 
 export class AccountService {
-  private mutationQueue: Promise<unknown> = Promise.resolve();
+  private readonly mutationQueue = new SerialQueue();
 
   constructor(private readonly repository: JsonAccountRepository) {}
-
-  private enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
-    const next = this.mutationQueue.then(run, run);
-    this.mutationQueue = next.catch(() => undefined);
-    return next;
-  }
 
   listAccounts(): Promise<AccountRecord[]> {
     return this.repository.list();
@@ -46,7 +41,7 @@ export class AccountService {
   }
 
   async createAccount(input: CreateAccountInput): Promise<AccountRecord> {
-    return this.enqueueMutation(async () => {
+    return this.mutationQueue.enqueue(async () => {
       if (await this.repository.findByUsername(input.username)) throw new Error("username already exists");
       const now = new Date().toISOString();
       return this.repository.upsert({
@@ -66,7 +61,7 @@ export class AccountService {
   }
 
   async updateAccount(id: string, input: UpdateAccountInput): Promise<AccountRecord> {
-    return this.enqueueMutation(async () => {
+    return this.mutationQueue.enqueue(async () => {
       const account = await this.repository.findById(id);
       if (!account) throw new Error("account not found");
       const nextSteam64 = Object.prototype.hasOwnProperty.call(input, "steam64") ? input.steam64 : account.steam64;
@@ -80,7 +75,7 @@ export class AccountService {
   }
 
   async resetPassword(id: string, password: string): Promise<AccountRecord> {
-    return this.enqueueMutation(async () => {
+    return this.mutationQueue.enqueue(async () => {
       const account = await this.repository.findById(id);
       if (!account) throw new Error("account not found");
       return this.repository.upsert({
@@ -93,7 +88,7 @@ export class AccountService {
   }
 
   async deleteAccount(id: string): Promise<AccountRecord> {
-    return this.enqueueMutation(async () => {
+    return this.mutationQueue.enqueue(async () => {
       const account = await this.repository.findById(id);
       if (!account) throw new Error("account not found");
       if (account.role === "admin") throw new Error("admin account cannot be deleted");
@@ -103,7 +98,7 @@ export class AccountService {
   }
 
   async setPasswordHash(id: string, passwordHash: string, mustChangePassword: boolean): Promise<AccountRecord> {
-    return this.enqueueMutation(async () => {
+    return this.mutationQueue.enqueue(async () => {
       const account = await this.repository.findById(id);
       if (!account) throw new Error("account not found");
       return this.repository.upsert({ ...account, passwordHash, mustChangePassword, updatedAt: new Date().toISOString() });
@@ -111,7 +106,7 @@ export class AccountService {
   }
 
   async markLogin(id: string): Promise<AccountRecord | undefined> {
-    return this.enqueueMutation(async () => {
+    return this.mutationQueue.enqueue(async () => {
       const account = await this.repository.findById(id);
       if (!account) return undefined;
       const now = new Date().toISOString();

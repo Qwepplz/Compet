@@ -1,16 +1,11 @@
 import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
+import { SerialQueue } from "../storage/serialQueue.js";
 import type { AccountRecord, AccountsFile } from "./accountTypes.js";
 
 export class JsonAccountRepository {
-  private writeQueue: Promise<unknown> = Promise.resolve();
+  private readonly writeQueue = new SerialQueue();
 
   private constructor(private readonly filePath: string) {}
-
-  private enqueueWrite<T>(run: () => Promise<T>): Promise<T> {
-    const next = this.writeQueue.then(run, run);
-    this.writeQueue = next.catch(() => undefined);
-    return next;
-  }
 
   static async create(filePath: string): Promise<JsonAccountRepository> {
     await ensureJsonFile<AccountsFile>(filePath, { accounts: [] });
@@ -35,7 +30,7 @@ export class JsonAccountRepository {
   }
 
   async upsert(account: AccountRecord): Promise<AccountRecord> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const accounts = await this.list();
       const index = accounts.findIndex((existing) => existing.id === account.id);
       if (index === -1) accounts.push(account);
@@ -46,7 +41,7 @@ export class JsonAccountRepository {
   }
 
   async deleteById(id: string): Promise<boolean> {
-    return this.enqueueWrite(async () => {
+    return this.writeQueue.enqueue(async () => {
       const accounts = await this.list();
       const next = accounts.filter((account) => account.id !== id);
       if (next.length === accounts.length) return false;
