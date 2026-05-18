@@ -23,7 +23,8 @@ export function mergeTeamsAssignedRoom(
   teamA: PlayerMatchTeamDto,
   teamB: PlayerMatchTeamDto,
 ): PlayerLiveMatchStateDto {
-  const phase = room.phase === "ready" || room.phase === "match_room" ? "match_room" : room.phase;
+  if (room.phase === "ready") return room;
+  const phase = room.phase === "match_room" ? "match_room" : room.phase;
   return { ...room, phase, teamA, teamB };
 }
 

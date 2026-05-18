@@ -14,6 +14,7 @@ export interface MatchParticipant {
   botCategory?: "pro";
   isCaptain?: boolean;
   accountId?: string;
+  identityMasked?: boolean;
 }
 
 export interface MatchTeam {

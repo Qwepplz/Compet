@@ -118,6 +118,7 @@ function mergeTeamSteamProfileData(
   return {
     ...team,
     participants: team.participants.map((participant) => {
+      if (participant.identityMasked) return participant;
       const profile = profileById.get(participant.id);
       return profile ? { ...participant, ...profile } : participant;
     }),
@@ -132,6 +133,7 @@ function mergeTeamKnownPlayerProfiles(
   return {
     ...team,
     participants: team.participants.map((participant) => {
+      if (participant.identityMasked) return participant;
       const profile = participant.accountId ? profileByAccountId.get(participant.accountId) : undefined;
       if (!profile) return participant;
       return {

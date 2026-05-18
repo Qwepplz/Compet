@@ -76,7 +76,13 @@ function vetoPrompt(
   return currentActor.action === "pick" ? "正在等待队长选择地图" : "正在等待队长封禁地图";
 }
 
-function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | "right", accountId: string | undefined) {
+function isReadyAnonymous(phase: string | undefined, participant: PlayerMatchParticipantDto, accountId: string | undefined): boolean {
+  if (phase !== "ready") return false;
+  if (accountId && participant.accountId === accountId) return false;
+  return true;
+}
+
+function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | "right", accountId: string | undefined, phase?: string) {
   if (!team) return null;
 
   return (
@@ -88,17 +94,21 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
       <div className="faceit-player-list">
         {team.participants.map((participant) => {
           const isSelf = Boolean(accountId && participant.accountId === accountId);
+          const anonymous = isReadyAnonymous(phase, participant, accountId);
+          const displayName = anonymous ? "已匹配玩家" : participantName(participant);
+          const avatarLabel = anonymous ? undefined : participantName(participant);
+          const avatarUrl = anonymous ? undefined : participant.steamAvatarUrl;
           return (
             <div className={`faceit-player-card${isSelf ? " faceit-player-card--self" : ""}`} key={participant.id}>
-              <SteamAvatar className="faceit-player-avatar" avatarUrl={participant.steamAvatarUrl} label={participantName(participant)} />
+              <SteamAvatar className="faceit-player-avatar" avatarUrl={avatarUrl} label={avatarLabel} />
               <div className="faceit-player-main">
                 <div className="faceit-player-name-line">
-                  <strong>{participantName(participant)}</strong>
-                  {participant.isCaptain ? (
+                  <strong>{displayName}</strong>
+                  {!anonymous && participant.isCaptain ? (
                     <span className="faceit-captain-badge" aria-label="队长" title="队长">C</span>
                   ) : null}
                 </div>
-                <span>{participantMeta(participant)}</span>
+                <span>{anonymous ? "" : participantMeta(participant)}</span>
               </div>
             </div>
           );
@@ -208,7 +218,7 @@ export function MatchRoomPage({
         </section>
       ) : (
         <div className="faceit-match-grid">
-          {renderTeam(room.teamA, "left", account?.id)}
+          {renderTeam(room.teamA, "left", account?.id, room.phase)}
 
           <main className="faceit-center-panel">
             <div className="faceit-progress-line" />
@@ -340,7 +350,7 @@ export function MatchRoomPage({
             ) : null}
           </main>
 
-          {renderTeam(room.teamB, "right", account?.id)}
+          {renderTeam(room.teamB, "right", account?.id, room.phase)}
         </div>
       )}
     </div>

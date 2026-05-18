@@ -357,10 +357,10 @@ export class MatchmakingService {
       await this.expirePendingInvitationsForParty(party.id);
       this.scheduleReadyTimeout(room);
       await this.emitPartyUpdated(updatedParty);
-      await this.emit({ type: "match_room_created", matchId: room.id, accountIds: this.roomAudience(room), room: this.toPublicRoom(room) }, room.id);
+      await this.emitReadyRoomCreatedPerAccount(room);
       await this.emit(this.toReadyEvent("ready_check_started", room));
       await this.emit(this.toReadyEvent("ready_check_updated", room));
-      return this.toPublicRoom(room);
+      return this.toPlayerPublicRoom(room, ownerAccountId);
     });
   }
 
@@ -418,7 +418,7 @@ export class MatchmakingService {
       };
 
       if (updatedReadyRoom.readyEnteredAccountIds === room.readyEnteredAccountIds && updatedReadyRoom.readyDeadlineAt === room.readyDeadlineAt) {
-        return this.toPublicRoom(room);
+        return this.toPlayerPublicRoom(room, accountId);
       }
 
       const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? updatedReadyRoom : candidate));
@@ -430,7 +430,7 @@ export class MatchmakingService {
         await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
       }
 
-      return this.toPublicRoom(updatedReadyRoom);
+      return this.toPlayerPublicRoom(updatedReadyRoom, accountId);
     });
   }
 
@@ -454,7 +454,7 @@ export class MatchmakingService {
       await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
 
       if (ready.some((entry) => !entry.ready)) {
-        return this.toPublicRoom(updatedReadyRoom);
+        return this.toPlayerPublicRoom(updatedReadyRoom, accountId);
       }
 
       this.clearReadyTimeout(room.id);
@@ -501,7 +501,7 @@ export class MatchmakingService {
     const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
     const rooms = this.pruneTerminalRooms(await this.deps.store.listRooms())
       .filter((room) => this.roomHasAccount(room, accountId))
-      .map((room) => this.toPublicRoom(room));
+      .map((room) => this.toPlayerPublicRoom(room, accountId));
     const party = (await this.deps.store.listParties()).find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
     const partyInvitations = (await this.deps.store.listInvitations()).filter(
       (invitation) => invitation.toAccountId === accountId && invitation.status === "pending",
@@ -736,6 +736,15 @@ export class MatchmakingService {
     this.deps.events?.publish(event);
   }
 
+  private async emitReadyRoomCreatedPerAccount(room: MatchRoomRecord): Promise<void> {
+    for (const accountId of this.roomAudience(room)) {
+      await this.emit(
+        { type: "match_room_created", matchId: room.id, accountIds: [accountId], room: this.toPlayerPublicRoom(room, accountId) },
+        room.id,
+      );
+    }
+  }
+
   private async emitVetoHistory(
     matchId: string,
     previousHistoryLength: number,
@@ -947,6 +956,41 @@ export class MatchmakingService {
     };
   }
 
+  private maskReadyParticipant(participant: MatchParticipant): MatchParticipant {
+    return {
+      id: participant.id,
+      kind: participant.kind,
+      displayName: "已匹配玩家",
+      steam64: undefined,
+      steamPersonaName: undefined,
+      steamAvatarUrl: undefined,
+      isCaptain: false,
+      botCategory: undefined,
+      botProfileName: undefined,
+      accountId: participant.accountId,
+      identityMasked: true,
+    };
+  }
+
+  private toPlayerPublicRoom(room: MatchRoomRecord, viewerAccountId: string): PublicMatchRoomRecord {
+    if (room.phase !== "ready") return this.toPublicRoom(room);
+    return {
+      ...this.toPublicRoom(room),
+      teamA: {
+        ...room.teamA,
+        participants: room.teamA.participants.map((p) =>
+          p.accountId === viewerAccountId ? p : this.maskReadyParticipant(p),
+        ),
+      },
+      teamB: {
+        ...room.teamB,
+        participants: room.teamB.participants.map((p) =>
+          p.accountId === viewerAccountId ? p : this.maskReadyParticipant(p),
+        ),
+      },
+    };
+  }
+
   private toReadyEvent(type: "ready_check_started" | "ready_check_updated", room: MatchRoomRecord): RealtimeEvent {
     return {
       type,
@@ -955,7 +999,12 @@ export class MatchmakingService {
       accountIds: this.roomAudience(room),
       deadlineAt: room.readyDeadlineAt ?? room.createdAt,
       ready: room.ready ?? this.buildReadyStates(this.humanParticipantsForRoom(room)),
-      humanParticipants: this.humanParticipantsForRoom(room),
+      humanParticipants: this.humanParticipantsForRoom(room).map((p) => ({
+        id: p.id,
+        kind: p.kind,
+        displayName: p.displayName,
+        accountId: p.accountId,
+      })),
     };
   }
 
