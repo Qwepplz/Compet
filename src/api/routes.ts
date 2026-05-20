@@ -8,7 +8,6 @@ import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
-import type { VetoAction } from "../matchmaking/vetoService.js";
 import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, unauthorized } from "./httpErrors.js";
 
@@ -49,7 +48,6 @@ const realtimeEventsQuerySchema = z.object({
   afterSeq: z.coerce.number().int().min(0).default(0),
   timeoutMs: z.coerce.number().int().min(0).max(30_000).default(25_000),
 }).default({ afterSeq: 0, timeoutMs: 25_000 });
-const vetoSchema = z.object({ action: z.enum(["ban", "pick"]), map: z.string().min(1) });
 const matchChatSchema = z.object({ text: z.string().trim().min(1).max(300) });
 
 function mapAccountServiceError(error: unknown): never {
@@ -109,7 +107,6 @@ function mapMatchmakingServiceError(error: unknown): never {
     }
     if (
       error.message.includes("is not a member of party") ||
-      error.message.includes("Invalid veto") ||
       error.message.includes("party is full") ||
       error.message.includes("party is not open") ||
       error.message.includes("party matchmaking must use party owner start") ||
@@ -494,19 +491,6 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const { id } = matchRoomParamsSchema.parse(request.params);
     try {
       return { room: await matchmaking.ackReadyRoomEntered(id, auth.account.id) };
-    } catch (error) {
-      mapMatchmakingServiceError(error);
-    }
-  });
-
-  app.post("/match-room/:id/veto", async (request) => {
-    const auth = await authenticateRequest(request, deps);
-    requirePlayer(request);
-    const matchmaking = requireMatchmaking(deps);
-    const { id } = matchRoomParamsSchema.parse(request.params);
-    const input = vetoSchema.parse(request.body);
-    try {
-      return { room: await matchmaking.applyVeto({ roomId: id, accountId: auth.account.id, action: input.action as VetoAction, map: input.map }) };
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

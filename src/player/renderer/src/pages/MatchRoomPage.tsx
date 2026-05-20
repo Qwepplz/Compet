@@ -4,7 +4,7 @@ import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { formatMapName } from "../mapDisplay.js";
-import { isAccountInReadyRoom } from "../matchRoomState.js";
+import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
 import { participantDisplayName } from "../playerDisplay.js";
 
 interface MatchRoomPageProps {
@@ -12,7 +12,6 @@ interface MatchRoomPageProps {
   room: PlayerLiveMatchStateDto | null;
   onAcceptReady?: () => Promise<void>;
   onDeclineReady?: () => Promise<void>;
-  onApplyVeto?: (roomId: string, action: "ban" | "pick", map: string) => Promise<void>;
   onCopyText?: (text: string) => Promise<void>;
 }
 
@@ -34,8 +33,8 @@ function phaseLabel(phase?: PlayerLiveMatchStateDto["phase"]): string {
       return "准备确认";
     case "match_room":
       return "比赛房间";
-    case "map_banpick":
-      return "地图禁选";
+    case "map_randomizing":
+      return "随机地图";
     case "server_prepare":
       return "服务器准备中";
     case "connect":
@@ -65,15 +64,17 @@ function mapThumbClass(map: string): string {
   return `faceit-map-thumb faceit-map-thumb--${map.toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`;
 }
 
-function vetoPrompt(
-  currentActor: NonNullable<PlayerLiveMatchStateDto["veto"]>["current"] | undefined,
-  canApplyCurrentVeto: boolean,
-  isOwnTeamVeto: boolean,
-): string {
-  if (!currentActor) return "等待操作";
-  if (!isOwnTeamVeto) return currentActor.action === "pick" ? "你的对手正在选择地图" : "你的对手正在禁用地图";
-  if (canApplyCurrentVeto) return currentActor.action === "pick" ? "轮到您选择地图" : "轮到您封禁地图";
-  return currentActor.action === "pick" ? "正在等待队长选择地图" : "正在等待队长封禁地图";
+function currentRandomizingMap(mapSelection: PlayerLiveMatchStateDto["mapSelection"], nowMs: number): string | undefined {
+  if (!mapSelection) return undefined;
+  const revealMs = Date.parse(mapSelection.revealAt);
+  const startedMs = Date.parse(mapSelection.startedAt);
+  if (!Number.isFinite(revealMs) || !Number.isFinite(startedMs) || nowMs >= revealMs) return mapSelection.finalMap;
+  const durationMs = Math.max(1, revealMs - startedMs);
+  const elapsedMs = Math.max(0, nowMs - startedMs);
+  const displayReel = mapSelection.reel.slice(0, -1).filter((map) => map !== mapSelection.finalMap);
+  if (displayReel.length === 0) return mapSelection.mapPool.find((map) => map !== mapSelection.finalMap);
+  const index = Math.min(Math.floor((elapsedMs / durationMs) * displayReel.length), displayReel.length - 1);
+  return displayReel[index];
 }
 
 function isReadyAnonymous(phase: string | undefined, participant: PlayerMatchParticipantDto, accountId: string | undefined): boolean {
@@ -123,7 +124,6 @@ export function MatchRoomPage({
   room,
   onAcceptReady,
   onDeclineReady,
-  onApplyVeto,
   onCopyText,
 }: MatchRoomPageProps) {
   const [nowMs, setNowMs] = useState(() => Date.now());
@@ -134,18 +134,12 @@ export function MatchRoomPage({
   }, []);
 
   const connect = room?.connect;
-  const finalMap = room?.veto?.finalMap;
-  const selectedMap = finalMap ?? connect?.map;
-  const currentActor = room?.veto?.current;
+  const selectedMap = getSelectedMap(room, nowMs);
   const accountTeamId = account?.id && room?.teamA?.participants.some((participant) => participant.accountId === account.id)
     ? "teamA"
     : account?.id && room?.teamB?.participants.some((participant) => participant.accountId === account.id)
       ? "teamB"
       : undefined;
-  const isOwnTeamVeto = Boolean(accountTeamId && currentActor?.actorTeamId === accountTeamId);
-  const canApplyCurrentVeto = Boolean(
-    account?.id && currentActor?.actorType === "human" && currentActor.actorAccountId === account.id,
-  );
   const roomPhase = phaseLabel(room?.phase);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
@@ -154,17 +148,6 @@ export function MatchRoomPage({
     [...(room?.teamA?.participants ?? []), ...(room?.teamB?.participants ?? [])]
       .flatMap((participant) => (participant.accountId ? [[participant.accountId, participantName(participant)] as const] : [])),
   );
-  const actorLabel = currentActor
-    ? currentActor.actorAccountId
-      ? participantNames.get(currentActor.actorAccountId) ?? currentActor.actorName
-      : currentActor.actorName
-    : undefined;
-  const teamNameById = new Map([
-    ["teamA", room?.teamA?.name ?? "Team A"],
-    ["teamB", room?.teamB?.name ?? "Team B"],
-  ] as const);
-  const actorTeamName = currentActor ? teamNameById.get(currentActor.actorTeamId) : undefined;
-  const currentVetoPrompt = vetoPrompt(currentActor, canApplyCurrentVeto, isOwnTeamVeto);
 
   async function handleAcceptReady() {
     if (!onAcceptReady || !readyCountdownStarted || readyActionPending) return;
@@ -275,39 +258,11 @@ export function MatchRoomPage({
               </section>
             ) : null}
 
-            {room.phase === "map_banpick" ? (
-              <section className="faceit-connect-panel faceit-veto-panel">
-                <div className="faceit-veto-status">
-                  <strong>{currentVetoPrompt}</strong>
-                  <span>{formatCountdown(currentActor?.deadlineAt, nowMs, 30)}</span>
-                  <small>{actorLabel ? `队长：${actorLabel}${actorTeamName ? ` · ${actorTeamName}` : ""}` : "等待操作"}</small>
-                </div>
-                <div className="faceit-map-pool">
-                  {room.veto?.mapPool.map((map) => {
-                    const actionLabel = currentActor?.action === "pick" ? "PICK" : "BAN";
-                    const isAvailable = room.veto?.availableMaps.includes(map) ?? false;
-                    const historyEntry = room.veto?.history.find((entry) => entry.map === map);
-                    const cardActionLabel = isAvailable ? actionLabel : historyEntry?.action === "pick" ? "PICKED" : "BANNED";
-                    const mapName = formatMapName(map);
-                    return (
-                      <Button
-                        className={`faceit-map-card${isAvailable ? "" : " faceit-map-card--removed"}`}
-                        aria-label={`${cardActionLabel} ${mapName}`}
-                        key={map}
-                        disabled={!onApplyVeto || !canApplyCurrentVeto || !isAvailable}
-                        onClick={() => void onApplyVeto?.(room.id, currentActor?.action ?? "ban", map)}
-                      >
-                        <span className="faceit-map-card-layout">
-                          <span className={mapThumbClass(map)} aria-hidden="true" />
-                          <span className="faceit-map-card-main">
-                            <strong>{mapName}</strong>
-                          </span>
-                          <span className="faceit-map-card-action">{cardActionLabel}</span>
-                        </span>
-                      </Button>
-                    );
-                  })}
-                </div>
+            {room.phase === "map_randomizing" ? (
+              <section className="faceit-connect-panel faceit-map-randomizing-panel" aria-live="polite">
+                <span>{nowMs >= Date.parse(room.mapSelection?.revealAt ?? "") ? "随机完成" : "随机地图中"}</span>
+                <strong>{formatMapName(currentRandomizingMap(room.mapSelection, nowMs) ?? "")}</strong>
+                <small>{nowMs >= Date.parse(room.mapSelection?.revealAt ?? "") ? "本场地图已确定，正在准备服务器。" : "系统正在随机选择本场地图。"}</small>
               </section>
             ) : null}
 

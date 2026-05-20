@@ -51,8 +51,6 @@ export const playerApi = {
   ackMatchRoomEntered: (roomId: string): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:roomEntered", roomId),
   acceptReady: (): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:acceptReady"),
   declineReady: (): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:declineReady"),
-  applyVeto: (roomId: string, action: "ban" | "pick", map: string): Promise<PlayerLiveMatchStateDto> =>
-    invoke("matchmaking:applyVeto", roomId, action, map),
   sendMatchChatMessage: (roomId: string, text: string): Promise<PlayerMatchChatMessageDto> =>
     invoke("matchmaking:sendChatMessage", roomId, text),
   refreshRealtimeSnapshot: (scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto> =>

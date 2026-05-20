@@ -1,7 +1,7 @@
 export type ParticipantKind = "human" | "bot";
 export type TeamSide = "teamA" | "teamB";
 export type GameSide = "t" | "ct";
-export type MatchPhase = "queue" | "ready" | "match_room" | "map_banpick" | "server_prepare" | "connect" | "live" | "completed" | "failed";
+export type MatchPhase = "queue" | "ready" | "match_room" | "map_randomizing" | "server_prepare" | "connect" | "live" | "completed" | "failed";
 
 export interface MatchParticipant {
   id: string;

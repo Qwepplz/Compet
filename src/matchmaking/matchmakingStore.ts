@@ -2,7 +2,6 @@ import path from "node:path";
 import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
 import type { MatchPhase, MatchTeam } from "./types.js";
-import type { VetoState } from "./vetoService.js";
 
 export interface QueueEntry {
   accountId: string;
@@ -48,6 +47,14 @@ export interface MatchChatMessage {
   displayName?: string;
 }
 
+export interface MatchMapSelectionState {
+  mapPool: string[];
+  reel: string[];
+  finalMap: string;
+  startedAt: string;
+  revealAt: string;
+}
+
 export interface MatchRoomRecord {
   id: string;
   phase: MatchPhase;
@@ -59,7 +66,7 @@ export interface MatchRoomRecord {
   readyDeadlineAt?: string;
   readyEnteredAccountIds?: string[];
   partyId?: string;
-  veto?: VetoState;
+  mapSelection?: MatchMapSelectionState;
   connect?: MatchConnectInfo;
   chat?: MatchChatMessage[];
   createdAt: string;

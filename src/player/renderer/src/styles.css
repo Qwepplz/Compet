@@ -946,36 +946,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 10px;
 }
 
-.faceit-veto-panel {
-  gap: 10px;
-}
-
-.faceit-veto-status {
-  display: grid;
-  gap: 5px;
-  justify-items: center;
-  padding: 0 0 2px;
-  text-align: center;
-}
-
-.faceit-veto-status strong {
-  color: #fff;
-  font-size: 14px;
-  font-weight: 900;
-}
-
-.faceit-veto-status span {
-  color: #cfcfcf;
-  font-size: 20px;
-  font-weight: 900;
-  line-height: 1;
-}
-
-.faceit-veto-status small {
-  color: #8b8b8b;
-  font-size: 11px;
-}
-
 .faceit-map-card.ant-btn {
   height: auto;
   min-height: 38px;

@@ -1,5 +1,4 @@
 import type { AccountView } from "../../manager/shared/types.js";
-import type { VetoAction } from "../../matchmaking/vetoService.js";
 import { requestJson } from "../../shared/httpJsonClient.js";
 import type {
   PlayerFriendDto,
@@ -235,15 +234,6 @@ export class PlayerApiClient {
       "matchmaking.declineReady",
       {},
       () => this.request("POST", "/matchmaking/ready/decline", {}),
-    );
-    return response.room;
-  }
-
-  async applyVeto(roomId: string, action: VetoAction, map: string): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
-      "matchRoom.applyVeto",
-      { roomId, action, map },
-      () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/veto`, { action, map }),
     );
     return response.room;
   }

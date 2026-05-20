@@ -20,9 +20,7 @@ export class MatchRecordStore {
     return readJsonFile<MatchPlan>(this.matchFile(matchId, "plan.json"));
   }
 
-  async saveVeto(matchId: string, veto: unknown): Promise<void> {
-    await this.saveMatchFile(matchId, "veto.json", veto);
-  }
+  
 
   async saveServer(matchId: string, server: unknown): Promise<void> {
     await this.saveMatchFile(matchId, "server.json", server);

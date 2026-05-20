@@ -237,11 +237,6 @@ export function createPreviewPlayerApi() {
       publishSnapshot();
       return room;
     },
-    applyVeto: async (): Promise<PlayerLiveMatchStateDto> => {
-      const nextParty = ensureParty();
-      room = room ?? makeReadyRoom(nextParty);
-      return room;
-    },
     sendMatchChatMessage: async (_roomId: string, text: string): Promise<PlayerMatchChatMessageDto> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);

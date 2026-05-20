@@ -11,26 +11,17 @@ import type { MatchParticipant, MatchPlan } from "./types.js";
 import {
   MatchmakingStore,
   type MatchChatMessage,
+  type MatchMapSelectionState,
   type MatchRoomReadyState,
   type MatchRoomRecord,
   type PartyInvitationRecord,
   type PartyRecord,
   type QueueEntry,
 } from "./matchmakingStore.js";
-import {
-  BOT_AUTO_VETO_WINDOW_MS,
-  VETO_STEP_MS,
-  applyVetoAction,
-  applyVetoTimeout,
-  createVetoState,
-  normalizeVetoState,
-  toPublicVetoState,
-  type PublicVetoState,
-  type VetoAction,
-  type VetoHistoryEntry,
-} from "./vetoService.js";
 
 const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "de_dust2", "de_ancient", "de_anubis"];
+const MAP_RANDOMIZATION_MS = 3_000;
+const MAP_RANDOMIZATION_REEL_LENGTH = 20;
 const MAX_PARTY_HUMANS = 10;
 const READY_TIMEOUT_MS = 60_000;
 const MAX_MATCH_CHAT_MESSAGES = 100;
@@ -81,7 +72,7 @@ export interface PublicMatchRoomRecord {
   ready?: MatchRoomReadyState[];
   readyDeadlineAt?: string;
   partyId?: string;
-  veto?: PublicVetoState;
+  mapSelection?: MatchMapSelectionState;
   connect?: MatchConnectInfo;
   chat?: MatchChatMessage[];
   createdAt: string;
@@ -95,7 +86,7 @@ export class MatchmakingService {
   private readonly clearTimeoutFn: ReadyTimeoutCanceler;
   private readonly unrefReadyTimeouts: boolean;
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
-  private readonly vetoTimeouts = new Map<string, ReadyTimeoutHandle>();
+  private readonly mapSelectionTimeouts = new Map<string, ReadyTimeoutHandle>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: MatchmakingServiceDeps) {
@@ -458,16 +449,32 @@ export class MatchmakingService {
       }
 
       this.clearReadyTimeout(room.id);
-      const initialVeto = this.createInitialVetoState(updatedReadyRoom);
-      const matchRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "map_banpick", veto: initialVeto };
-      const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? matchRoom : candidate));
-      const audience = this.roomAudience(matchRoom);
+
+      let mapSelection: MatchMapSelectionState;
+      try {
+        mapSelection = this.buildMapSelection(acceptedAt);
+      } catch {
+        const failedAt = this.now();
+        const failedRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "failed", terminalStateAt: failedAt };
+        await this.deps.store.saveRooms(updatedRooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate)));
+        await this.unlockPartyForRoom(failedRoom, failedAt);
+        await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: "map pool is empty" }, room.id);
+        return this.toPublicRoom(failedRoom);
+      }
+
+      const randomizingRoom: MatchRoomRecord = {
+        ...updatedReadyRoom,
+        phase: "map_randomizing",
+        mapSelection,
+      };
+      const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
+      const audience = this.roomAudience(randomizingRoom);
       await this.deps.store.saveRooms(finalizedRooms);
-      this.scheduleVetoTimeout(matchRoom);
-      await this.emit({ type: "match_room_created", matchId: matchRoom.id, accountIds: audience, room: this.toPublicRoom(matchRoom) }, matchRoom.id);
-      await this.emit({ type: "teams_assigned", matchId: matchRoom.id, accountIds: audience, teamA: matchRoom.teamA, teamB: matchRoom.teamB }, matchRoom.id);
-      await this.emit({ type: "veto_started", matchId: matchRoom.id, accountIds: audience, veto: toPublicVetoState(initialVeto)! }, matchRoom.id);
-      return initialVeto.finalMap ? this.toPublicRoom(await this.saveRoomAfterVeto(finalizedRooms, matchRoom)) : this.toPublicRoom(matchRoom);
+      this.scheduleMapSelectionReveal(randomizingRoom);
+      await this.emit({ type: "match_room_created", matchId: randomizingRoom.id, accountIds: audience, room: this.toPublicRoom(randomizingRoom) }, randomizingRoom.id);
+      await this.emit({ type: "teams_assigned", matchId: randomizingRoom.id, accountIds: audience, teamA: randomizingRoom.teamA, teamB: randomizingRoom.teamB }, randomizingRoom.id);
+      await this.emit({ type: "map_randomizing_started", matchId: randomizingRoom.id, accountIds: audience, mapSelection }, randomizingRoom.id);
+      return this.toPublicRoom(randomizingRoom);
     });
   }
 
@@ -509,26 +516,7 @@ export class MatchmakingService {
     return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms) };
   }
 
-  applyVeto(input: { roomId: string; accountId: string; action: VetoAction; map: string }): Promise<PublicMatchRoomRecord> {
-    return this.enqueueMutation(async () => {
-      await this.requireAccount(input.accountId);
-      const rooms = await this.deps.store.listRooms();
-      const room = rooms.find((candidate) => candidate.id === input.roomId);
-      if (!room) throw new Error(`room not found: ${input.roomId}`);
-
-      const started = !room.veto;
-      const veto = normalizeVetoState(room.veto ?? this.createInitialVetoState(room));
-      const previousHistoryLength = veto.history.length;
-      const updatedVeto = applyVetoAction(veto, { action: input.action, map: input.map, actorAccountId: input.accountId, now: this.now() });
-      const updated: MatchRoomRecord = { ...room, phase: "map_banpick", veto: updatedVeto };
-
-      if (started) {
-        await this.emit({ type: "veto_started", matchId: room.id, accountIds: this.roomAudience(room), veto: toPublicVetoState(veto)! }, room.id);
-      }
-      await this.emitVetoHistory(room.id, previousHistoryLength, updatedVeto.history, this.roomAudience(updated), toPublicVetoState(updatedVeto)!);
-      return this.toPublicRoom(await this.saveRoomAfterVeto(rooms, updated));
-    });
-  }
+  
 
   sendMatchChatMessage(input: { roomId: string; accountId: string; text: string }): Promise<MatchChatMessage> {
     return this.enqueueMutation(async () => {
@@ -560,31 +548,7 @@ export class MatchmakingService {
     });
   }
 
-  applyVetoTimeoutsUntilFinal(roomId: string): Promise<PublicMatchRoomRecord> {
-    return this.enqueueMutation(async () => {
-      const rooms = await this.deps.store.listRooms();
-      const room = rooms.find((candidate) => candidate.id === roomId);
-      if (!room) throw new Error(`room not found: ${roomId}`);
-
-      const started = !room.veto;
-      const veto = normalizeVetoState(room.veto ?? this.createInitialVetoState(room));
-      const previousHistoryLength = veto.history.length;
-      let updated: MatchRoomRecord = { ...room, phase: "map_banpick", veto };
-      while (updated.veto?.current) {
-        if (updated.veto.current.actorType === "human") {
-          break;
-        }
-        const timeoutAt = new Date(Date.parse(updated.veto.current.deadlineAt) + 1).toISOString();
-        updated = { ...updated, phase: "map_banpick", veto: applyVetoTimeout(updated.veto, { now: timeoutAt, random: this.random }) };
-      }
-
-      if (started) {
-        await this.emit({ type: "veto_started", matchId: room.id, accountIds: this.roomAudience(room), veto: toPublicVetoState(veto)! }, room.id);
-      }
-      await this.emitVetoHistory(room.id, previousHistoryLength, updated.veto?.history ?? [], this.roomAudience(updated), toPublicVetoState(updated.veto));
-      return this.toPublicRoom(await this.saveRoomAfterVeto(rooms, updated));
-    });
-  }
+  
 
   completeMatchFromServerExit(matchId: string, exitInfo: GameServerExitInfo): Promise<PublicMatchRoomRecord | undefined> {
     return this.enqueueMutation(async () => {
@@ -622,22 +586,6 @@ export class MatchmakingService {
       }
 
       return [...completedById.values()].map((room) => this.toPublicRoom(room));
-    });
-  }
-
-  private expireVeto(roomId: string, timeoutAt: string, allowEarlyBot = false): Promise<PublicMatchRoomRecord> {
-    return this.enqueueMutation(async () => {
-      const rooms = await this.deps.store.listRooms();
-      const room = rooms.find((candidate) => candidate.id === roomId);
-      if (!room?.veto?.current) throw new Error(`veto room not found: ${roomId}`);
-
-      const veto = normalizeVetoState(room.veto);
-      const previousHistoryLength = veto.history.length;
-      const updatedVeto = applyVetoTimeout(veto, { now: timeoutAt, random: this.random, allowEarlyBot });
-      const updated: MatchRoomRecord = { ...room, phase: "map_banpick", veto: updatedVeto };
-
-      await this.emitVetoHistory(room.id, previousHistoryLength, updatedVeto.history, this.roomAudience(updated), toPublicVetoState(updatedVeto)!);
-      return this.toPublicRoom(await this.saveRoomAfterVeto(rooms, updated));
     });
   }
 
@@ -714,16 +662,7 @@ export class MatchmakingService {
     return next;
   }
 
-  private createInitialVetoState(room: MatchRoomRecord) {
-    return createVetoState({
-      matchId: room.id,
-      mapPool: this.deps.mapPool ?? DEFAULT_MAP_POOL,
-      teamA: room.teamA,
-      teamB: room.teamB,
-      now: this.now(),
-      random: this.random,
-    });
-  }
+  
 
   private async emit(event: RealtimeEvent, matchId?: string): Promise<void> {
     if (matchId) {
@@ -745,35 +684,21 @@ export class MatchmakingService {
     }
   }
 
-  private async emitVetoHistory(
-    matchId: string,
-    previousHistoryLength: number,
-    history: VetoHistoryEntry[],
-    accountIds: string[],
-    veto: PublicVetoState | undefined,
-  ): Promise<void> {
-    for (const entry of history.slice(previousHistoryLength)) {
-      await this.emit({ type: entry.action === "pick" ? "map_picked" : "map_banned", matchId, accountIds, entry, veto }, matchId);
-    }
-  }
+  
 
-  private async saveRoomAfterVeto(rooms: MatchRoomRecord[], room: MatchRoomRecord): Promise<MatchRoomRecord> {
-    if (!room.veto?.finalMap) {
-      await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? room : candidate)));
-      this.scheduleVetoTimeout(room);
-      return room;
-    }
+  
 
+  private async saveRoomAfterMapSelected(rooms: MatchRoomRecord[], room: MatchRoomRecord, finalMap: string): Promise<MatchRoomRecord> {
     if (rooms.some((candidate) => candidate.id !== room.id && isServerManagedPhase(candidate.phase))) {
       return this.failRoomBecauseGameServerActive(rooms, room);
     }
 
-    this.clearVetoTimeout(room.id);
+    this.clearMapSelectionTimeout(room.id);
     const preparing: MatchRoomRecord = { ...room, phase: "server_prepare", connect: undefined };
     await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? preparing : candidate)));
     await this.emit({ type: "server_preparing", matchId: room.id, accountIds: this.roomAudience(preparing) }, room.id);
 
-    const plan = this.buildMatchPlan(preparing, room.veto.finalMap);
+    const plan = this.buildMatchPlan(preparing, finalMap);
     await this.deps.records?.saveMatchPlan(plan);
 
     if (!this.deps.executor) {
@@ -866,28 +791,7 @@ export class MatchmakingService {
     this.readyTimeouts.set(room.id, timeout);
   }
 
-  private scheduleVetoTimeout(room: MatchRoomRecord): void {
-    const current = room.veto?.current;
-    if (!current) {
-      this.clearVetoTimeout(room.id);
-      return;
-    }
-
-    this.clearVetoTimeout(room.id);
-    const nowMs = Date.parse(this.now());
-    const deadlineMs = Date.parse(current.deadlineAt);
-    const allowEarlyBot = current.actorType === "bot";
-    const botWindowStartMs = deadlineMs - VETO_STEP_MS;
-    const botActionMs = botWindowStartMs + Math.floor((this.random ?? Math.random)() * BOT_AUTO_VETO_WINDOW_MS);
-    const actionAtMs = allowEarlyBot ? Math.min(deadlineMs, Math.max(nowMs, botActionMs)) : deadlineMs + 1;
-    const timeoutMs = Math.max(0, actionAtMs - nowMs);
-    const timeoutAt = new Date(actionAtMs).toISOString();
-    const timeout = this.setTimeoutFn(() => {
-      void this.expireVeto(room.id, timeoutAt, allowEarlyBot).catch(() => undefined);
-    }, timeoutMs);
-    if (this.unrefReadyTimeouts) timeout.unref?.();
-    this.vetoTimeouts.set(room.id, timeout);
-  }
+  
 
   private clearReadyTimeout(roomId: string): void {
     const timeout = this.readyTimeouts.get(roomId);
@@ -896,12 +800,7 @@ export class MatchmakingService {
     this.readyTimeouts.delete(roomId);
   }
 
-  private clearVetoTimeout(roomId: string): void {
-    const timeout = this.vetoTimeouts.get(roomId);
-    if (!timeout) return;
-    this.clearTimeoutFn(timeout);
-    this.vetoTimeouts.delete(roomId);
-  }
+  
 
   private humanParticipantsForRoom(room: MatchRoomRecord): MatchParticipant[] {
     const audience = new Set(this.roomAudience(room));
@@ -916,6 +815,71 @@ export class MatchmakingService {
     return [...room.teamA.participants, ...room.teamB.participants]
       .filter((participant) => participant.kind === "human" && participant.accountId)
       .map((participant) => participant.accountId as string);
+  }
+
+  private getMapPool(): string[] {
+    const mapPool = this.deps.mapPool ?? DEFAULT_MAP_POOL;
+    const normalized = mapPool.map((map) => map.trim()).filter(Boolean);
+    if (normalized.length === 0) throw new Error("map pool is empty");
+    return normalized;
+  }
+
+  private chooseRandomIndex(length: number): number {
+    if (length <= 0) throw new Error("cannot choose from empty list");
+    const random = this.random ?? Math.random;
+    return Math.min(Math.floor(random() * length), length - 1);
+  }
+
+  private buildMapSelection(startedAt: string): MatchMapSelectionState {
+    const mapPool = this.getMapPool();
+    const finalMap = mapPool[this.chooseRandomIndex(mapPool.length)]!;
+    const nonFinalPool = mapPool.filter((map) => map !== finalMap);
+    const reelPool = nonFinalPool.length > 0 ? nonFinalPool : mapPool;
+    const reel: string[] = [];
+    while (reel.length < MAP_RANDOMIZATION_REEL_LENGTH - 1) {
+      reel.push(reelPool[this.chooseRandomIndex(reelPool.length)]!);
+    }
+    reel.push(finalMap);
+    return {
+      mapPool: mapPool.slice(),
+      reel,
+      finalMap,
+      startedAt,
+      revealAt: new Date(Date.parse(startedAt) + MAP_RANDOMIZATION_MS).toISOString(),
+    };
+  }
+
+  private scheduleMapSelectionReveal(room: MatchRoomRecord): void {
+    const revealAt = room.mapSelection?.revealAt;
+    if (room.phase !== "map_randomizing" || !revealAt) return;
+
+    const revealMs = Date.parse(revealAt);
+    const nowMs = Date.parse(this.now());
+    if (!Number.isFinite(revealMs) || !Number.isFinite(nowMs)) return;
+
+    this.clearMapSelectionTimeout(room.id);
+    const timeout = this.setTimeoutFn(() => {
+      void this.revealSelectedMap(room.id, revealAt).catch(() => undefined);
+    }, Math.max(0, revealMs - nowMs));
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.mapSelectionTimeouts.set(room.id, timeout);
+  }
+
+  private clearMapSelectionTimeout(roomId: string): void {
+    const timeout = this.mapSelectionTimeouts.get(roomId);
+    if (!timeout) return;
+    this.clearTimeoutFn(timeout);
+    this.mapSelectionTimeouts.delete(roomId);
+  }
+
+  private revealSelectedMap(roomId: string, expectedRevealAt: string): Promise<PublicMatchRoomRecord> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.id === roomId);
+      if (!room || room.phase !== "map_randomizing" || !room.mapSelection) throw new Error(`map randomizing room not found: ${roomId}`);
+      if (room.mapSelection.revealAt !== expectedRevealAt) return this.toPublicRoom(room);
+      return this.toPublicRoom(await this.saveRoomAfterMapSelected(rooms, room, room.mapSelection.finalMap));
+    });
   }
 
   private trimMatchChat(chat: MatchChatMessage[] | undefined): MatchChatMessage[] | undefined {
@@ -949,7 +913,15 @@ export class MatchmakingService {
       ready: room.ready?.map((entry) => ({ ...entry })),
       readyDeadlineAt: room.readyDeadlineAt,
       partyId: room.partyId,
-      veto: toPublicVetoState(room.veto),
+      mapSelection: room.mapSelection
+        ? {
+            mapPool: room.mapSelection.mapPool.slice(),
+            reel: room.mapSelection.reel.slice(),
+            finalMap: room.mapSelection.finalMap,
+            startedAt: room.mapSelection.startedAt,
+            revealAt: room.mapSelection.revealAt,
+          }
+        : undefined,
       connect: room.connect ? { ...room.connect } : undefined,
       chat: this.trimMatchChat(room.chat)?.map((message) => ({ ...message })),
       createdAt: room.createdAt,
@@ -1021,7 +993,7 @@ export class MatchmakingService {
     const reason = "game server is already active";
     const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
     this.clearReadyTimeout(room.id);
-    this.clearVetoTimeout(room.id);
+    this.clearMapSelectionTimeout(room.id);
 
     const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
     await this.deps.store.saveRooms(updatedRooms);

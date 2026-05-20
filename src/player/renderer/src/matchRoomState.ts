@@ -1,8 +1,5 @@
 import type { PlayerLiveMatchStateDto, PlayerMatchmakingStateDto, PlayerMatchTeamDto } from "../../shared/types.js";
 
-const VETO_STEP_MS = 30_000;
-const BOT_AUTO_VETO_WINDOW_MS = 10_000;
-
 export function isTerminalMatchPhase(phase: PlayerLiveMatchStateDto["phase"] | undefined): boolean {
   return phase === "completed" || phase === "failed";
 }
@@ -56,20 +53,10 @@ export function isAccountInReadyRoom(room: PlayerLiveMatchStateDto | null, accou
     .some((participant) => participant.kind === "human" && participant.accountId === accountId);
 }
 
-export function getVetoDeadlineRefreshDelayMs(
-  room: PlayerLiveMatchStateDto | null,
-  nowMs: number,
-  graceMs = 1_500,
-): number | null {
-  if (!room || room.phase !== "map_banpick" || room.veto?.finalMap || !room.veto?.current) {
-    return null;
-  }
-  const deadlineMs = Date.parse(room.veto.current.deadlineAt);
-  if (!Number.isFinite(deadlineMs)) {
-    return null;
-  }
-  const refreshAtMs = room.veto.current.actorType === "bot"
-    ? Math.min(deadlineMs, deadlineMs - VETO_STEP_MS + BOT_AUTO_VETO_WINDOW_MS)
-    : deadlineMs;
-  return Math.max(0, refreshAtMs + graceMs - nowMs);
+export function getSelectedMap(room: PlayerLiveMatchStateDto | null, nowMs: number): string | undefined {
+  const revealMs = Date.parse(room?.mapSelection?.revealAt ?? "");
+  const revealedRandomMap = room?.mapSelection && Number.isFinite(revealMs) && nowMs >= revealMs
+    ? room.mapSelection.finalMap
+    : undefined;
+  return revealedRandomMap ?? room?.connect?.map;
 }

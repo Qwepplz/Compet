@@ -410,10 +410,7 @@ function sanitizeRealtimeEvent(message: unknown): PlayerRealtimeEvent | undefine
     case "ready_check_updated":
     case "match_room_created":
     case "teams_assigned":
-    case "veto_started":
-    case "veto_tick":
-    case "map_banned":
-    case "map_picked":
+    case "map_randomizing_started":
     case "match_chat_message":
     case "server_preparing":
     case "connect_ready":

@@ -19,12 +19,6 @@ export type RealtimeCommand =
   | {
       type: "command";
       commandId: string;
-      name: "matchRoom.applyVeto";
-      payload: { roomId: string; action: "ban" | "pick"; map: string };
-    }
-  | {
-      type: "command";
-      commandId: string;
       name: "matchRoom.sendChatMessage";
       payload: { roomId: string; text: string };
     };
@@ -64,7 +58,6 @@ export interface RealtimeCommandMatchmaking {
   acceptReady(accountId: string): Promise<unknown>;
   declineReady(accountId: string): Promise<unknown>;
   ackReadyRoomEntered(roomId: string, accountId: string): Promise<unknown>;
-  applyVeto(input: { roomId: string; accountId: string; action: "ban" | "pick"; map: string }): Promise<unknown>;
   sendMatchChatMessage(input: { roomId: string; accountId: string; text: string }): Promise<unknown>;
 }
 
@@ -103,12 +96,6 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
     case "matchRoom.entered":
       return typeof payload.roomId === "string"
         ? { type: "command", commandId: record.commandId, name: record.name, payload: { roomId: payload.roomId } }
-        : undefined;
-    case "matchRoom.applyVeto":
-      return typeof payload.roomId === "string"
-        && (payload.action === "ban" || payload.action === "pick")
-        && typeof payload.map === "string"
-        ? { type: "command", commandId: record.commandId, name: record.name, payload: { roomId: payload.roomId, action: payload.action, map: payload.map } }
         : undefined;
     case "matchRoom.sendChatMessage":
       return typeof payload.roomId === "string" && typeof payload.text === "string"
@@ -172,14 +159,6 @@ export async function executeRealtimeCommand(
           commandId: command.commandId,
           ok: true,
           result: { room: await matchmaking.ackReadyRoomEntered(command.payload.roomId, accountId) },
-        };
-      case "matchRoom.applyVeto":
-        if (!matchmaking) return commandUnavailable(command.commandId);
-        return {
-          type: "command_ack",
-          commandId: command.commandId,
-          ok: true,
-          result: { room: await matchmaking.applyVeto({ roomId: command.payload.roomId, accountId, action: command.payload.action, map: command.payload.map }) },
         };
       case "matchRoom.sendChatMessage":
         if (!matchmaking) return commandUnavailable(command.commandId);

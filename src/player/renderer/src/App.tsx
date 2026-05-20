@@ -28,7 +28,6 @@ import { SteamAvatar } from "./components/SteamAvatar.js";
 import {
   getActiveMatchRoom,
   getDisplayedMatchRoom,
-  getVetoDeadlineRefreshDelayMs,
   isAccountInReadyRoom,
   isTerminalMatchPhase,
   mergeReadyRoomProgress,
@@ -58,9 +57,6 @@ type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steam
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
-const VETO_DEADLINE_REFRESH_GRACE_MS = 1_500;
-const VETO_DEADLINE_REFRESH_RETRY_MS = 2_000;
-const VETO_DEADLINE_REFRESH_MAX_ATTEMPTS = 8;
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
 
 function getCurrentRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
@@ -306,42 +302,6 @@ export function App() {
     };
   }, [account, realtimeApi]);
 
-  useEffect(() => {
-    if (!account || !realtimeApi || !currentRoom) return;
-    const initialDelay = getVetoDeadlineRefreshDelayMs(currentRoom, Date.now(), VETO_DEADLINE_REFRESH_GRACE_MS);
-    if (initialDelay === null) return;
-
-    let cancelled = false;
-    let attempts = 0;
-    let retryTimer: number | undefined;
-
-    const refreshExpiredVeto = () => {
-      if (cancelled) return;
-      attempts += 1;
-      void hydrateRealtimeState("matchmaking").finally(() => {
-        if (!cancelled && attempts < VETO_DEADLINE_REFRESH_MAX_ATTEMPTS) {
-          retryTimer = window.setTimeout(refreshExpiredVeto, VETO_DEADLINE_REFRESH_RETRY_MS);
-        }
-      });
-    };
-
-    const initialTimer = window.setTimeout(refreshExpiredVeto, initialDelay);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(initialTimer);
-      if (retryTimer) {
-        window.clearTimeout(retryTimer);
-      }
-    };
-  }, [
-    account,
-    currentRoom?.id,
-    currentRoom?.phase,
-    currentRoom?.veto?.current?.deadlineAt,
-    currentRoom?.veto?.history.length,
-    currentRoom?.veto?.finalMap,
-    realtimeApi,
-  ]);
 
   useEffect(() => {
     if (!account || !realtimeApi || activeView !== "match-room" || currentRoom?.phase !== "ready") return;
@@ -640,59 +600,11 @@ export function App() {
       case "teams_assigned":
         updateCurrentRoom(event.matchId, (room) => mergeTeamsAssignedRoom(room, event.teamA, event.teamB));
         return;
-      case "veto_started":
+      case "map_randomizing_started":
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
-          phase: "map_banpick",
-          veto: event.veto,
-        }));
-        return;
-      case "veto_tick":
-        updateCurrentRoom(event.matchId, (room) => ({
-          ...room,
-          phase: "map_banpick",
-          veto: room.veto
-            ? {
-                ...room.veto,
-                current: room.veto.current
-                  ? {
-                      ...room.veto.current,
-                      deadlineAt: event.deadlineAt,
-                    }
-                  : room.veto.current,
-              }
-            : room.veto,
-        }));
-        return;
-      case "map_banned":
-        updateCurrentRoom(event.matchId, (room) => ({
-          ...room,
-          phase: "map_banpick",
-          veto: event.veto ?? (room.veto
-            ? {
-                ...room.veto,
-                history: room.veto.history.some((entry) => entry.at === event.entry.at && entry.map === event.entry.map && entry.action === event.entry.action)
-                  ? room.veto.history
-                  : [...room.veto.history, event.entry],
-                availableMaps: room.veto.availableMaps.filter((map) => map !== event.entry.map),
-              }
-            : room.veto),
-        }));
-        return;
-      case "map_picked":
-        updateCurrentRoom(event.matchId, (room) => ({
-          ...room,
-          phase: "map_banpick",
-          veto: event.veto ?? (room.veto
-            ? {
-                ...room.veto,
-                history: room.veto.history.some((entry) => entry.at === event.entry.at && entry.map === event.entry.map && entry.action === event.entry.action)
-                  ? room.veto.history
-                  : [...room.veto.history, event.entry],
-                availableMaps: room.veto.availableMaps.filter((map) => map !== event.entry.map),
-                finalMap: event.entry.map,
-              }
-            : room.veto),
+          phase: "map_randomizing",
+          mapSelection: event.mapSelection,
         }));
         return;
       case "match_chat_message":
@@ -1079,12 +991,6 @@ export function App() {
     await hydrateRealtimeState("matchmaking");
   }
 
-  async function applyVeto(roomId: string, action: "ban" | "pick", map: string) {
-    if (!matchRoomApi) return;
-    const nextRoom = await matchRoomApi.applyVeto(roomId, action, map);
-    updateCurrentRoom(nextRoom.id, () => nextRoom);
-  }
-
   async function sendMatchChatMessage(roomId: string, text: string) {
     if (!matchRoomApi) return;
     const chatMessage = await matchRoomApi.sendMatchChatMessage(roomId, text);
@@ -1105,7 +1011,6 @@ export function App() {
           room={currentRoomWithKnownProfiles}
           onAcceptReady={() => acceptReady()}
           onDeclineReady={() => declineReady()}
-          onApplyVeto={(roomId, action, map) => applyVeto(roomId, action, map)}
           onCopyText={(text) => copyText(text)}
         />
       );

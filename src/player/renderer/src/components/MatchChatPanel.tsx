@@ -3,9 +3,7 @@ import { Button, Input, message as toast } from "antd";
 import type {
   PlayerLiveMatchStateDto,
   PlayerMatchChatMessageDto,
-  PlayerVetoHistoryEntryDto,
 } from "../../../shared/types.js";
-import { formatMapName } from "../mapDisplay.js";
 
 interface MatchChatPanelProps {
   accountId: string;
@@ -27,9 +25,7 @@ export function MatchChatPanel({ accountId, room, onSendMessage }: MatchChatPane
   const [sending, setSending] = useState(false);
   const messagesRef = useRef<HTMLDivElement | null>(null);
   const items = useMemo(() => {
-    const chatItems = (room.chat ?? []).map((message) => chatMessageToItem(room, message));
-    const vetoItems = (room.veto?.history ?? []).map((entry, index) => vetoEntryToItem(room, entry, index));
-    return [...chatItems, ...vetoItems].sort((left, right) => Date.parse(left.createdAt) - Date.parse(right.createdAt));
+    return (room.chat ?? []).map((message) => chatMessageToItem(room, message));
   }, [room]);
 
   useEffect(() => {
@@ -104,17 +100,6 @@ function steamNameForAccount(room: PlayerLiveMatchStateDto, accountId?: string):
   if (!accountId) return undefined;
   const participant = [...room.teamA.participants, ...room.teamB.participants].find((candidate) => candidate.accountId === accountId);
   return participant?.steamPersonaName?.trim() || participant?.steam64?.trim() || undefined;
-}
-
-function vetoEntryToItem(room: PlayerLiveMatchStateDto, entry: PlayerVetoHistoryEntryDto, index: number): ChatItem {
-  const teamName = entry.actorTeamId === "teamA" ? room.teamA.name : room.teamB.name;
-  const actionText = entry.action === "pick" ? "选择了" : "禁用了";
-  return {
-    id: `veto:${entry.at}:${entry.map}:${entry.action}:${index}`,
-    kind: "system",
-    text: `${teamName} ${actionText} ${formatMapName(entry.map)}`,
-    createdAt: entry.at,
-  };
 }
 
 function formatTime(value: string): string {
