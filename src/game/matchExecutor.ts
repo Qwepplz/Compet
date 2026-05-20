@@ -236,13 +236,47 @@ async function removeGet5AutoloadCfg(serverRoot: string): Promise<void> {
 }
 
 function findBundledSourceModAsset(fileName: string): string | undefined {
-  const candidates = [
-    path.join(process.cwd(), "sourcemod", fileName),
-    path.join(process.cwd(), "..", "sourcemod", fileName),
-    path.join(process.cwd(), "src", "sourcemod", fileName),
-    path.join(__dirname, "..", "sourcemod", fileName),
-  ];
+  const candidates = buildSourceModAssetCandidates(fileName);
   return candidates.find((candidate) => existsSync(candidate));
+}
+
+function buildSourceModAssetCandidates(fileName: string): string[] {
+  const cjsModuleDir = typeof __dirname === "string" ? __dirname : undefined;
+  const baseDirs = [
+    process.cwd(),
+    process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : undefined,
+    cjsModuleDir,
+  ];
+  const candidates: string[] = [];
+  const seen = new Set<string>();
+
+  const addCandidate = (candidate: string): void => {
+    const normalized = path.normalize(candidate);
+    if (seen.has(normalized)) return;
+    seen.add(normalized);
+    candidates.push(normalized);
+  };
+
+  for (const baseDir of baseDirs) {
+    if (!baseDir) continue;
+    for (const dir of getAncestorDirs(path.resolve(baseDir))) {
+      addCandidate(path.join(dir, "sourcemod", fileName));
+      addCandidate(path.join(dir, "src", "sourcemod", fileName));
+    }
+  }
+
+  return candidates;
+}
+
+function getAncestorDirs(startDir: string): string[] {
+  const dirs: string[] = [];
+  let current = startDir;
+  while (true) {
+    dirs.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) return dirs;
+    current = parent;
+  }
 }
 
 function buildNoRandomBotsCfg(): string {

@@ -5,6 +5,7 @@ $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Client"
 $appRoot = Join-Path $stage "resources\app"
 $archive = Join-Path $artifacts "Compet-Client.7z"
+$archiveTmp = "$archive.tmp"
 $supersededZip = Join-Path $artifacts "Compet-Client.zip"
 $supersededTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
@@ -94,6 +95,12 @@ function New-Validated7zArchive {
     [Parameter(Mandatory = $true)][string[]]$RequiredEntries
   )
 
+  Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath "$ArchivePath.tmp" -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $ArchivePath) {
+    throw "Unable to remove stale archive before packaging: $ArchivePath"
+  }
+
   $stageFileCount = (Get-ChildItem -LiteralPath $SourceDir -Recurse -File | Measure-Object).Count
   if ($stageFileCount -lt $RequiredEntries.Count) {
     throw "Stage directory is missing expected files: $SourceDir"
@@ -131,6 +138,7 @@ function New-Validated7zArchive {
     }
   } catch {
     Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath "$ArchivePath.tmp" -Force -ErrorAction SilentlyContinue
     throw
   }
 }
@@ -139,6 +147,11 @@ function Remove-UnusedElectronFiles {
   param(
     [Parameter(Mandatory = $true)][string]$RootDir
   )
+
+  Get-ChildItem -LiteralPath $RootDir -File -Filter "*.log" -ErrorAction SilentlyContinue |
+    Remove-Item -Force
+
+  Remove-Item -LiteralPath (Join-Path $RootDir "resources\default_app.asar") -Force -ErrorAction SilentlyContinue
 
   $localeDir = Join-Path $RootDir "locales"
   if (Test-Path -LiteralPath $localeDir) {
@@ -150,9 +163,12 @@ function Remove-UnusedElectronFiles {
 }
 
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $supersededZip -Force -ErrorAction SilentlyContinue
-Remove-Item -LiteralPath $supersededTarXz -Force -ErrorAction SilentlyContinue
+foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededTarXz)) {
+  Remove-Item -LiteralPath $staleArtifact -Force -ErrorAction SilentlyContinue
+  if (Test-Path -LiteralPath $staleArtifact) {
+    throw "Unable to remove stale package artifact: $staleArtifact"
+  }
+}
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
 $required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client", "node_modules\electron\dist")
