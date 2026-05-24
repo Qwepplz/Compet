@@ -67,15 +67,18 @@ function Set-ExeVersionInfo {
   }
 
   $version = Get-PackageVersion
-  & $rcedit $ExePath `
-    --set-version-string "CompanyName" "Qwepplz" `
-    --set-version-string "FileDescription" $Description `
-    --set-version-string "ProductName" $ProductName `
-    --set-version-string "OriginalFilename" $OriginalFilename `
-    --set-version-string "InternalName" $InternalName `
-    --set-version-string "LegalCopyright" "Copyright (C) 2026 Qwepplz" `
-    --set-file-version $version `
-    --set-product-version $version
+  $rceditArgs = @(
+    $ExePath,
+    "--set-version-string", "CompanyName", "Qwepplz",
+    "--set-version-string", "FileDescription", $Description,
+    "--set-version-string", "ProductName", $ProductName,
+    "--set-version-string", "OriginalFilename", $OriginalFilename,
+    "--set-version-string", "InternalName", $InternalName,
+    "--set-version-string", "LegalCopyright", "Copyright (C) 2026 Qwepplz",
+    "--set-file-version", $version,
+    "--set-product-version", $version
+  )
+  & $rcedit @rceditArgs
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
 }
 

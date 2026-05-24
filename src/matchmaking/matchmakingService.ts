@@ -22,8 +22,10 @@ import {
 const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "de_dust2", "de_ancient", "de_anubis"];
 const MAP_RANDOMIZATION_MS = 3_000;
 const MAP_RANDOMIZATION_REEL_LENGTH = 20;
+const RECENT_MAP_EXCLUSION_COUNT = 3;
 const MAX_PARTY_HUMANS = 10;
 const READY_TIMEOUT_MS = 60_000;
+
 const MAX_MATCH_CHAT_MESSAGES = 100;
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 
@@ -87,6 +89,7 @@ export class MatchmakingService {
   private readonly unrefReadyTimeouts: boolean;
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly mapSelectionTimeouts = new Map<string, ReadyTimeoutHandle>();
+  private readonly recentSelectedMaps: string[] = [];
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: MatchmakingServiceDeps) {
@@ -467,10 +470,13 @@ export class MatchmakingService {
         phase: "map_randomizing",
         mapSelection,
       };
+      this.rememberSelectedMap(mapSelection.finalMap);
       const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
       const audience = this.roomAudience(randomizingRoom);
+
       await this.deps.store.saveRooms(finalizedRooms);
       this.scheduleMapSelectionReveal(randomizingRoom);
+
       await this.emit({ type: "match_room_created", matchId: randomizingRoom.id, accountIds: audience, room: this.toPublicRoom(randomizingRoom) }, randomizingRoom.id);
       await this.emit({ type: "teams_assigned", matchId: randomizingRoom.id, accountIds: audience, teamA: randomizingRoom.teamA, teamB: randomizingRoom.teamB }, randomizingRoom.id);
       await this.emit({ type: "map_randomizing_started", matchId: randomizingRoom.id, accountIds: audience, mapSelection }, randomizingRoom.id);
@@ -832,7 +838,8 @@ export class MatchmakingService {
 
   private buildMapSelection(startedAt: string): MatchMapSelectionState {
     const mapPool = this.getMapPool();
-    const finalMap = mapPool[this.chooseRandomIndex(mapPool.length)]!;
+    const finalMapPool = this.getFinalMapPool(mapPool);
+    const finalMap = finalMapPool[this.chooseRandomIndex(finalMapPool.length)]!;
     const nonFinalPool = mapPool.filter((map) => map !== finalMap);
     const reelPool = nonFinalPool.length > 0 ? nonFinalPool : mapPool;
     const reel: string[] = [];
@@ -847,6 +854,19 @@ export class MatchmakingService {
       startedAt,
       revealAt: new Date(Date.parse(startedAt) + MAP_RANDOMIZATION_MS).toISOString(),
     };
+  }
+
+  private getFinalMapPool(mapPool: string[]): string[] {
+    const recentMaps = new Set(this.recentSelectedMaps.slice(-RECENT_MAP_EXCLUSION_COUNT));
+    const eligibleMaps = mapPool.filter((map) => !recentMaps.has(map));
+    return eligibleMaps.length > 0 ? eligibleMaps : mapPool;
+  }
+
+  private rememberSelectedMap(map: string): void {
+    this.recentSelectedMaps.push(map);
+    if (this.recentSelectedMaps.length > RECENT_MAP_EXCLUSION_COUNT) {
+      this.recentSelectedMaps.splice(0, this.recentSelectedMaps.length - RECENT_MAP_EXCLUSION_COUNT);
+    }
   }
 
   private scheduleMapSelectionReveal(room: MatchRoomRecord): void {
