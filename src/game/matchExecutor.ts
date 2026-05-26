@@ -33,7 +33,6 @@ export interface MatchExecutorOptions {
 const ACTIVE_MATCH_CFG_PATH = "compet/active_match.cfg";
 const NO_RANDOM_BOTS_CFG_PATH = "compet/no_random_bots.cfg";
 const COMPET_LOCK_PLUGIN_FILE = "compet_match_lock.smx";
-const COMPET_LOCK_SOURCE_FILE = "compet_match_lock.sp";
 const GET5_AUTOLOAD_COMMENT = "// Compet managed get5 autoload";
 const WARMUP_CFG_COMMENT = "// Compet managed warmup hook";
 const TEAMLOGO_CFG_COMMENT = "// Compet managed team logo hook";
@@ -197,13 +196,6 @@ async function installCompetLockPlugin(serverRoot: string): Promise<void> {
   const pluginDir = path.join(serverRoot, "csgo", "addons", "sourcemod", "plugins");
   await mkdir(pluginDir, { recursive: true });
   await copyFile(pluginSource, path.join(pluginDir, COMPET_LOCK_PLUGIN_FILE));
-
-  const sourceFile = findBundledSourceModAsset(COMPET_LOCK_SOURCE_FILE);
-  if (sourceFile) {
-    const scriptDir = path.join(serverRoot, "csgo", "addons", "sourcemod", "scripting");
-    await mkdir(scriptDir, { recursive: true });
-    await copyFile(sourceFile, path.join(scriptDir, COMPET_LOCK_SOURCE_FILE));
-  }
 }
 
 async function removeGet5AutoloadCfg(serverRoot: string): Promise<void> {

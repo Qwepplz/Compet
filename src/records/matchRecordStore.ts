@@ -1,4 +1,6 @@
 import path from "node:path";
+import type { Dirent } from "node:fs";
+import { readdir } from "node:fs/promises";
 import type { MatchPlan } from "../matchmaking/types.js";
 import { readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
 
@@ -20,7 +22,37 @@ export class MatchRecordStore {
     return readJsonFile<MatchPlan>(this.matchFile(matchId, "plan.json"));
   }
 
-  
+  async listRecentMatchMaps(limit: number): Promise<string[]> {
+    if (limit <= 0) return [];
+    let entries: Dirent[];
+    try {
+      entries = await readdir(path.join(this.recordsDir, "matches"), { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+
+    const plans = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map(async (entry) => {
+          try {
+            const plan = await this.readMatchPlan(entry.name);
+            const map = plan.map.trim();
+            if (!map) return undefined;
+            return { map, createdAt: plan.createdAt };
+          } catch {
+            return undefined;
+          }
+        }),
+    );
+
+    return plans
+      .filter((plan): plan is { map: string; createdAt: string } => Boolean(plan))
+      .sort((a, b) => this.timestampOf(a.createdAt) - this.timestampOf(b.createdAt))
+      .slice(-limit)
+      .map((plan) => plan.map);
+  }
 
   async saveServer(matchId: string, server: unknown): Promise<void> {
     await this.saveMatchFile(matchId, "server.json", server);
@@ -77,5 +109,10 @@ export class MatchRecordStore {
     if (!SAFE_MATCH_ID_PATTERN.test(matchId)) {
       throw new Error(`Invalid matchId: ${matchId}`);
     }
+  }
+
+  private timestampOf(value: string): number {
+    const timestamp = Date.parse(value);
+    return Number.isFinite(timestamp) ? timestamp : 0;
   }
 }

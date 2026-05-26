@@ -96,7 +96,8 @@ function New-Validated7zArchive {
   param(
     [Parameter(Mandatory = $true)][string]$SourceDir,
     [Parameter(Mandatory = $true)][string]$ArchivePath,
-    [Parameter(Mandatory = $true)][string[]]$RequiredEntries
+    [Parameter(Mandatory = $true)][string[]]$RequiredEntries,
+    [string[]]$ForbiddenEntryPatterns = @()
   )
 
   Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
@@ -139,6 +140,17 @@ function New-Validated7zArchive {
     }
     if ($missing.Count -gt 0) {
       throw "Archive verification failed. Missing entries: $($missing -join ', ')"
+    }
+
+    $forbidden = @(
+      foreach ($entry in $entries) {
+        foreach ($pattern in $ForbiddenEntryPatterns) {
+          if ($entry -like $pattern) { $entry; break }
+        }
+      }
+    )
+    if ($forbidden.Count -gt 0) {
+      throw "Archive verification failed. Forbidden entries: $($forbidden -join ', ')"
     }
   } catch {
     Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
@@ -258,7 +270,8 @@ if ($LASTEXITCODE -ne 0) {
   throw "esbuild server bundle failed with exit code $LASTEXITCODE"
 }
 Copy-Item -LiteralPath (Join-Path $repo "out") -Destination $appRoot -Recurse
-Copy-Item -LiteralPath (Join-Path $repo "src\sourcemod") -Destination (Join-Path $appRoot "sourcemod") -Recurse
+New-Item -ItemType Directory -Path (Join-Path $appRoot "sourcemod") -Force | Out-Null
+Copy-Item -LiteralPath (Join-Path $repo "src\sourcemod\compet_match_lock.smx") -Destination (Join-Path $appRoot "sourcemod\compet_match_lock.smx")
 Copy-Item -LiteralPath (Join-Path $repo "packaging\server\app-package.json") -Destination (Join-Path $appRoot "package.json")
 Copy-NodeModulePackage "argon2"
 Copy-NodeModulePackage "@phc\format"
@@ -283,6 +296,20 @@ $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "sourcemod\compet_match_lock.smx")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "node_modules\zod\package.json"))
 )
-New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries
+$forbiddenArchiveEntryPatterns = @(
+  "*/.git/*",
+  "*/default_app.asar",
+  "*/package-lock.json",
+  "*/recent-maps.json",
+  "*/server-data*",
+  "*/src/*",
+  "*/tests/*",
+  "*/scripts/*",
+  "*/tsconfig*.json",
+  "*.map",
+  "*.tmp",
+  "resources/app/sourcemod/*.sp"
+)
+New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Created $archive"

@@ -92,7 +92,8 @@ function New-Validated7zArchive {
   param(
     [Parameter(Mandatory = $true)][string]$SourceDir,
     [Parameter(Mandatory = $true)][string]$ArchivePath,
-    [Parameter(Mandatory = $true)][string[]]$RequiredEntries
+    [Parameter(Mandatory = $true)][string[]]$RequiredEntries,
+    [string[]]$ForbiddenEntryPatterns = @()
   )
 
   Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
@@ -135,6 +136,17 @@ function New-Validated7zArchive {
     }
     if ($missing.Count -gt 0) {
       throw "Archive verification failed. Missing entries: $($missing -join ', ')"
+    }
+
+    $forbidden = @(
+      foreach ($entry in $entries) {
+        foreach ($pattern in $ForbiddenEntryPatterns) {
+          if ($entry -like $pattern) { $entry; break }
+        }
+      }
+    )
+    if ($forbidden.Count -gt 0) {
+      throw "Archive verification failed. Forbidden entries: $($forbidden -join ', ')"
     }
   } catch {
     Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
@@ -205,6 +217,20 @@ $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\preload\index.js")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\renderer\index.html"))
 )
-New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries
+$forbiddenArchiveEntryPatterns = @(
+  "*/.git/*",
+  "*/default_app.asar",
+  "*/package-lock.json",
+  "*/recent-maps.json",
+  "*/server-data*",
+  "*/src/*",
+  "*/tests/*",
+  "*/scripts/*",
+  "*/sourcemod/*",
+  "*/tsconfig*.json",
+  "*.map",
+  "*.tmp"
+)
+New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Created $archive"

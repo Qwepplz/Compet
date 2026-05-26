@@ -131,11 +131,6 @@ export function MatchRoomPage({
     : undefined;
   const randomizingRevealed = room?.phase === "map_randomizing" && isMapRandomizingRevealed(room.mapSelection, nowMs);
   const randomizingMapName = randomizingDisplayMap ? formatMapName(randomizingDisplayMap) : "--";
-  const accountTeamId = account?.id && room?.teamA?.participants.some((participant) => participant.accountId === account.id)
-    ? "teamA"
-    : account?.id && room?.teamB?.participants.some((participant) => participant.accountId === account.id)
-      ? "teamB"
-      : undefined;
   const roomPhase = phaseLabel(room?.phase);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);

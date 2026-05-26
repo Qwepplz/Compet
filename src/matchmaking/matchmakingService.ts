@@ -52,7 +52,7 @@ export interface MatchmakingServiceDeps {
   friends?: { listFriends(accountId: string): Promise<FriendListDto> };
   botCatalog: BotCatalog;
   executor?: MatchExecutorPort;
-  records?: Pick<MatchRecordStore, "saveMatchPlan" | "saveStatus" | "appendEvent">;
+  records?: Pick<MatchRecordStore, "appendEvent" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveStatus">;
   events?: { publish(event: RealtimeEvent): void };
   steamProfiles?: SteamProfileResolverPort;
   mapPool?: string[];
@@ -470,7 +470,7 @@ export class MatchmakingService {
         phase: "map_randomizing",
         mapSelection,
       };
-      await this.rememberSelectedMap(mapSelection.finalMap);
+      await this.deps.records?.saveMatchPlan(this.buildMatchPlan(randomizingRoom, mapSelection.finalMap));
       const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
       const audience = this.roomAudience(randomizingRoom);
 
@@ -704,8 +704,11 @@ export class MatchmakingService {
     await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? preparing : candidate)));
     await this.emit({ type: "server_preparing", matchId: room.id, accountIds: this.roomAudience(preparing) }, room.id);
 
-    const plan = this.buildMatchPlan(preparing, finalMap);
-    await this.deps.records?.saveMatchPlan(plan);
+    const savedPlan = await this.readSavedMatchPlan(room.id);
+    const plan = savedPlan?.map === finalMap ? savedPlan : this.buildMatchPlan(preparing, finalMap);
+    if (plan !== savedPlan) {
+      await this.deps.records?.saveMatchPlan(plan);
+    }
 
     if (!this.deps.executor) {
       return preparing;
@@ -745,6 +748,17 @@ export class MatchmakingService {
       connectPassword: `match_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
       createdAt: this.now(),
     };
+  }
+
+  private async readSavedMatchPlan(matchId: string): Promise<MatchPlan | undefined> {
+    try {
+      return await this.deps.records?.readMatchPlan(matchId);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith("JSON file does not exist:")) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   private async requireAccount(accountId: string): Promise<void> {
@@ -838,8 +852,8 @@ export class MatchmakingService {
 
   private async buildMapSelection(startedAt: string): Promise<MatchMapSelectionState> {
     const mapPool = this.getMapPool();
-    const recentSelectedMaps = await this.deps.store.listRecentSelectedMaps();
-    const finalMapPool = this.getFinalMapPool(mapPool, recentSelectedMaps);
+    const recentMatchMaps = await this.listRecentMatchMaps();
+    const finalMapPool = this.getFinalMapPool(mapPool, recentMatchMaps);
     const finalMap = finalMapPool[this.chooseRandomIndex(finalMapPool.length)]!;
     const nonFinalPool = mapPool.filter((map) => map !== finalMap);
     const reelPool = nonFinalPool.length > 0 ? nonFinalPool : mapPool;
@@ -857,16 +871,14 @@ export class MatchmakingService {
     };
   }
 
-  private getFinalMapPool(mapPool: string[], recentSelectedMaps: string[]): string[] {
-    const recentMaps = new Set(recentSelectedMaps.slice(-RECENT_MAP_EXCLUSION_COUNT));
+  private getFinalMapPool(mapPool: string[], recentMatchMaps: string[]): string[] {
+    const recentMaps = new Set(recentMatchMaps.slice(-RECENT_MAP_EXCLUSION_COUNT));
     const eligibleMaps = mapPool.filter((map) => !recentMaps.has(map));
     return eligibleMaps.length > 0 ? eligibleMaps : mapPool;
   }
 
-  private async rememberSelectedMap(map: string): Promise<void> {
-    const recentSelectedMaps = await this.deps.store.listRecentSelectedMaps();
-    const nextRecentSelectedMaps = [...recentSelectedMaps, map].slice(-RECENT_MAP_EXCLUSION_COUNT);
-    await this.deps.store.saveRecentSelectedMaps(nextRecentSelectedMaps);
+  private async listRecentMatchMaps(): Promise<string[]> {
+    return this.deps.records?.listRecentMatchMaps(RECENT_MAP_EXCLUSION_COUNT) ?? [];
   }
 
   private scheduleMapSelectionReveal(room: MatchRoomRecord): void {
