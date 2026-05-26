@@ -89,7 +89,6 @@ export class MatchmakingService {
   private readonly unrefReadyTimeouts: boolean;
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly mapSelectionTimeouts = new Map<string, ReadyTimeoutHandle>();
-  private readonly recentSelectedMaps: string[] = [];
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: MatchmakingServiceDeps) {
@@ -455,13 +454,14 @@ export class MatchmakingService {
 
       let mapSelection: MatchMapSelectionState;
       try {
-        mapSelection = this.buildMapSelection(acceptedAt);
-      } catch {
+        mapSelection = await this.buildMapSelection(acceptedAt);
+      } catch (error) {
         const failedAt = this.now();
+        const failure = error instanceof Error ? error.message : String(error);
         const failedRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "failed", terminalStateAt: failedAt };
         await this.deps.store.saveRooms(updatedRooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate)));
         await this.unlockPartyForRoom(failedRoom, failedAt);
-        await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: "map pool is empty" }, room.id);
+        await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure }, room.id);
         return this.toPublicRoom(failedRoom);
       }
 
@@ -470,7 +470,7 @@ export class MatchmakingService {
         phase: "map_randomizing",
         mapSelection,
       };
-      this.rememberSelectedMap(mapSelection.finalMap);
+      await this.rememberSelectedMap(mapSelection.finalMap);
       const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
       const audience = this.roomAudience(randomizingRoom);
 
@@ -836,9 +836,10 @@ export class MatchmakingService {
     return Math.min(Math.floor(random() * length), length - 1);
   }
 
-  private buildMapSelection(startedAt: string): MatchMapSelectionState {
+  private async buildMapSelection(startedAt: string): Promise<MatchMapSelectionState> {
     const mapPool = this.getMapPool();
-    const finalMapPool = this.getFinalMapPool(mapPool);
+    const recentSelectedMaps = await this.deps.store.listRecentSelectedMaps();
+    const finalMapPool = this.getFinalMapPool(mapPool, recentSelectedMaps);
     const finalMap = finalMapPool[this.chooseRandomIndex(finalMapPool.length)]!;
     const nonFinalPool = mapPool.filter((map) => map !== finalMap);
     const reelPool = nonFinalPool.length > 0 ? nonFinalPool : mapPool;
@@ -856,17 +857,16 @@ export class MatchmakingService {
     };
   }
 
-  private getFinalMapPool(mapPool: string[]): string[] {
-    const recentMaps = new Set(this.recentSelectedMaps.slice(-RECENT_MAP_EXCLUSION_COUNT));
+  private getFinalMapPool(mapPool: string[], recentSelectedMaps: string[]): string[] {
+    const recentMaps = new Set(recentSelectedMaps.slice(-RECENT_MAP_EXCLUSION_COUNT));
     const eligibleMaps = mapPool.filter((map) => !recentMaps.has(map));
     return eligibleMaps.length > 0 ? eligibleMaps : mapPool;
   }
 
-  private rememberSelectedMap(map: string): void {
-    this.recentSelectedMaps.push(map);
-    if (this.recentSelectedMaps.length > RECENT_MAP_EXCLUSION_COUNT) {
-      this.recentSelectedMaps.splice(0, this.recentSelectedMaps.length - RECENT_MAP_EXCLUSION_COUNT);
-    }
+  private async rememberSelectedMap(map: string): Promise<void> {
+    const recentSelectedMaps = await this.deps.store.listRecentSelectedMaps();
+    const nextRecentSelectedMaps = [...recentSelectedMaps, map].slice(-RECENT_MAP_EXCLUSION_COUNT);
+    await this.deps.store.saveRecentSelectedMaps(nextRecentSelectedMaps);
   }
 
   private scheduleMapSelectionReveal(room: MatchRoomRecord): void {

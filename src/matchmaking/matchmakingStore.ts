@@ -88,11 +88,16 @@ interface RoomsFile {
   rooms: MatchRoomRecord[];
 }
 
+interface RecentMapsFile {
+  recentSelectedMaps: string[];
+}
+
 export class MatchmakingStore {
   private queueWrites: Promise<void> = Promise.resolve();
   private partyWrites: Promise<void> = Promise.resolve();
   private invitationWrites: Promise<void> = Promise.resolve();
   private roomWrites: Promise<void> = Promise.resolve();
+  private recentMapWrites: Promise<void> = Promise.resolve();
 
   private constructor(private readonly dir: string) {}
 
@@ -103,6 +108,7 @@ export class MatchmakingStore {
       ensureJsonFile(store.partiesPath, { parties: [] }),
       ensureJsonFile(store.invitationsPath, { invitations: [] }),
       ensureJsonFile(store.roomsPath, { rooms: [] }),
+      ensureJsonFile(store.recentMapsPath, { recentSelectedMaps: [] }),
     ]);
     await store.recoverRuntimeStateOnLoad();
     return store;
@@ -141,6 +147,17 @@ export class MatchmakingStore {
     return this.enqueueRoomWrite(() => writeJsonFileAtomic(this.roomsPath, { rooms }));
   }
 
+  listRecentSelectedMaps(): Promise<string[]> {
+    return readJsonFile<RecentMapsFile>(this.recentMapsPath, { recentSelectedMaps: [] }).then((file) =>
+      file.recentSelectedMaps.map((map) => map.trim()).filter(Boolean),
+    );
+  }
+
+  saveRecentSelectedMaps(recentSelectedMaps: string[]): Promise<void> {
+    const normalized = recentSelectedMaps.map((map) => map.trim()).filter(Boolean);
+    return this.enqueueRecentMapWrite(() => writeJsonFileAtomic(this.recentMapsPath, { recentSelectedMaps: normalized }));
+  }
+
   private get queuePath(): string {
     return path.join(this.dir, "queue.json");
   }
@@ -155,6 +172,10 @@ export class MatchmakingStore {
 
   private get roomsPath(): string {
     return path.join(this.dir, "rooms.json");
+  }
+
+  private get recentMapsPath(): string {
+    return path.join(this.dir, "recent-maps.json");
   }
 
   private enqueueQueueWrite(write: () => Promise<void>): Promise<void> {
@@ -203,6 +224,12 @@ export class MatchmakingStore {
   private enqueueRoomWrite(write: () => Promise<void>): Promise<void> {
     const next = this.roomWrites.then(() => write(), () => write());
     this.roomWrites = next.catch(() => undefined);
+    return next;
+  }
+
+  private enqueueRecentMapWrite(write: () => Promise<void>): Promise<void> {
+    const next = this.recentMapWrites.then(() => write(), () => write());
+    this.recentMapWrites = next.catch(() => undefined);
     return next;
   }
 }
