@@ -6,6 +6,7 @@ import type { GameServerConfig } from "../config/config.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { writeJsonFileAtomic } from "../storage/jsonFile.js";
+import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
 import { buildGet5Config } from "./get5ConfigBuilder.js";
 import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
@@ -28,6 +29,7 @@ export interface MatchExecutorOptions {
   config: GameServerConfig;
   mapPool?: string[];
   onServerExit?: (matchId: string, exitInfo: GameServerExitInfo) => Promise<void> | void;
+  emptyServerWatchdog?: EmptyServerWatchdogConfig;
 }
 
 const ACTIVE_MATCH_CFG_PATH = "compet/active_match.cfg";
@@ -72,9 +74,11 @@ export class MatchExecutor {
     });
 
     const launched = await this.options.launcher.launch(spec);
-    this.watchServerExit(matchPlan.id, spec, launched);
+    const emptyServerWatchdog = this.createEmptyServerWatchdog(matchPlan.id);
+    this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
     const connect = buildConnectInfo(matchPlan, this.options.config.publicConnectHost, launched.port);
     await this.saveConnectState(matchPlan.id, launched, connect);
+    emptyServerWatchdog.start();
     return connect;
   }
 
@@ -111,19 +115,36 @@ export class MatchExecutor {
     await this.options.records?.saveStatus(matchId, { phase: "connect", connect });
   }
 
-  private watchServerExit(matchId: string, spec: RunCsgoLaunchSpec, launched: LaunchedGameServer): void {
-    if (!this.options.onServerExit) return;
+  private watchServerExit(
+    matchId: string,
+    spec: RunCsgoLaunchSpec,
+    launched: LaunchedGameServer,
+    emptyServerWatchdog: EmptyServerWatchdog,
+  ): void {
+    const publishExit = (exitInfo: GameServerExitInfo) => {
+      emptyServerWatchdog.stop();
+      this.publishServerExit(matchId, exitInfo);
+    };
+
+    if (!this.options.onServerExit) {
+      if (spec.exitIndicatesServerExit) {
+        void launched.waitForExit()
+          .then(() => emptyServerWatchdog.stop())
+          .catch(() => undefined);
+      }
+      return;
+    }
 
     if (spec.exitIndicatesServerExit) {
       void launched.waitForExit()
-        .then((exitInfo) => this.publishServerExit(matchId, exitInfo))
+        .then((exitInfo) => publishExit(exitInfo))
         .catch(() => undefined);
     }
 
     if (spec.serverExitMonitor) {
       void waitForSourceServerExit(spec.serverExitMonitor)
         .then((result) => {
-          this.publishServerExit(matchId, {
+          publishExit({
             code: null,
             signal: null,
             output: [formatServerExitMonitorOutput(result, spec.serverExitMonitor)],
@@ -137,6 +158,15 @@ export class MatchExecutor {
     setTimeout(() => {
       void Promise.resolve(this.options.onServerExit?.(matchId, exitInfo)).catch(() => undefined);
     }, 0);
+  }
+
+  private createEmptyServerWatchdog(matchId: string): EmptyServerWatchdog {
+    return new EmptyServerWatchdog({
+      matchId,
+      serverRoot: this.options.config.serverRoot,
+      config: this.options.emptyServerWatchdog,
+      records: this.options.records,
+    });
   }
 }
 

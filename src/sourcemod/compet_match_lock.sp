@@ -4,6 +4,9 @@
 #pragma semicolon 1
 #pragma newdecls required
 
+#define COMPET_STATUS_BUFFER_SIZE 8192
+#define COMPET_STATUS_INTERVAL 30.0
+
 public Plugin myinfo = {
   name = "Compet Match Lock",
   author = "Compet",
@@ -17,6 +20,7 @@ bool g_LockEnabled = false;
 bool g_Get5Started = false;
 char g_MatchId[128] = "";
 Handle g_EnforceTimer = null;
+Handle g_StatusTimer = null;
 
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
@@ -30,6 +34,7 @@ public void OnPluginStart() {
 
 public void OnPluginEnd() {
   StopEnforceTimer();
+  StopStatusTimer();
 }
 
 public void OnMapEnd() {
@@ -48,10 +53,13 @@ public Action Command_ResetLock(int args) {
   g_LockEnabled = false;
   g_Get5Started = false;
   StopEnforceTimer();
+  StopStatusTimer();
   g_MatchId[0] = '\0';
   if (args >= 1) {
     GetCmdArg(1, g_MatchId, sizeof(g_MatchId));
   }
+  ClearShutdownFlag();
+  StartStatusTimer();
   return Plugin_Handled;
 }
 
@@ -126,6 +134,17 @@ public Action Timer_EnforceLocks(Handle timer, any data) {
   return Plugin_Continue;
 }
 
+public Action Timer_WriteStatus(Handle timer, any data) {
+  if (g_MatchId[0] == '\0') {
+    g_StatusTimer = null;
+    return Plugin_Stop;
+  }
+
+  WriteStatusFiles();
+  CheckShutdownFlag();
+  return Plugin_Continue;
+}
+
 public Action Timer_ApplyClientLock(Handle timer, int userId) {
   int client = GetClientOfUserId(userId);
   if (client > 0 && IsClientInGame(client) && !IsFakeClient(client)) {
@@ -184,12 +203,157 @@ void StartEnforceTimer() {
   g_EnforceTimer = CreateTimer(1.0, Timer_EnforceLocks, 0, TIMER_REPEAT | TIMER_FLAG_NO_MAPCHANGE);
 }
 
+void StartStatusTimer() {
+  if (g_StatusTimer != null || g_MatchId[0] == '\0') {
+    return;
+  }
+  WriteStatusFiles();
+  g_StatusTimer = CreateTimer(COMPET_STATUS_INTERVAL, Timer_WriteStatus, 0, TIMER_REPEAT);
+}
+
 void StopEnforceTimer() {
   if (g_EnforceTimer == null) {
     return;
   }
   delete g_EnforceTimer;
   g_EnforceTimer = null;
+}
+
+void StopStatusTimer() {
+  if (g_StatusTimer == null) {
+    return;
+  }
+  delete g_StatusTimer;
+  g_StatusTimer = null;
+}
+
+void WriteStatusFiles() {
+  if (g_MatchId[0] == '\0' || !EnsureCompetDataDir()) {
+    return;
+  }
+
+  int connectedCount = 0;
+  int humanCount = 0;
+  int botCount = 0;
+  char humans[1024];
+  humans[0] = '\0';
+
+  for (int client = 1; client <= MaxClients; client++) {
+    if (!IsClientConnected(client)) {
+      continue;
+    }
+    connectedCount++;
+    if (IsFakeClient(client) || IsClientSourceTV(client) || IsClientReplay(client)) {
+      botCount++;
+      continue;
+    }
+    if (!IsClientInGame(client)) {
+      continue;
+    }
+
+    char auth[32];
+    if (!GetClientAuthId(client, AuthId_SteamID64, auth, sizeof(auth), true)) {
+      continue;
+    }
+    AppendHumanAuth(humans, sizeof(humans), auth, humanCount);
+    humanCount++;
+  }
+
+  WriteJsonStatus(connectedCount, humanCount, botCount, humans);
+  WriteConsoleStatus();
+}
+
+void AppendHumanAuth(char[] humans, int maxlen, const char[] auth, int index) {
+  char piece[48];
+  if (index > 0) {
+    Format(piece, sizeof(piece), ",\"%s\"", auth);
+  } else {
+    Format(piece, sizeof(piece), "\"%s\"", auth);
+  }
+  StrCat(humans, maxlen, piece);
+}
+
+void WriteJsonStatus(int connectedCount, int humanCount, int botCount, const char[] humans) {
+  char path[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet/server_status.json");
+
+  File file = OpenFile(path, "w");
+  if (file == null) {
+    PrintToServer("[Compet] Failed to open status file: %s", path);
+    return;
+  }
+
+  WriteFileLine(file, "{");
+  WriteFileLine(file, "  \"matchId\": \"%s\",", g_MatchId);
+  WriteFileLine(file, "  \"generatedAtUnix\": %d,", GetTime());
+  WriteFileLine(file, "  \"connectedCount\": %d,", connectedCount);
+  WriteFileLine(file, "  \"humanCount\": %d,", humanCount);
+  WriteFileLine(file, "  \"botCount\": %d,", botCount);
+  WriteFileLine(file, "  \"humans\": [%s],", humans);
+  WriteFileLine(file, "  \"lockEnabled\": %s,", g_LockEnabled ? "true" : "false");
+  WriteFileLine(file, "  \"get5Started\": %s", g_Get5Started ? "true" : "false");
+  WriteFileLine(file, "}");
+  FlushFile(file);
+  delete file;
+}
+
+void WriteConsoleStatus() {
+  char output[COMPET_STATUS_BUFFER_SIZE];
+  output[0] = '\0';
+  ServerCommandEx(output, sizeof(output), "status");
+
+  char path[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet/server_status.txt");
+
+  File file = OpenFile(path, "w");
+  if (file == null) {
+    PrintToServer("[Compet] Failed to open console status file: %s", path);
+    return;
+  }
+
+  WriteFileString(file, output, false);
+  FlushFile(file);
+  delete file;
+}
+
+void CheckShutdownFlag() {
+  char path[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet/shutdown.flag");
+  if (!FileExists(path)) {
+    return;
+  }
+
+  char requestedMatchId[128];
+  requestedMatchId[0] = '\0';
+  File file = OpenFile(path, "r");
+  if (file != null) {
+    ReadFileLine(file, requestedMatchId, sizeof(requestedMatchId));
+    delete file;
+  }
+  DeleteFile(path);
+  TrimString(requestedMatchId);
+
+  if (g_MatchId[0] == '\0' || !StrEqual(requestedMatchId, g_MatchId)) {
+    PrintToServer("[Compet] Ignored shutdown flag for %s while running %s.", requestedMatchId, g_MatchId);
+    return;
+  }
+
+  PrintToServer("[Compet] Empty server shutdown requested for match %s.", g_MatchId);
+  ServerCommand("quit");
+}
+
+void ClearShutdownFlag() {
+  char path[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet/shutdown.flag");
+  if (FileExists(path)) {
+    DeleteFile(path);
+  }
+}
+
+bool EnsureCompetDataDir() {
+  char path[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet");
+  return DirExists(path) || CreateDirectory(path);
 }
 
 bool IsPlayingTeam(int team) {
