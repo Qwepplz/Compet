@@ -1,5 +1,5 @@
-import { existsSync } from "node:fs";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync, type Dirent } from "node:fs";
+import { copyFile, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { GameServerConfig } from "../config/config.js";
@@ -33,7 +33,9 @@ export interface MatchExecutorOptions {
 }
 
 const ACTIVE_MATCH_CFG_PATH = "compet/active_match.cfg";
+const ACTIVE_MATCH_RUNTIME_CFG_PATH = "compet/active_match_runtime.cfg";
 const NO_RANDOM_BOTS_CFG_PATH = "compet/no_random_bots.cfg";
+const ACTIVE_GET5_CONFIG_FILE = "compet_active.json";
 const COMPET_LOCK_PLUGIN_FILE = "compet_match_lock.smx";
 const GET5_AUTOLOAD_COMMENT = "// Compet managed get5 autoload";
 const WARMUP_CFG_COMMENT = "// Compet managed warmup hook";
@@ -48,7 +50,7 @@ const WARMUP_CFG_LINES = [
   "mp_do_warmup_period 1",
   "mp_warmuptime 600",
   "mp_warmuptime_all_players_connected 0",
-  "mp_warmup_pausetimer 0",
+  "mp_warmup_pausetimer 1",
   "mp_warmup_start",
 ];
 
@@ -57,7 +59,7 @@ export class MatchExecutor {
 
   async prepare(matchPlan: MatchPlan): Promise<MatchConnectInfo> {
     const safeMatchId = validateMatchId(matchPlan.id);
-    const matchCfgPath = `compet/${safeMatchId}.cfg`;
+    const matchCfgPath = ACTIVE_MATCH_RUNTIME_CFG_PATH;
 
     await this.writeMatchFiles(matchPlan, safeMatchId, matchCfgPath);
     await this.options.records?.saveStatus(matchPlan.id, { phase: "server_prepare" });
@@ -83,12 +85,13 @@ export class MatchExecutor {
   }
 
   private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {
+    await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
     const get5Config = buildGet5Config({
       matchPlan,
       mapPool: this.options.mapPool ?? [matchPlan.map],
     });
     await writeJsonFileAtomic(
-      path.join(this.options.config.serverRoot, "csgo", "cfg", "get5", `${safeMatchId}.json`),
+      path.join(this.options.config.serverRoot, "csgo", "cfg", "get5", ACTIVE_GET5_CONFIG_FILE),
       get5Config,
     );
     await removeGet5AutoloadCfg(this.options.config.serverRoot);
@@ -100,6 +103,7 @@ export class MatchExecutor {
     await mkdir(path.dirname(matchCfgFile), { recursive: true });
     await writeFile(matchCfgFile, `${buildMatchStartupCfg(matchPlan, safeMatchId)}\n`, "utf8");
     const activeCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", ACTIVE_MATCH_CFG_PATH);
+    await mkdir(path.dirname(activeCfgFile), { recursive: true });
     await writeFile(activeCfgFile, `exec ${matchCfgPath}\n`, "utf8");
     await ensureBaseCfgLoadsNoRandomBots(this.options.config.serverRoot);
     await ensureSourceModCfgLoadsActiveMatch(this.options.config.serverRoot);
@@ -257,6 +261,112 @@ async function removeGet5AutoloadCfg(serverRoot: string): Promise<void> {
   }
 }
 
+async function cleanupLegacyManagedMatchFiles(serverRoot: string): Promise<void> {
+  await Promise.all([
+    cleanupLegacyGet5Configs(path.join(serverRoot, "csgo", "cfg", "get5")),
+    cleanupLegacyCompetCfgs(path.join(serverRoot, "csgo", "cfg", "compet")),
+  ]);
+}
+
+async function cleanupLegacyGet5Configs(get5Dir: string): Promise<void> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(get5Dir, { withFileTypes: true });
+  } catch (error) {
+    if (isNotFound(error)) return;
+    throw error;
+  }
+
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === ACTIVE_GET5_CONFIG_FILE) return;
+    const matchId = entry.name.slice(0, -".json".length);
+    if (!isValidMatchFileStem(matchId)) return;
+    const filePath = path.join(get5Dir, entry.name);
+    if (await isLegacyCompetGet5Config(filePath, matchId)) {
+      await unlinkIfExists(filePath);
+    }
+  }));
+}
+
+async function cleanupLegacyCompetCfgs(competDir: string): Promise<void> {
+  const activeFileNames = new Set([
+    path.basename(ACTIVE_MATCH_CFG_PATH),
+    path.basename(ACTIVE_MATCH_RUNTIME_CFG_PATH),
+    path.basename(NO_RANDOM_BOTS_CFG_PATH),
+  ]);
+  let entries: Dirent[];
+  try {
+    entries = await readdir(competDir, { withFileTypes: true });
+  } catch (error) {
+    if (isNotFound(error)) return;
+    throw error;
+  }
+
+  await Promise.all(entries.map(async (entry) => {
+    if (!entry.isFile() || !entry.name.endsWith(".cfg") || activeFileNames.has(entry.name)) return;
+    const matchId = entry.name.slice(0, -".cfg".length);
+    if (!isValidMatchFileStem(matchId)) return;
+    const filePath = path.join(competDir, entry.name);
+    if (await isLegacyCompetMatchCfg(filePath, matchId)) {
+      await unlinkIfExists(filePath);
+    }
+  }));
+}
+
+async function isLegacyCompetGet5Config(filePath: string, matchId: string): Promise<boolean> {
+  let value: unknown;
+  try {
+    value = JSON.parse(await readFile(filePath, "utf8"));
+  } catch {
+    return false;
+  }
+
+  if (!isRecord(value)) return false;
+  const cvars = value.cvars;
+  return value.matchid === matchId
+    && value.players_per_team === 5
+    && value.num_maps === 1
+    && value.skip_veto === true
+    && Array.isArray(value.maplist)
+    && Array.isArray(value.map_sides)
+    && isRecord(value.team1)
+    && isRecord(value.team2)
+    && isRecord(cvars)
+    && cvars.mp_autoteambalance === "0"
+    && cvars.mp_limitteams === "0"
+    && cvars.tv_enable === "1";
+}
+
+async function isLegacyCompetMatchCfg(filePath: string, matchId: string): Promise<boolean> {
+  let content = "";
+  try {
+    content = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (isNotFound(error)) return false;
+    throw error;
+  }
+
+  const lines = content.split(/\r?\n/);
+  return lines.some((line) => line.trim() === `compet_lock_reset ${quoteConsoleString(matchId)}`)
+    && lines.some((line) => line.trim() === "compet_lock_enable 1");
+}
+
+async function unlinkIfExists(filePath: string): Promise<void> {
+  try {
+    await unlink(filePath);
+  } catch (error) {
+    if (!isNotFound(error)) throw error;
+  }
+}
+
+function isValidMatchFileStem(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
 function findBundledSourceModAsset(fileName: string): string | undefined {
   const candidates = buildSourceModAssetCandidates(fileName);
   return candidates.find((candidate) => existsSync(candidate));
@@ -371,7 +481,6 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
   const activeMatchComment = "// Compet managed match cfg hook";
   const noRandomBotsHook = `exec ${NO_RANDOM_BOTS_CFG_PATH}`;
   const noRandomBotsComment = "// Compet managed no random bot hook";
-  const managedWarmupLines = new Set(WARMUP_CFG_LINES);
   const managedTeamLogoLines = new Set(TEAMLOGO_CFG_LINES);
   const lines = current.length > 0 ? current.split(/\r?\n/) : [];
   const nextLines = trimTrailingBlankLines(lines.filter((line) => {
@@ -380,7 +489,7 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
       && trimmed !== activeMatchHook
       && trimmed !== noRandomBotsComment
       && trimmed !== noRandomBotsHook
-      && !managedWarmupLines.has(trimmed)
+      && !isManagedWarmupLine(trimmed)
       && !managedTeamLogoLines.has(trimmed)
       && !trimmed.startsWith("teamlogo_randomlogos ")
       && !trimmed.startsWith("teamlogo_teamnames ");
@@ -398,6 +507,15 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
   if (next !== current) {
     await writeFile(sourceModCfgFile, next, "utf8");
   }
+}
+
+function isManagedWarmupLine(line: string): boolean {
+  return line === WARMUP_CFG_COMMENT
+    || line.startsWith("mp_do_warmup_period ")
+    || line.startsWith("mp_warmuptime ")
+    || line.startsWith("mp_warmuptime_all_players_connected ")
+    || line.startsWith("mp_warmup_pausetimer ")
+    || line === "mp_warmup_start";
 }
 
 function isNotFound(error: unknown): boolean {

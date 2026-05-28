@@ -12,7 +12,10 @@ $electronDist = Join-Path $repo "node_modules\electron\dist"
 $nodeRuntime = (Get-Command "node.exe" -ErrorAction Stop).Source
 $serverExe = "Compet Server Manager.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
-$preferred7z = "E:\EXCHANGE\github-C\lzma2600\bin\x64\7zr.exe"
+$preferred7zCandidates = @(
+  "E:\EXCHANGE\Working\lzma2601\bin\x64\7zr.exe",
+  "E:\EXCHANGE\github-C\lzma2600\bin\x64\7zr.exe"
+)
 
 function Get-ArchiveEntryPath {
   param(
@@ -33,8 +36,10 @@ function Get-SevenZipCommand {
   if ($env:COMPET_7Z -and (Test-Path -LiteralPath $env:COMPET_7Z)) {
     return $env:COMPET_7Z
   }
-  if (Test-Path -LiteralPath $preferred7z) {
-    return $preferred7z
+  foreach ($candidate in $preferred7zCandidates) {
+    if (Test-Path -LiteralPath $candidate) {
+      return $candidate
+    }
   }
 
   foreach ($commandName in @("7zr.exe", "7z.exe", "7za.exe")) {
