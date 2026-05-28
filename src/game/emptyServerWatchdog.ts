@@ -28,7 +28,7 @@ export interface EmptyServerWatchdogOptions {
 
 const DEFAULT_INITIAL_DELAY_MS = 60_000;
 const DEFAULT_INTERVAL_MS = 120_000;
-const DEFAULT_STALE_AFTER_MS = 30_000;
+const DEFAULT_STALE_AFTER_MS = 90_000;
 const DEFAULT_EMPTY_CHECKS_BEFORE_SHUTDOWN = 5;
 
 export class EmptyServerWatchdog {
