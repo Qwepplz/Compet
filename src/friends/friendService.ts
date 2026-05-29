@@ -70,7 +70,7 @@ export class FriendService {
           account.id !== accountId &&
           accountMatchesSearch(account, normalizedQuery),
       )
-      .sort((left, right) => left.steam64.localeCompare(right.steam64));
+      .sort((left, right) => left.username.localeCompare(right.username));
 
     return accounts.map((account) => this.toSearchResult(account));
   }
@@ -351,15 +351,9 @@ export class FriendService {
 }
 
 function normalizeFriendSearchQuery(query: string): string {
-  const trimmed = query.trim().toLowerCase();
-  const steam64 = /\d{17}/u.exec(trimmed)?.[0];
-  return steam64 ?? trimmed;
+  return query.trim().toLowerCase();
 }
 
 function accountMatchesSearch(account: AccountRecord, normalizedQuery: string): boolean {
-  if (account.steam64.includes(normalizedQuery)) return true;
-  return [account.username, account.displayName]
-    .map((value) => value.trim().toLowerCase())
-    .filter(Boolean)
-    .some((value) => value.includes(normalizedQuery));
+  return account.username.trim().toLowerCase().includes(normalizedQuery);
 }
