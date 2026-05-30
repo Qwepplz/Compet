@@ -9,6 +9,7 @@ import { writeJsonFileAtomic } from "../storage/jsonFile.js";
 import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
 import { buildGet5Config } from "./get5ConfigBuilder.js";
 import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
+import { installRunCsgoAssets } from "./runCsgoAssets.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
 import { waitForSourceServerExit, type SourceServerExitMonitorResult, type SourceServerExitMonitorSpec } from "./sourceServerMonitor.js";
 import type { MatchParticipant, MatchPlan } from "../matchmaking/types.js";
@@ -86,6 +87,7 @@ export class MatchExecutor {
 
   private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {
     await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
+    await installRunCsgoAssets(this.options.config.serverRoot);
     const get5Config = buildGet5Config({
       matchPlan,
       mapPool: this.options.mapPool ?? [matchPlan.map],

@@ -16,6 +16,7 @@ export interface ManagerConfig {
   publicConnectHost: string;
   gamePortStart: number;
   gamePortEnd: number;
+  steamAccountToken: string;
 }
 
 export interface ServiceStatus {

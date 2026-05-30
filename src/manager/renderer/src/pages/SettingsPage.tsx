@@ -11,6 +11,7 @@ interface SettingsFormValues {
   serverRoot: string;
   publicConnectHost: string;
   gamePortStart: number;
+  steamAccountToken: string;
 }
 
 export function SettingsPage() {
@@ -34,6 +35,7 @@ export function SettingsPage() {
         serverRoot: config.serverRoot,
         publicConnectHost: config.publicConnectHost,
         gamePortStart: config.gamePortStart,
+        steamAccountToken: config.steamAccountToken,
       });
     } catch (caught) {
       const messageText = caught instanceof Error ? caught.message : "读取配置失败";
@@ -78,6 +80,7 @@ export function SettingsPage() {
         publicConnectHost: values.publicConnectHost.trim(),
         gamePortStart: values.gamePortStart,
         gamePortEnd: values.gamePortStart,
+        steamAccountToken: values.steamAccountToken.trim(),
       };
       await managerApi.saveConfig(nextConfig);
       setLoadedConfig(nextConfig);
@@ -143,6 +146,9 @@ export function SettingsPage() {
             </Form.Item>
             <Form.Item name="publicConnectHost" label="游戏服对外 IP / 域名" rules={[{ required: true, whitespace: true, message: "请输入游戏服对外 IP 或域名" }]}>
               <Input />
+            </Form.Item>
+            <Form.Item name="steamAccountToken" label="服务器身份码" rules={[{ required: true, whitespace: true, message: "请输入服务器身份码" }]}>
+              <Input.Password autoComplete="off" />
             </Form.Item>
             <Space size={12} align="start">
               <Form.Item name="gamePortStart" label="游戏服端口" rules={[{ required: true, message: "请输入端口" }, { type: "number", min: 1, max: 65535, message: "端口范围为 1-65535" }]}>

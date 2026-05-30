@@ -29,6 +29,7 @@ export class ManagedServiceProcess extends EventEmitter {
       COMPET_DATA_DIR: config.dataDir,
       COMPET_TOKEN_TTL_MINUTES: String(config.tokenTtlMinutes),
       COMPET_CSGO_SERVER_ROOT: config.serverRoot,
+      COMPET_STEAM_ACCOUNT_TOKEN: config.steamAccountToken,
       COMPET_PUBLIC_CONNECT_HOST: config.publicConnectHost,
       COMPET_GAME_PORT_START: String(config.gamePortStart),
       COMPET_GAME_PORT_END: String(config.gamePortEnd),

@@ -18,6 +18,7 @@ const schema = z.object({
   publicConnectHost: z.string().min(1).default(detectedPublicConnectHost),
   gamePortStart: z.number().int().min(1).max(65535).default(27015),
   gamePortEnd: z.number().int().min(1).max(65535).default(27030),
+  steamAccountToken: z.string().default(""),
 });
 
 export class FileConfigStore {
