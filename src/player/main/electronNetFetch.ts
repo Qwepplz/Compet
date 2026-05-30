@@ -1,7 +1,5 @@
 import { net } from "electron";
 
-const MAX_REDIRECTS = 5;
-
 interface MinimalFetchResponse {
   ok: boolean;
   status: number;
@@ -10,10 +8,10 @@ interface MinimalFetchResponse {
 }
 
 export function electronNetFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  return request(input, init, 0) as Promise<Response>;
+  return request(input, init) as Promise<Response>;
 }
 
-function request(input: RequestInfo | URL, init: RequestInit, redirectCount: number): Promise<MinimalFetchResponse> {
+function request(input: RequestInfo | URL, init: RequestInit): Promise<MinimalFetchResponse> {
   return new Promise((resolve, reject) => {
     const url = input instanceof URL ? input : new URL(typeof input === "string" ? input : input.url);
     const clientRequest = net.request({ method: init.method ?? "GET", url: url.toString() });
@@ -23,14 +21,6 @@ function request(input: RequestInfo | URL, init: RequestInit, redirectCount: num
 
     clientRequest.on("response", (response) => {
       const status = response.statusCode;
-      const location = response.headers.location;
-      const redirectUrl = Array.isArray(location) ? location[0] : location;
-      if (redirectUrl && status >= 300 && status < 400 && redirectCount < MAX_REDIRECTS) {
-        (response as unknown as NodeJS.ReadableStream).resume?.();
-        request(new URL(redirectUrl, url), init, redirectCount + 1).then(resolve, reject);
-        return;
-      }
-
       const chunks: Buffer[] = [];
       response.on("data", (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
       response.on("end", () => {
