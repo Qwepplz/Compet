@@ -11,10 +11,7 @@ $supersededTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $clientExe = "Compet Player Client.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
-$preferred7zCandidates = @(
-  "E:\EXCHANGE\Working\lzma2601\bin\x64\7zr.exe",
-  "E:\EXCHANGE\github-C\lzma2600\bin\x64\7zr.exe"
-)
+$repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
 
 function Get-ArchiveEntryPath {
   param(
@@ -35,17 +32,15 @@ function Get-SevenZipCommand {
   if ($env:COMPET_7Z -and (Test-Path -LiteralPath $env:COMPET_7Z)) {
     return $env:COMPET_7Z
   }
-  foreach ($candidate in $preferred7zCandidates) {
-    if (Test-Path -LiteralPath $candidate) {
-      return $candidate
-    }
+  if (Test-Path -LiteralPath $repoLocal7z) {
+    return $repoLocal7z
   }
 
   foreach ($commandName in @("7zr.exe", "7z.exe", "7za.exe")) {
     $command = Get-Command $commandName -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
   }
-  throw "7z executable not found. Set COMPET_7Z or install 7z/7zr."
+  throw "7z executable not found. Set COMPET_7Z, place 7zr.exe at .local-tools\7zr.exe, or install 7z/7zr."
 }
 
 function Get-PackageVersion {

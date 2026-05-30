@@ -147,7 +147,7 @@ export function SettingsPage() {
             <Form.Item name="publicConnectHost" label="游戏服对外 IP / 域名" rules={[{ required: true, whitespace: true, message: "请输入游戏服对外 IP 或域名" }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="steamAccountToken" label="服务器身份码" rules={[{ required: true, whitespace: true, message: "请输入服务器身份码" }]}>
+            <Form.Item name="steamAccountToken" label="Steam 服务器登录令牌">
               <Input.Password autoComplete="off" />
             </Form.Item>
             <Space size={12} align="start">
