@@ -1,9 +1,10 @@
 import { clipboard, ipcMain, shell } from "electron";
 import type { PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason, PlayerRealtimeSnapshotScope } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
-import { SteamProfileService } from "./steamProfileService.js";
+import { RemoteProfileService } from "./remoteProfileService.js";
+import { PROFILE_BASE_URL } from "./profileConfig.js";
 import { withAuthRetry } from "./authRetry.js";
-import { electronNetFetch } from "./electronNetFetch.js";
+import { appendBootLog } from "../../desktop/main/bootLog.js";
 
 export interface SavedPlayerLogin {
   baseUrl: string;
@@ -43,8 +44,18 @@ export interface RestoreSessionResult extends RestoredPlayerSession {
   baseUrl: string;
 }
 
+const profileBootLogFile = "compet-player-client-boot.log";
+const sharedProfileService = new RemoteProfileService({
+  baseUrl: PROFILE_BASE_URL,
+  onLog: (message) => appendBootLog(profileBootLogFile, `[profiles] ${message}`),
+});
+
+export function warmUpProfiles(): void {
+  sharedProfileService.warmUp();
+}
+
 function createPlayerApiClient(baseUrl: string, token: string | undefined, deps: IpcDeps): PlayerApiClient {
-  return new PlayerApiClient(baseUrl, token, new SteamProfileService({ fetchFn: electronNetFetch }), deps.sendRealtimeCommand);
+  return new PlayerApiClient(baseUrl, token, sharedProfileService, deps.sendRealtimeCommand);
 }
 
 function withSavedAuth<T>(deps: IpcDeps, operation: (client: PlayerApiClient) => Promise<T>): Promise<T> {

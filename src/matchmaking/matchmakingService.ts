@@ -38,10 +38,6 @@ type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
 
 export type PartyInvitationDto = PartyInvitationRecord;
 
-export interface SteamProfileResolverPort {
-  resolveMany(steam64s: string[]): Promise<Map<string, { personaName: string; avatarUrl?: string }>>;
-}
-
 export interface MatchExecutorPort {
   prepare(plan: MatchPlan): Promise<MatchConnectInfo>;
 }
@@ -54,7 +50,6 @@ export interface MatchmakingServiceDeps {
   executor?: MatchExecutorPort;
   records?: Pick<MatchRecordStore, "appendEvent" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveStatus">;
   events?: { publish(event: RealtimeEvent): void };
-  steamProfiles?: SteamProfileResolverPort;
   mapPool?: string[];
   now?: () => string;
   idFactory?: () => string;

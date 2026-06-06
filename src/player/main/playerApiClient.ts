@@ -18,11 +18,10 @@ import type {
   PlayerRealtimeSnapshotScope,
 } from "../shared/types.js";
 import { isRealtimeCommandServiceError } from "./playerRealtimeClient.js";
-import { SteamProfileService, type SteamProfile, type SteamProfileResolver } from "./steamProfileService.js";
+import { RemoteProfileService, type PlayerProfile } from "./remoteProfileService.js";
 
 const REQUEST_TIMEOUT_MS = 4_000;
 const MATCHMAKING_START_TIMEOUT_MS = 20_000;
-const STEAM_PROFILE_ENRICH_TIMEOUT_MS = 350;
 
 export interface PlayerLoginResult {
   token: string;
@@ -65,8 +64,8 @@ export class PlayerApiClient {
 
   constructor(
     private readonly baseUrl: string,
-    private token?: string,
-    private readonly steamProfiles: SteamProfileResolver = new SteamProfileService(),
+    private token: string | undefined,
+    private readonly steamProfiles: RemoteProfileService,
     private readonly realtimeCommandSender?: PlayerRealtimeCommandSender,
   ) {}
 
@@ -398,20 +397,12 @@ export class PlayerApiClient {
     return (await this.resolveSteamProfiles([normalized])).get(normalized);
   }
 
-  private async resolveSteamProfiles(steam64s: string[]): Promise<Map<string, SteamProfile>> {
+  private async resolveSteamProfiles(steam64s: string[]): Promise<Map<string, PlayerProfile>> {
     if (steam64s.length === 0) return new Map();
-    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([
-        this.steamProfiles.resolveMany(steam64s),
-        new Promise<Map<string, SteamProfile>>((resolve) => {
-          timeoutId = setTimeout(() => resolve(new Map()), STEAM_PROFILE_ENRICH_TIMEOUT_MS);
-        }),
-      ]);
+      return await this.steamProfiles.resolveMany(steam64s);
     } catch {
       return new Map();
-    } finally {
-      if (timeoutId) clearTimeout(timeoutId);
     }
   }
 

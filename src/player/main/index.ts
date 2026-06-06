@@ -12,7 +12,7 @@ import type {
   PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
-import { registerPlayerIpc } from "./ipc.js";
+import { registerPlayerIpc, warmUpProfiles } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
 import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
@@ -388,6 +388,7 @@ if (!gotSingleInstanceLock) {
         apiClient = client;
       },
     });
+    warmUpProfiles();
 
     await createWindow();
 

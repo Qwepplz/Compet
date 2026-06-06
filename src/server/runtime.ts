@@ -16,7 +16,6 @@ import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
 import { isSourceServerObservable, type SourceServerExitMonitorSpec } from "../game/sourceServerMonitor.js";
 import { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import { MatchmakingStore } from "../matchmaking/matchmakingStore.js";
-import { SteamProfileService } from "../player/main/steamProfileService.js";
 import { PresenceService } from "../presence/presenceService.js";
 import { RealtimeEventBus } from "../realtime/eventBus.js";
 import { MatchRecordStore } from "../records/matchRecordStore.js";
@@ -77,7 +76,6 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     },
   });
   const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
-  const steamProfiles = new SteamProfileService();
   const matchmakingService = new MatchmakingService({
     store: await MatchmakingStore.create(path.join(recordsDir, "matchmaking")),
     accounts,
@@ -86,7 +84,6 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     executor,
     records,
     events,
-    steamProfiles,
   });
   matchmaking = matchmakingService;
   await completeRoomsIfGameServerUnavailable(matchmakingService, config.gameServer.portRange.start);
