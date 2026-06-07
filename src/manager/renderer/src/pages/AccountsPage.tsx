@@ -90,6 +90,17 @@ export function AccountsPage() {
       },
     },
     {
+      title: "Dev 模式",
+      dataIndex: "dev",
+      render: (value: boolean | undefined, row: AccountView) => {
+        if (row.role !== "player") return "-";
+        const updating = updatingIds.has(row.id);
+        return (
+          <Switch checked={Boolean(value)} loading={updating} disabled={updating} onChange={(dev) => void toggleDev(row, dev)} />
+        );
+      },
+    },
+    {
       title: "操作",
       render: (_: unknown, row: AccountView) => {
         const resetting = resettingIds.has(row.id);
@@ -127,6 +138,18 @@ export function AccountsPage() {
     if (!beginUpdating(row.id)) return;
     try {
       await accountApi.update(row.id, { enabled });
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "更新账号失败");
+    } finally {
+      await refresh();
+      endUpdating(row.id);
+    }
+  }
+
+  async function toggleDev(row: AccountView, dev: boolean) {
+    if (!beginUpdating(row.id)) return;
+    try {
+      await accountApi.update(row.id, { dev });
     } catch (error) {
       message.error(error instanceof Error ? error.message : "更新账号失败");
     } finally {

@@ -1,4 +1,4 @@
-import { Button, Modal, message } from "antd";
+import { Button, Modal, Switch, message } from "antd";
 import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto, PlayerPartyInvitationDto } from "../../../shared/types.js";
@@ -15,7 +15,7 @@ interface HomePageProps {
   onAcceptPartyInvite?: (invitationId: string) => Promise<void>;
   onDeclinePartyInvite?: (invitationId: string) => Promise<void>;
   onLeaveParty?: () => Promise<void>;
-  onStartMatchmaking?: () => Promise<void>;
+  onStartMatchmaking?: (options?: { dev?: boolean }) => Promise<void>;
 }
 
 const partyMemberSlotOrder = [3, 1, 4, 0];
@@ -65,6 +65,7 @@ export function HomePage({
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [leavingParty, setLeavingParty] = useState(false);
   const [matchingPending, setMatchingPending] = useState(false);
+  const [devMode, setDevMode] = useState(false);
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
   const hasSteamBinding = Boolean(account?.steam64?.trim());
   const isMatchmakingPending = matchingPending || matchmakingPending;
@@ -121,7 +122,7 @@ export function HomePage({
     if (!onStartMatchmaking || isMatchmakingPending) return;
     setMatchingPending(true);
     try {
-      await onStartMatchmaking();
+      await onStartMatchmaking(account?.dev ? { dev: devMode } : undefined);
     } finally {
       setMatchingPending(false);
     }
@@ -244,6 +245,12 @@ export function HomePage({
           <strong>匹配</strong>
         </div>
         {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
+        {account?.dev ? (
+          <div className="faceit-dev-toggle">
+            <Switch checked={devMode} onChange={setDevMode} disabled={isMatchmakingPending} />
+            <span>开发模式（固定阵容）</span>
+          </div>
+        ) : null}
         <div className="faceit-queue-actions">
           {party ? (
             <Button className="faceit-secondary-cta" onClick={() => void leaveParty()} disabled={!onLeaveParty || leavingParty || isMatchmakingPending} loading={leavingParty}>

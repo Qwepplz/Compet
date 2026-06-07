@@ -66,6 +66,7 @@ export interface AccountView {
   steamAvatarUrl?: string;
   role: AccountRole;
   enabled: boolean;
+  dev?: boolean;
   mustChangePassword: boolean;
   lastLoginAt?: string;
   createdAt: string;
@@ -80,4 +81,5 @@ export interface CreateAccountInput {
 export interface UpdateAccountInput {
   steam64?: string;
   enabled?: boolean;
+  dev?: boolean;
 }

@@ -7,7 +7,7 @@ export type RealtimeCommand =
   | { type: "command"; commandId: string; name: "party.acceptInvite"; payload: { invitationId: string } }
   | { type: "command"; commandId: string; name: "party.declineInvite"; payload: { invitationId: string } }
   | { type: "command"; commandId: string; name: "party.leave"; payload: Record<string, never> }
-  | { type: "command"; commandId: string; name: "party.startMatchmaking"; payload: Record<string, never> }
+  | { type: "command"; commandId: string; name: "party.startMatchmaking"; payload: { dev?: boolean } }
   | { type: "command"; commandId: string; name: "matchmaking.acceptReady"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "matchmaking.declineReady"; payload: Record<string, never> }
   | {
@@ -54,7 +54,7 @@ export interface RealtimeCommandMatchmaking {
   acceptPartyInvite(accountId: string, invitationId: string): Promise<unknown>;
   declinePartyInvite(accountId: string, invitationId: string): Promise<unknown>;
   leaveParty(accountId: string): Promise<unknown>;
-  startPartyMatchmaking(ownerAccountId: string): Promise<unknown>;
+  startPartyMatchmaking(ownerAccountId: string, options?: { dev?: boolean }): Promise<unknown>;
   acceptReady(accountId: string): Promise<unknown>;
   declineReady(accountId: string): Promise<unknown>;
   ackReadyRoomEntered(roomId: string, accountId: string): Promise<unknown>;
@@ -145,7 +145,7 @@ export async function executeRealtimeCommand(
         return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
       case "party.startMatchmaking":
         if (!matchmaking) return commandUnavailable(command.commandId);
-        return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.startPartyMatchmaking(accountId) } };
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.startPartyMatchmaking(accountId, { dev: command.payload.dev }) } };
       case "matchmaking.acceptReady":
         if (!matchmaking) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.acceptReady(accountId) } };

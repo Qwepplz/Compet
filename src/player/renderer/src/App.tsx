@@ -945,9 +945,9 @@ export function App() {
     }
   }
 
-  async function startPartyMatchmaking() {
+  async function startPartyMatchmaking(options?: { dev?: boolean }) {
     if (!partyApi) return;
-    const nextRoom = await partyApi.startPartyMatchmaking();
+    const nextRoom = await partyApi.startPartyMatchmaking(options);
     setMatchmaking((current) => ({
       ...current,
       room: nextRoom,
@@ -958,7 +958,7 @@ export function App() {
     setMatchmakingFeedbackPending(false);
   }
 
-  async function startMatchmakingFromHome() {
+  async function startMatchmakingFromHome(options?: { dev?: boolean }) {
     if (!partyApi || !canUseMatchmaking || hasActiveMatch || matchmakingFeedbackPending) return;
     if (party && party.ownerAccountId !== account?.id) return;
     primeMatchFoundSound();
@@ -967,7 +967,7 @@ export function App() {
       if (!party) {
         await createParty();
       }
-      await startPartyMatchmaking();
+      await startPartyMatchmaking(options);
     } catch (error) {
       setMatchmakingFeedbackPending(false);
       message.error(error instanceof Error ? error.message : "开始匹配失败");

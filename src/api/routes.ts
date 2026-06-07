@@ -36,7 +36,8 @@ function readStringField(payload: unknown, field: string): string {
 }
 
 const createAccountSchema = z.object({ username: z.string().min(1), password: z.string().min(8), steam64: z.string().default("") });
-const patchAccountSchema = z.object({ steam64: z.string().optional(), enabled: z.boolean().optional() });
+const patchAccountSchema = z.object({ steam64: z.string().optional(), enabled: z.boolean().optional(), dev: z.boolean().optional() });
+const matchmakingStartSchema = z.object({ dev: z.boolean().optional() });
 const passwordSchema = z.object({ password: z.string().min(8) });
 const accountIdParamsSchema = z.object({ id: z.string().min(1) });
 const partyJoinSchema = z.object({ partyId: z.string().min(1) });
@@ -395,8 +396,9 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
+    const { dev } = matchmakingStartSchema.parse(request.body ?? {});
     try {
-      return { room: await matchmaking.startPartyMatchmaking(auth.account.id) };
+      return { room: await matchmaking.startPartyMatchmaking(auth.account.id, { dev }) };
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

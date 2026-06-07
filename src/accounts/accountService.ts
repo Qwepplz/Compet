@@ -16,6 +16,7 @@ export interface CreateAccountInput {
 export interface UpdateAccountInput {
   steam64?: string;
   enabled?: boolean;
+  dev?: boolean;
 }
 
 function normalizeSteam64(role: AccountRole, steam64: string | undefined): string {
@@ -51,6 +52,7 @@ export class AccountService {
         steam64: normalizeSteam64(input.role, input.steam64),
         role: input.role,
         enabled: true,
+        dev: false,
         passwordHash: await hashPassword(input.password),
         mustChangePassword: input.mustChangePassword,
         createdAt: now,

@@ -7,6 +7,7 @@ export interface AccountRecord {
   steam64: string;
   role: AccountRole;
   enabled: boolean;
+  dev?: boolean;
   passwordHash: string;
   mustChangePassword: boolean;
   createdAt: string;

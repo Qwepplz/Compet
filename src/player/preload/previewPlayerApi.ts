@@ -210,7 +210,7 @@ export function createPreviewPlayerApi() {
       room = null;
       publishSnapshot();
     },
-    startPartyMatchmaking: async (): Promise<PlayerLiveMatchStateDto> => {
+    startPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerLiveMatchStateDto> => {
       const nextParty = ensureParty();
       room = makeReadyRoom(nextParty);
       publishSnapshot();

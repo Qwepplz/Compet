@@ -188,14 +188,15 @@ export class PlayerApiClient {
     return this.commandOrRequest("party.leave", {}, () => this.request("POST", "/party/leave", {}));
   }
 
-  async startPartyMatchmaking(): Promise<PlayerLiveMatchStateDto> {
+  async startPartyMatchmaking(options: { dev?: boolean } = {}): Promise<PlayerLiveMatchStateDto> {
+    const payload = options.dev ? { dev: true } : {};
     const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
       "party.startMatchmaking",
-      {},
+      payload,
       () => this.request(
         "POST",
         "/party/matchmaking/start",
-        {},
+        payload,
         MATCHMAKING_START_TIMEOUT_MS,
       ),
     );

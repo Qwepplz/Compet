@@ -1,12 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { AccountService } from "../accounts/accountService.js";
+import type { AccountRecord } from "../accounts/accountTypes.js";
 import type { BotCatalog } from "../bots/botCatalog.js";
 import type { FriendListDto } from "../friends/friendService.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
-import { assignTeams } from "./teamAssignment.js";
+import { assignDevTeams, assignTeams } from "./teamAssignment.js";
 import type { MatchParticipant, MatchPlan } from "./types.js";
 import {
   MatchmakingStore,
@@ -305,14 +306,16 @@ export class MatchmakingService {
     });
   }
 
-  startPartyMatchmaking(ownerAccountId: string): Promise<PublicMatchRoomRecord> {
+  startPartyMatchmaking(ownerAccountId: string, options: { dev?: boolean } = {}): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
-      await this.requireMatchmakingAccount(ownerAccountId);
+      const ownerAccount = await this.requireMatchmakingAccount(ownerAccountId);
+      const useDev = options.dev === true && ownerAccount.dev === true;
       const parties = await this.deps.store.listParties();
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
       this.requireOpenParty(party);
+      if (useDev && party.memberAccountIds.length > 1) throw new Error("dev mode requires a solo party");
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
       const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms());
       if (existingRooms.some((room) => isServerManagedPhase(room.phase))) {
@@ -321,7 +324,9 @@ export class MatchmakingService {
 
       const startedAt = this.now();
       const humans = await Promise.all(party.memberAccountIds.map((accountId) => this.toHumanParticipant(accountId)));
-      const teams = assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
+      const teams = useDev
+        ? assignDevTeams({ human: humans[0]!, botCandidates: this.deps.botCatalog.candidates, random: this.random })
+        : assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
       const participants = [...teams.teamA.participants, ...teams.teamB.participants];
       const room: MatchRoomRecord = {
         id: this.idFactory(),
@@ -760,10 +765,11 @@ export class MatchmakingService {
     if (!(await this.deps.accounts.getById(accountId))) throw new Error(`account not found: ${accountId}`);
   }
 
-  private async requireMatchmakingAccount(accountId: string): Promise<void> {
+  private async requireMatchmakingAccount(accountId: string): Promise<AccountRecord> {
     const account = await this.deps.accounts.getById(accountId);
     if (!account) throw new Error(`account not found: ${accountId}`);
     if (!account.steam64.trim()) throw new Error("steam64 required for matchmaking");
+    return account;
   }
 
   private async toHumanParticipant(accountId: string): Promise<MatchParticipant> {

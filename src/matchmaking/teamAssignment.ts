@@ -1,6 +1,6 @@
 import type { BotCandidate } from "../bots/botCatalog.js";
 import type { BotRosterTeam } from "../bots/botRosterParser.js";
-import type { MatchParticipant, MatchTeam } from "./types.js";
+import type { GameSide, MatchParticipant, MatchTeam } from "./types.js";
 
 const STEAM64_ACCOUNT_ID_OFFSET = 76561197960265728n;
 const PRO_BOT_SELECTION_CHANCE = 0.6;
@@ -22,6 +22,60 @@ export interface AssignTeamsResult {
   teamA: MatchTeam;
   teamB: MatchTeam;
   selectedBots: BotCandidate[];
+}
+
+export const DEV_PRO_TEAMMATES = ["ZywOo", "donk", "m0NESY", "ropz"] as const;
+
+export interface AssignDevTeamsInput {
+  human: MatchParticipant;
+  botCandidates: BotCandidate[];
+  random?: () => number;
+}
+
+export function assignDevTeams(input: AssignDevTeamsInput): AssignTeamsResult {
+  const random = input.random ?? Math.random;
+
+  const proTeammates = DEV_PRO_TEAMMATES.map((name) => {
+    const candidate = findCandidateByName(input.botCandidates, name);
+    if (!candidate) throw new Error(`dev mode requires bot profile "${name}" in botprofile.db`);
+    return candidate;
+  });
+
+  const fairCandidates = shuffle(
+    input.botCandidates.filter((candidate) => isFairBotCandidate(candidate)),
+    random,
+  );
+  if (fairCandidates.length < 5) {
+    throw new Error(`dev mode requires at least 5 Fair-template bots, got ${fairCandidates.length}`);
+  }
+  const enemyBots = fairCandidates.slice(0, 5);
+
+  const usedBotIds = new Set<string>();
+  const humanIds = new Set([input.human.id]);
+  const proNames = new Set(DEV_PRO_TEAMMATES.map(normalizeBotName));
+  const allyParticipants: MatchParticipant[] = [
+    input.human,
+    ...proTeammates.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, proNames)),
+  ];
+  const enemyParticipants = enemyBots.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, new Set()));
+
+  const allySide: GameSide = random() < 0.5 ? "t" : "ct";
+  const allyTeam = createTeam("teamA", allySide, { name: "Team A" }, allyParticipants, random);
+  const enemyTeam = createTeam("teamB", allySide === "t" ? "ct" : "t", { name: "Team B" }, enemyParticipants, random);
+
+  return { teamA: allyTeam, teamB: enemyTeam, selectedBots: [...proTeammates, ...enemyBots] };
+}
+
+function findCandidateByName(candidates: readonly BotCandidate[], name: string): BotCandidate | undefined {
+  const exact = candidates.find((candidate) => candidate.name === name);
+  if (exact) return exact;
+  const normalized = name.toLowerCase();
+  const matches = candidates.filter((candidate) => candidate.name.toLowerCase() === normalized);
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+function isFairBotCandidate(candidate: BotCandidate): boolean {
+  return candidate.templates.some((template) => template.trim().toLowerCase() === "fair");
 }
 
 interface PickedTeamRoster {

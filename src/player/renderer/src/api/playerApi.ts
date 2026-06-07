@@ -39,7 +39,7 @@ export interface PlayerPartyApi {
   acceptPartyInvite(invitationId: string): Promise<PlayerPartyDto>;
   declinePartyInvite(invitationId: string): Promise<void>;
   leaveParty(): Promise<void>;
-  startPartyMatchmaking(): Promise<PlayerLiveMatchStateDto>;
+  startPartyMatchmaking(options?: { dev?: boolean }): Promise<PlayerLiveMatchStateDto>;
 }
 
 export interface PlayerMatchRoomApi {
