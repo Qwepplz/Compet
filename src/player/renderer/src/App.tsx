@@ -36,6 +36,7 @@ import {
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
 import { loadMatchSoundEnabled, saveMatchSoundEnabled } from "./matchSoundPreference.js";
+import { loadDevModeEnabled, saveDevModeEnabled } from "./devModePreference.js";
 import { getVisiblePartyForHome } from "./partyDisplay.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import {
@@ -209,6 +210,7 @@ export function App() {
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
   const [matchmakingFeedbackPending, setMatchmakingFeedbackPending] = useState(false);
   const [matchSoundEnabled, setMatchSoundEnabled] = useState(() => loadMatchSoundEnabled());
+  const [devModeEnabled, setDevModeEnabled] = useState(() => loadDevModeEnabled());
   const [realtimeStatus, setRealtimeStatus] = useState<PlayerRealtimeStatusDto>(emptyRealtimeStatus);
   const [, setStale] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
@@ -216,6 +218,7 @@ export function App() {
   const [loginPending, setLoginPending] = useState(false);
   const [changePasswordPending, setChangePasswordPending] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
@@ -270,6 +273,10 @@ export function App() {
     matchSoundEnabledRef.current = matchSoundEnabled;
     saveMatchSoundEnabled(matchSoundEnabled);
   }, [matchSoundEnabled]);
+
+  useEffect(() => {
+    saveDevModeEnabled(devModeEnabled);
+  }, [devModeEnabled]);
 
   useEffect(() => {
     if (matchSoundEnabled) return;
@@ -844,6 +851,8 @@ export function App() {
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setCurrentPassword("");
+      setSettingsModalOpen(false);
+      setPasswordModalOpen(false);
       setActiveView("login");
     }
   }
@@ -1022,6 +1031,7 @@ export function App() {
         party={visibleHomeParty}
         partyInvitations={matchmaking.partyInvitations}
         matchmakingPending={matchmakingFeedbackPending}
+        devModeEnabled={devModeEnabled}
         onInviteFriend={partyApi && !hasActiveMatch ? inviteToParty : undefined}
         onAcceptPartyInvite={partyApi ? acceptPartyInvite : undefined}
         onDeclinePartyInvite={partyApi ? declinePartyInvite : undefined}
@@ -1164,19 +1174,7 @@ export function App() {
               {baseUrl}
             </span>
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
-            <label className="player-sound-toggle">
-              <span>匹配音效</span>
-              <Switch
-                aria-label="匹配音效"
-                checked={matchSoundEnabled}
-                checkedChildren="开"
-                unCheckedChildren="关"
-                onChange={setMatchSoundEnabled}
-                size="small"
-              />
-            </label>
-            <Button onClick={() => setPasswordModalOpen(true)}>修改密码</Button>
-            <Button onClick={() => void logout()}>退出登录</Button>
+            <Button onClick={() => setSettingsModalOpen(true)}>设置</Button>
           </div>
         </div>
 
@@ -1239,6 +1237,54 @@ export function App() {
               保存新密码
             </Button>
           </Form>
+        </Modal>
+        <Modal
+          centered
+          footer={null}
+          open={settingsModalOpen}
+          title="设置"
+          onCancel={() => setSettingsModalOpen(false)}
+        >
+          <div className="player-settings">
+            <label className="player-settings-row">
+              <span>匹配音效</span>
+              <Switch
+                aria-label="匹配音效"
+                checked={matchSoundEnabled}
+                checkedChildren="开"
+                unCheckedChildren="关"
+                onChange={setMatchSoundEnabled}
+                size="small"
+              />
+            </label>
+            {account?.dev ? (
+              <label className="player-settings-row">
+                <span>开发模式（固定阵容）</span>
+                <Switch
+                  aria-label="开发模式"
+                  checked={devModeEnabled}
+                  checkedChildren="开"
+                  unCheckedChildren="关"
+                  onChange={setDevModeEnabled}
+                  size="small"
+                />
+              </label>
+            ) : null}
+            <div className="player-settings-actions">
+              <Button
+                size="small"
+                onClick={() => {
+                  setSettingsModalOpen(false);
+                  setPasswordModalOpen(true);
+                }}
+              >
+                修改密码
+              </Button>
+              <Button size="small" onClick={() => void logout()}>
+                退出登录
+              </Button>
+            </div>
+          </div>
         </Modal>
       </div>
     </div>
