@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { PlayerLoginResult } from "../main/playerApiClient.js";
 import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
+import type { AccountView } from "../../manager/shared/types.js";
 import { createPreviewPlayerApi } from "./previewPlayerApi.js";
 import type {
   PlayerFriendListDto,
@@ -61,6 +62,8 @@ export const playerApi = {
     subscribe("player:realtime:status", listener),
   onRealtimeSnapshot: (listener: (snapshot: PlayerRealtimeSnapshotDto) => void): (() => void) =>
     subscribe("player:realtime:snapshot", listener),
+  onAccountUpdated: (listener: (account: AccountView) => void): (() => void) =>
+    subscribe("player:account:updated", listener),
   copyText: (text: string): Promise<void> => invoke("player:copyText", text),
   openConnectUrl: (connectUrl: string): Promise<void> => invoke("player:openConnectUrl", connectUrl),
 };

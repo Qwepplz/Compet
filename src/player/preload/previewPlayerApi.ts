@@ -268,6 +268,9 @@ export function createPreviewPlayerApi() {
       snapshotListeners.add(listener);
       return () => snapshotListeners.delete(listener);
     },
+    onAccountUpdated: (_listener: (account: AccountView) => void): (() => void) => {
+      return () => undefined;
+    },
     copyText: async (): Promise<void> => undefined,
     openConnectUrl: async (): Promise<void> => undefined,
   };

@@ -12,12 +12,14 @@ import type {
   PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../../../shared/types.js";
+import type { AccountView } from "../../../../manager/shared/types.js";
 
 export interface PlayerRealtimeApi {
   refreshRealtimeSnapshot(scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto>;
   onRealtimeEvent(listener: (event: PlayerRealtimeEvent) => void): () => void;
   onRealtimeStatus(listener: (status: PlayerRealtimeStatusDto) => void): () => void;
   onRealtimeSnapshot(listener: (snapshot: PlayerRealtimeSnapshotDto) => void): () => void;
+  onAccountUpdated(listener: (account: AccountView) => void): () => void;
 }
 
 export interface PlayerSavedLoginApi {
@@ -66,7 +68,7 @@ export function hasSavedLoginApi(api: Window["playerApi"]): api is PlayerApiWith
 }
 
 export function hasRealtimeApi(api: Window["playerApi"]): api is PlayerApiWithRealtime {
-  return hasMethods(api, ["refreshRealtimeSnapshot", "onRealtimeEvent", "onRealtimeStatus", "onRealtimeSnapshot"]);
+  return hasMethods(api, ["refreshRealtimeSnapshot", "onRealtimeEvent", "onRealtimeStatus", "onRealtimeSnapshot", "onAccountUpdated"]);
 }
 
 export function hasFriendsApi(api: Window["playerApi"]): api is PlayerApiWithFriends {

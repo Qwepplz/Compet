@@ -301,11 +301,15 @@ export function App() {
     const unsubscribeEvent = realtimeApi.onRealtimeEvent((event) => {
       applyRealtimeEvent(event);
     });
+    const unsubscribeAccount = realtimeApi.onAccountUpdated?.((nextAccount) => {
+      setAccount((current) => (current ? nextAccount : current));
+    });
 
     return () => {
       unsubscribeStatus();
       unsubscribeSnapshot();
       unsubscribeEvent();
+      unsubscribeAccount?.();
     };
   }, [account, realtimeApi]);
 

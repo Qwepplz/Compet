@@ -12,7 +12,8 @@ import type {
   PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
-import { registerPlayerIpc, warmUpProfiles } from "./ipc.js";
+import type { AccountView } from "../../manager/shared/types.js";
+import { registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
 import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
@@ -32,6 +33,8 @@ const realtimeClient = new PlayerRealtimeClient();
 const realtimeStatusChannel = "player:realtime:status";
 const realtimeEventChannel = "player:realtime:event";
 const realtimeSnapshotChannel = "player:realtime:snapshot";
+const accountUpdatedChannel = "player:account:updated";
+const PROFILES_UPDATED_DEBOUNCE_MS = 300;
 const MAX_QUEUED_REALTIME_EVENTS = 200;
 const REALTIME_EVENT_ENRICH_TIMEOUT_MS = 1_500;
 const REALTIME_EVENT_POLL_TIMEOUT_MS = 25_000;
@@ -48,6 +51,7 @@ let lastDeliveredRealtimeSeq = 0;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 let realtimeStatusRevision = 0;
+let profilesUpdatedTimer: ReturnType<typeof setTimeout> | undefined;
 
 function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   queuedRealtimeEvents.push(nextEvent);
@@ -148,6 +152,28 @@ function publishRealtimeEventNowOrQueue(event: PlayerRealtimeEvent, sessionVersi
 
 function publishRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto): void {
   broadcast(realtimeSnapshotChannel, snapshot);
+}
+
+function publishAccount(account: AccountView): void {
+  broadcast(accountUpdatedChannel, account);
+}
+
+async function refreshAccount(): Promise<void> {
+  if (!apiClient) return;
+  const account = await apiClient.me();
+  if (apiClient) publishAccount(account);
+}
+
+function handleProfilesUpdated(): void {
+  if (profilesUpdatedTimer !== undefined) return;
+  profilesUpdatedTimer = setTimeout(() => {
+    profilesUpdatedTimer = undefined;
+    if (!apiClient) return;
+    void refreshAccount().catch(() => undefined);
+    if (realtimeSessionVersion > 0) {
+      void refreshRealtimeSnapshot("manual").catch(() => undefined);
+    }
+  }, PROFILES_UPDATED_DEBOUNCE_MS);
 }
 
 function canPublishRealtimeEventWhileSnapshotting(event: PlayerRealtimeEvent): boolean {
@@ -388,6 +414,7 @@ if (!gotSingleInstanceLock) {
         apiClient = client;
       },
     });
+    setProfilesUpdatedHandler(handleProfilesUpdated);
     warmUpProfiles();
 
     await createWindow();

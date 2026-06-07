@@ -45,13 +45,19 @@ export interface RestoreSessionResult extends RestoredPlayerSession {
 }
 
 const profileBootLogFile = "compet-player-client-boot.log";
+let profilesUpdatedHandler: (() => void) | undefined;
 const sharedProfileService = new RemoteProfileService({
   baseUrl: PROFILE_BASE_URL,
   onLog: (message) => appendBootLog(profileBootLogFile, `[profiles] ${message}`),
+  onProfilesUpdated: () => profilesUpdatedHandler?.(),
 });
 
 export function warmUpProfiles(): void {
   sharedProfileService.warmUp();
+}
+
+export function setProfilesUpdatedHandler(handler: () => void): void {
+  profilesUpdatedHandler = handler;
 }
 
 function createPlayerApiClient(baseUrl: string, token: string | undefined, deps: IpcDeps): PlayerApiClient {

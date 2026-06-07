@@ -29,6 +29,7 @@ interface RemoteProfileServiceOptions {
   fetchFn?: typeof fetch;
   refreshTtlMs?: number;
   onLog?: (message: string) => void;
+  onProfilesUpdated?: () => void;
 }
 
 function joinUrl(baseUrl: string, relative: string): string {
@@ -40,6 +41,7 @@ export class RemoteProfileService {
   private readonly fetchFn: typeof fetch;
   private readonly refreshTtlMs: number;
   private readonly onLog?: (message: string) => void;
+  private readonly onProfilesUpdated?: () => void;
   private readonly indexFiles = ["bot-index.json", "human-index.json"];
   private profiles = new Map<string, ProfileEntry>();
   private readonly avatarCache = new Map<string, string>();
@@ -53,6 +55,7 @@ export class RemoteProfileService {
     this.fetchFn = options.fetchFn ?? fetch;
     this.refreshTtlMs = options.refreshTtlMs ?? DEFAULT_REFRESH_TTL_MS;
     this.onLog = options.onLog;
+    this.onProfilesUpdated = options.onProfilesUpdated;
   }
 
   warmUp(): void {
@@ -105,6 +108,7 @@ export class RemoteProfileService {
         if (buffer.length === 0) return undefined;
         const dataUri = `data:${contentType};base64,${buffer.toString("base64")}`;
         this.avatarCache.set(steam64, dataUri);
+        this.onProfilesUpdated?.();
         return dataUri;
       } finally {
         clearTimeout(timeout);
@@ -145,6 +149,7 @@ export class RemoteProfileService {
         this.profiles = merged;
         this.loadedAt = Date.now();
         this.onLog?.(`remote profiles loaded: ${merged.size} entries from ${this.baseUrl}`);
+        this.onProfilesUpdated?.();
       } else {
         this.onLog?.(`remote profiles load returned 0 entries from ${this.baseUrl}`);
       }
