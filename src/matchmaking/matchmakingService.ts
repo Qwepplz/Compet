@@ -315,7 +315,7 @@ export class MatchmakingService {
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
       this.requireOpenParty(party);
-      if (useDev && party.memberAccountIds.length > 1) throw new Error("dev mode requires a solo party");
+      if (useDev && party.memberAccountIds.length > 5) throw new Error("dev mode allows at most 5 players");
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
       const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms());
       if (existingRooms.some((room) => isServerManagedPhase(room.phase))) {
@@ -325,7 +325,7 @@ export class MatchmakingService {
       const startedAt = this.now();
       const humans = await Promise.all(party.memberAccountIds.map((accountId) => this.toHumanParticipant(accountId)));
       const teams = useDev
-        ? assignDevTeams({ human: humans[0]!, botCandidates: this.deps.botCatalog.candidates, random: this.random })
+        ? assignDevTeams({ humans, botCandidates: this.deps.botCatalog.candidates, random: this.random })
         : assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
       const participants = [...teams.teamA.participants, ...teams.teamB.participants];
       const room: MatchRoomRecord = {

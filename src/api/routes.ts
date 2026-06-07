@@ -122,7 +122,7 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("not a friend") ||
       error.message.includes("offline") ||
       error.message.includes("Not enough bot candidates") ||
-      error.message.includes("dev mode requires")
+      error.message.includes("dev mode")
     ) {
       throw badRequest(error.message);
     }

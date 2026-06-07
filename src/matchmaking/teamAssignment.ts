@@ -27,7 +27,7 @@ export interface AssignTeamsResult {
 export const DEV_PRO_TEAMMATES = ["ZywOo", "donk", "m0NESY", "ropz"] as const;
 
 export interface AssignDevTeamsInput {
-  human: MatchParticipant;
+  humans: MatchParticipant[];
   botCandidates: BotCandidate[];
   random?: () => number;
 }
@@ -35,11 +35,15 @@ export interface AssignDevTeamsInput {
 export function assignDevTeams(input: AssignDevTeamsInput): AssignTeamsResult {
   const random = input.random ?? Math.random;
 
-  const proTeammates = DEV_PRO_TEAMMATES.map((name) => {
-    const candidate = findCandidateByName(input.botCandidates, name);
-    if (!candidate) throw new Error(`dev mode requires bot profile "${name}" in botprofile.db`);
-    return candidate;
-  });
+  const allyHumans = input.humans;
+  const proSlots = 5 - allyHumans.length;
+  const proTeammates = shuffle(DEV_PRO_TEAMMATES, random)
+    .slice(0, proSlots)
+    .map((name) => {
+      const candidate = findCandidateByName(input.botCandidates, name);
+      if (!candidate) throw new Error(`dev mode requires bot profile "${name}" in botprofile.db`);
+      return candidate;
+    });
 
   const fairCandidates = shuffle(
     input.botCandidates.filter((candidate) => isFairBotCandidate(candidate)),
@@ -51,10 +55,10 @@ export function assignDevTeams(input: AssignDevTeamsInput): AssignTeamsResult {
   const enemyBots = fairCandidates.slice(0, 5);
 
   const usedBotIds = new Set<string>();
-  const humanIds = new Set([input.human.id]);
+  const humanIds = new Set(allyHumans.map((human) => human.id));
   const proNames = new Set(DEV_PRO_TEAMMATES.map(normalizeBotName));
   const allyParticipants: MatchParticipant[] = [
-    input.human,
+    ...allyHumans,
     ...proTeammates.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, proNames)),
   ];
   const enemyParticipants = enemyBots.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, new Set()));
