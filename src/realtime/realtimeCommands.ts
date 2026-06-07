@@ -89,10 +89,16 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
         : undefined;
     case "party.create":
     case "party.leave":
-    case "party.startMatchmaking":
     case "matchmaking.acceptReady":
     case "matchmaking.declineReady":
       return { type: "command", commandId: record.commandId, name: record.name, payload: {} };
+    case "party.startMatchmaking":
+      return {
+        type: "command",
+        commandId: record.commandId,
+        name: record.name,
+        payload: typeof payload.dev === "boolean" ? { dev: payload.dev } : {},
+      };
     case "matchRoom.entered":
       return typeof payload.roomId === "string"
         ? { type: "command", commandId: record.commandId, name: record.name, payload: { roomId: payload.roomId } }

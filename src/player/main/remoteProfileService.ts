@@ -10,6 +10,7 @@ export interface PlayerProfile {
 }
 
 const DEFAULT_REFRESH_TTL_MS = 30 * 60 * 1000;
+const DEFAULT_RELOAD_RETRY_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = 8_000;
 const STEAM64_PATTERN = /^\d{17}$/;
 
@@ -42,7 +43,9 @@ export class RemoteProfileService {
   private readonly indexFiles = ["bot-index.json", "human-index.json"];
   private profiles = new Map<string, ProfileEntry>();
   private readonly avatarCache = new Map<string, string>();
+  private readonly avatarInFlight = new Map<string, Promise<void>>();
   private loadedAt = 0;
+  private lastLoadAttemptAt = 0;
   private inFlight?: Promise<void>;
 
   constructor(options: RemoteProfileServiceOptions) {
@@ -53,27 +56,36 @@ export class RemoteProfileService {
   }
 
   warmUp(): void {
-    void this.ensureLoaded();
+    this.startLoadIfNeeded();
   }
 
   async resolveMany(steam64s: string[]): Promise<Map<string, PlayerProfile>> {
-    await this.ensureLoaded();
+    this.startLoadIfNeeded();
     const result = new Map<string, PlayerProfile>();
-    const wanted: Array<{ steam64: string; entry: ProfileEntry }> = [];
     for (const raw of steam64s) {
       const steam64 = raw.trim();
       if (!STEAM64_PATTERN.test(steam64)) continue;
       const entry = this.profiles.get(steam64);
-      if (entry) wanted.push({ steam64, entry });
+      if (!entry) continue;
+
+      const avatarUrl = this.avatarCache.get(steam64);
+      if (avatarUrl === undefined) {
+        this.fetchAvatarInBackground(steam64, entry.avatarRemoteUrl);
+      }
+      result.set(steam64, { steam64, personaName: entry.personaName, avatarUrl: avatarUrl ?? "" });
     }
 
-    await Promise.all(
-      wanted.map(async ({ steam64, entry }) => {
-        const avatarUrl = await this.resolveAvatarDataUri(steam64, entry.avatarRemoteUrl);
-        result.set(steam64, { steam64, personaName: entry.personaName, avatarUrl: avatarUrl ?? "" });
-      }),
-    );
     return result;
+  }
+
+  private fetchAvatarInBackground(steam64: string, remoteUrl: string): void {
+    if (this.avatarInFlight.has(steam64)) return;
+    const request = this.resolveAvatarDataUri(steam64, remoteUrl)
+      .then(() => undefined)
+      .finally(() => {
+        this.avatarInFlight.delete(steam64);
+      });
+    this.avatarInFlight.set(steam64, request);
   }
 
   private async resolveAvatarDataUri(steam64: string, remoteUrl: string): Promise<string | undefined> {
@@ -103,22 +115,24 @@ export class RemoteProfileService {
     }
   }
 
-  private async ensureLoaded(): Promise<void> {
-    const fresh = this.profiles.size > 0 && Date.now() - this.loadedAt < this.refreshTtlMs;
+  private startLoadIfNeeded(): void {
+    const now = Date.now();
+    const fresh = this.profiles.size > 0 && now - this.loadedAt < this.refreshTtlMs;
     if (fresh) return;
-    if (!this.inFlight) {
-      this.inFlight = this.reload().finally(() => {
-        this.inFlight = undefined;
-      });
-    }
-    await this.inFlight;
+    if (this.inFlight) return;
+    if (this.lastLoadAttemptAt > 0 && now - this.lastLoadAttemptAt < DEFAULT_RELOAD_RETRY_MS) return;
+
+    this.lastLoadAttemptAt = now;
+    this.inFlight = this.reload().finally(() => {
+      this.inFlight = undefined;
+    });
   }
 
   private async reload(): Promise<void> {
     try {
       const merged = new Map<string, ProfileEntry>();
-      for (const file of this.indexFiles) {
-        const index = await this.fetchIndex(file);
+      const indexes = await Promise.all(this.indexFiles.map((file) => this.fetchIndex(file)));
+      for (const index of indexes) {
         for (const [steam64, entry] of Object.entries(index)) {
           if (!STEAM64_PATTERN.test(steam64)) continue;
           merged.set(steam64, {

@@ -121,7 +121,8 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("already a party member") ||
       error.message.includes("not a friend") ||
       error.message.includes("offline") ||
-      error.message.includes("Not enough bot candidates")
+      error.message.includes("Not enough bot candidates") ||
+      error.message.includes("dev mode requires")
     ) {
       throw badRequest(error.message);
     }
