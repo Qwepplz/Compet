@@ -12,7 +12,7 @@ export function getActiveMatchRoom(matchmaking: PlayerMatchmakingStateDto): Play
 }
 
 export function getDisplayedMatchRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
-  return getActiveMatchRoom(matchmaking) ?? matchmaking.room ?? matchmaking.rooms.at(-1) ?? null;
+  return getActiveMatchRoom(matchmaking);
 }
 
 export function mergeTeamsAssignedRoom(
