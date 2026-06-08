@@ -15,12 +15,6 @@ export type RealtimeCommand =
       commandId: string;
       name: "matchRoom.entered";
       payload: { roomId: string };
-    }
-  | {
-      type: "command";
-      commandId: string;
-      name: "matchRoom.sendChatMessage";
-      payload: { roomId: string; text: string };
     };
 
 export interface RealtimeCommandAckSuccess {
@@ -58,7 +52,6 @@ export interface RealtimeCommandMatchmaking {
   acceptReady(accountId: string): Promise<unknown>;
   declineReady(accountId: string): Promise<unknown>;
   ackReadyRoomEntered(roomId: string, accountId: string): Promise<unknown>;
-  sendMatchChatMessage(input: { roomId: string; accountId: string; text: string }): Promise<unknown>;
 }
 
 export interface RealtimeCommandDeps {
@@ -102,10 +95,6 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
     case "matchRoom.entered":
       return typeof payload.roomId === "string"
         ? { type: "command", commandId: record.commandId, name: record.name, payload: { roomId: payload.roomId } }
-        : undefined;
-    case "matchRoom.sendChatMessage":
-      return typeof payload.roomId === "string" && typeof payload.text === "string"
-        ? { type: "command", commandId: record.commandId, name: record.name, payload: { roomId: payload.roomId, text: payload.text } }
         : undefined;
     default:
       return undefined;
@@ -165,14 +154,6 @@ export async function executeRealtimeCommand(
           commandId: command.commandId,
           ok: true,
           result: { room: await matchmaking.ackReadyRoomEntered(command.payload.roomId, accountId) },
-        };
-      case "matchRoom.sendChatMessage":
-        if (!matchmaking) return commandUnavailable(command.commandId);
-        return {
-          type: "command_ack",
-          commandId: command.commandId,
-          ok: true,
-          result: { message: await matchmaking.sendMatchChatMessage({ roomId: command.payload.roomId, accountId, text: command.payload.text }) },
         };
     }
   } catch (error) {

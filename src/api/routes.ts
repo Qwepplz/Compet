@@ -49,7 +49,6 @@ const realtimeEventsQuerySchema = z.object({
   afterSeq: z.coerce.number().int().min(0).default(0),
   timeoutMs: z.coerce.number().int().min(0).max(30_000).default(25_000),
 }).default({ afterSeq: 0, timeoutMs: 25_000 });
-const matchChatSchema = z.object({ text: z.string().trim().min(1).max(300) });
 
 function mapAccountServiceError(error: unknown): never {
   if (error instanceof Error && error.message === "account not found") throw notFound();
@@ -114,7 +113,6 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("party matchmaking must be started by owner") ||
       error.message.includes("party invitation") ||
       error.message.includes("ready check has not started") ||
-      error.message.includes("match chat message is empty") ||
       error.message.includes("match room is closed") ||
       error.message.includes("account is not in match room") ||
       error.message.includes("already in another party") ||
@@ -494,19 +492,6 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const { id } = matchRoomParamsSchema.parse(request.params);
     try {
       return { room: await matchmaking.ackReadyRoomEntered(id, auth.account.id) };
-    } catch (error) {
-      mapMatchmakingServiceError(error);
-    }
-  });
-
-  app.post("/match-room/:id/chat", async (request) => {
-    const auth = await authenticateRequest(request, deps);
-    requirePlayer(request);
-    const matchmaking = requireMatchmaking(deps);
-    const { id } = matchRoomParamsSchema.parse(request.params);
-    const input = matchChatSchema.parse(request.body);
-    try {
-      return { message: await matchmaking.sendMatchChatMessage({ roomId: id, accountId: auth.account.id, text: input.text }) };
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

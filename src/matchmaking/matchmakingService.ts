@@ -11,7 +11,6 @@ import { assignDevTeams, assignTeams } from "./teamAssignment.js";
 import type { MatchParticipant, MatchPlan } from "./types.js";
 import {
   MatchmakingStore,
-  type MatchChatMessage,
   type MatchMapSelectionState,
   type MatchRoomReadyState,
   type MatchRoomRecord,
@@ -27,7 +26,6 @@ const RECENT_MAP_EXCLUSION_COUNT = 3;
 const MAX_PARTY_HUMANS = 10;
 const READY_TIMEOUT_MS = 60_000;
 
-const MAX_MATCH_CHAT_MESSAGES = 100;
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 
 function isSoloOpenParty(party: PartyRecord): boolean {
@@ -72,7 +70,6 @@ export interface PublicMatchRoomRecord {
   partyId?: string;
   mapSelection?: MatchMapSelectionState;
   connect?: MatchConnectInfo;
-  chat?: MatchChatMessage[];
   createdAt: string;
 }
 
@@ -339,7 +336,6 @@ export class MatchmakingService {
         readyDeadlineAt: this.buildReadyDeadlineAt(startedAt),
         readyEnteredAccountIds: [],
         partyId: party.id,
-        chat: [],
         createdAt: startedAt,
       };
       const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, updatedAt: startedAt };
@@ -521,40 +517,6 @@ export class MatchmakingService {
     );
     return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms) };
   }
-
-  
-
-  sendMatchChatMessage(input: { roomId: string; accountId: string; text: string }): Promise<MatchChatMessage> {
-    return this.enqueueMutation(async () => {
-      await this.requireAccount(input.accountId);
-      const text = input.text.trim();
-      if (!text) throw new Error("match chat message is empty");
-
-      const rooms = await this.deps.store.listRooms();
-      const room = rooms.find((candidate) => candidate.id === input.roomId);
-      if (!room) throw new Error(`room not found: ${input.roomId}`);
-      if (isTerminalMatchPhase(room.phase)) throw new Error("match room is closed");
-      if (!this.roomHasAccount(room, input.accountId)) throw new Error("account is not in match room");
-
-      const participant = [...room.teamA.participants, ...room.teamB.participants].find(
-        (candidate) => candidate.accountId === input.accountId,
-      );
-      const message: MatchChatMessage = {
-        id: this.idFactory(),
-        kind: "player",
-        text,
-        accountId: input.accountId,
-        displayName: participant?.steamPersonaName?.trim() || participant?.steam64?.trim() || undefined,
-        createdAt: this.now(),
-      };
-      const updated: MatchRoomRecord = { ...room, chat: this.trimMatchChat([...(room.chat ?? []), message]) };
-      await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? updated : candidate)));
-      await this.emit({ type: "match_chat_message", matchId: room.id, accountIds: this.roomAudience(updated), message }, room.id);
-      return message;
-    });
-  }
-
-  
 
   completeMatchFromServerExit(matchId: string, exitInfo: GameServerExitInfo): Promise<PublicMatchRoomRecord | undefined> {
     return this.enqueueMutation(async () => {
@@ -915,11 +877,6 @@ export class MatchmakingService {
     });
   }
 
-  private trimMatchChat(chat: MatchChatMessage[] | undefined): MatchChatMessage[] | undefined {
-    if (!chat || chat.length <= MAX_MATCH_CHAT_MESSAGES) return chat;
-    return chat.slice(chat.length - MAX_MATCH_CHAT_MESSAGES);
-  }
-
   private pruneTerminalRooms(rooms: MatchRoomRecord[]): MatchRoomRecord[] {
     const cutoff = Date.parse(this.now()) - TERMINAL_ROOM_MEMORY_TTL_MS;
     return rooms.filter((room) => {
@@ -956,7 +913,6 @@ export class MatchmakingService {
           }
         : undefined,
       connect: room.connect ? { ...room.connect } : undefined,
-      chat: this.trimMatchChat(room.chat)?.map((message) => ({ ...message })),
       createdAt: room.createdAt,
     };
   }

@@ -118,8 +118,6 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("matchmaking:roomEntered", (_event, roomId: string) => withSavedAuth(deps, (client) => client.ackMatchRoomEntered(roomId)));
   ipcMain.handle("matchmaking:acceptReady", () => withSavedAuth(deps, (client) => client.acceptReady()));
   ipcMain.handle("matchmaking:declineReady", () => withSavedAuth(deps, (client) => client.declineReady()));
-  ipcMain.handle("matchmaking:sendChatMessage", (_event, roomId: string, text: string) =>
-    withSavedAuth(deps, (client) => client.sendMatchChatMessage(roomId, text)));
   ipcMain.handle("matchmaking:refreshSnapshot", (_event, scope?: PlayerRealtimeSnapshotScope) =>
     withSavedAuth(deps, () => deps.refreshRealtimeSnapshot("manual", scope)));
 

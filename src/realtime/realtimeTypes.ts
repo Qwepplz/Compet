@@ -1,5 +1,5 @@
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
-import type { MatchChatMessage, MatchMapSelectionState } from "../matchmaking/matchmakingStore.js";
+import type { MatchMapSelectionState } from "../matchmaking/matchmakingStore.js";
 
 type RealtimeEventWithSeq<T> = T & { seq?: number };
 
@@ -40,7 +40,6 @@ export type RealtimeEvent =
   | RealtimeEventWithSeq<{ type: "match_room_created"; matchId: string; accountIds?: string[]; room: unknown }>
   | RealtimeEventWithSeq<{ type: "teams_assigned"; matchId: string; accountIds?: string[]; teamA: unknown; teamB: unknown }>
   | RealtimeEventWithSeq<{ type: "map_randomizing_started"; matchId: string; accountIds?: string[]; mapSelection: MatchMapSelectionState }>
-  | RealtimeEventWithSeq<{ type: "match_chat_message"; matchId: string; accountIds?: string[]; message: MatchChatMessage }>
   | RealtimeEventWithSeq<{ type: "server_preparing"; matchId: string; accountIds?: string[] }>
   | RealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; accountIds?: string[]; connect: MatchConnectInfo }>
   | RealtimeEventWithSeq<{ type: "match_live"; matchId: string; accountIds?: string[] }>

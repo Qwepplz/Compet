@@ -6,7 +6,7 @@ import type {
 } from "../../friends/friendService.js";
 import type { MatchConnectInfo } from "../../game/matchExecutor.js";
 import type { PublicMatchRoomRecord, PartyInvitationDto } from "../../matchmaking/matchmakingService.js";
-import type { MatchChatMessage, MatchMapSelectionState, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
+import type { MatchMapSelectionState, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
 import type { MatchParticipant, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
 
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
@@ -24,7 +24,6 @@ export type PlayerReadyStateDto = MatchRoomReadyState;
 export type PlayerMatchParticipantDto = MatchParticipant;
 export type PlayerMatchTeamDto = MatchTeam;
 export type PlayerConnectDto = MatchConnectInfo;
-export type PlayerMatchChatMessageDto = MatchChatMessage;
 export type PlayerMapSelectionStateDto = MatchMapSelectionState;
 export type PlayerLiveMatchStateDto = PublicMatchRoomRecord;
 
@@ -84,7 +83,6 @@ export type PlayerRealtimeEvent =
   | PlayerRealtimeEventWithSeq<{ type: "match_room_created"; matchId: string; room: PlayerLiveMatchStateDto }>
   | PlayerRealtimeEventWithSeq<{ type: "teams_assigned"; matchId: string; teamA: PlayerMatchTeamDto; teamB: PlayerMatchTeamDto }>
   | PlayerRealtimeEventWithSeq<{ type: "map_randomizing_started"; matchId: string; mapSelection: PlayerMapSelectionStateDto }>
-  | PlayerRealtimeEventWithSeq<{ type: "match_chat_message"; matchId: string; message: PlayerMatchChatMessageDto }>
   | PlayerRealtimeEventWithSeq<{ type: "server_preparing"; matchId: string }>
   | PlayerRealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; connect: PlayerConnectDto }>
   | PlayerRealtimeEventWithSeq<{ type: "match_live"; matchId: string }>

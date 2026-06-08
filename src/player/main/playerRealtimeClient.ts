@@ -411,7 +411,6 @@ function sanitizeRealtimeEvent(message: unknown): PlayerRealtimeEvent | undefine
     case "match_room_created":
     case "teams_assigned":
     case "map_randomizing_started":
-    case "match_chat_message":
     case "server_preparing":
     case "connect_ready":
     case "match_live":

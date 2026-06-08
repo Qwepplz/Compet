@@ -6,7 +6,6 @@ import type {
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
-  PlayerMatchChatMessageDto,
   PlayerMatchParticipantDto,
   PlayerMatchmakingStateDto,
   PlayerMatchTeamDto,
@@ -236,15 +235,6 @@ export class PlayerApiClient {
       () => this.request("POST", "/matchmaking/ready/decline", {}),
     );
     return response.room;
-  }
-
-  async sendMatchChatMessage(roomId: string, text: string): Promise<PlayerMatchChatMessageDto> {
-    const response = await this.commandOrRequest<{ message: PlayerMatchChatMessageDto }>(
-      "matchRoom.sendChatMessage",
-      { roomId, text },
-      () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/chat`, { text }),
-    );
-    return response.message;
   }
 
   async fetchRealtimeSnapshot(reason: PlayerRealtimeSnapshotReason, scope: PlayerRealtimeSnapshotScope = "full"): Promise<PlayerRealtimeSnapshotDto> {

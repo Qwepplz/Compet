@@ -4,7 +4,6 @@ import type { AccountView } from "../../../manager/shared/types.js";
 import type {
   PlayerFriendListDto,
   PlayerLiveMatchStateDto,
-  PlayerMatchChatMessageDto,
   PlayerMatchParticipantDto,
   PlayerMatchTeamDto,
   PlayerMatchmakingStateDto,
@@ -23,7 +22,6 @@ import {
   hasSavedLoginApi,
 } from "./api/playerApi.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
-import { MatchChatPanel } from "./components/MatchChatPanel.js";
 import { SteamAvatar } from "./components/SteamAvatar.js";
 import {
   getActiveMatchRoom,
@@ -81,12 +79,6 @@ function upsertRoom(rooms: PlayerLiveMatchStateDto[], nextRoom: PlayerLiveMatchS
   const nextRooms = [...rooms];
   nextRooms[index] = nextRoom;
   return nextRooms;
-}
-
-function appendMatchChatMessage(room: PlayerLiveMatchStateDto, chatMessage: PlayerMatchChatMessageDto): PlayerLiveMatchStateDto {
-  const currentMessages = room.chat ?? [];
-  if (currentMessages.some((message) => message.id === chatMessage.id)) return room;
-  return { ...room, chat: [...currentMessages, chatMessage] };
 }
 
 function mergeRoomSteamProfileData(previous: PlayerLiveMatchStateDto, next: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto {
@@ -238,9 +230,6 @@ export function App() {
   const visibleHomeParty = getVisiblePartyForHome(party);
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
-  const sidebarMatchRoom = currentRoomWithKnownProfiles && !isTerminalMatchPhase(currentRoomWithKnownProfiles.phase)
-    ? currentRoomWithKnownProfiles
-    : null;
   const hasActiveMatch = Boolean(activeMatchRoom);
   const accountLabel = playerAccountLabel(account);
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
@@ -617,9 +606,6 @@ export function App() {
           phase: "map_randomizing",
           mapSelection: event.mapSelection,
         }));
-        return;
-      case "match_chat_message":
-        updateCurrentRoom(event.matchId, (room) => appendMatchChatMessage(room, event.message), { activate: false });
         return;
       case "server_preparing":
         updateCurrentRoom(event.matchId, (room) => ({
@@ -1004,12 +990,6 @@ export function App() {
     await hydrateRealtimeState("matchmaking");
   }
 
-  async function sendMatchChatMessage(roomId: string, text: string) {
-    if (!matchRoomApi) return;
-    const chatMessage = await matchRoomApi.sendMatchChatMessage(roomId, text);
-    updateCurrentRoom(roomId, (room) => appendMatchChatMessage(room, chatMessage), { activate: false });
-  }
-
   async function copyText(text: string) {
     if (!matchRoomApi) return;
     await matchRoomApi.copyText(text);
@@ -1185,22 +1165,14 @@ export function App() {
         <div className="player-app-layout">
           <main className="player-app-main">{renderAuthenticatedView()}</main>
           <aside className="player-app-sidebar">
-            {sidebarMatchRoom ? (
-              <MatchChatPanel
-                accountId={account?.id ?? ""}
-                room={sidebarMatchRoom}
-                onSendMessage={matchRoomApi ? (text) => sendMatchChatMessage(sidebarMatchRoom.id, text) : undefined}
-              />
-            ) : (
-              <FriendsPanel
-                accountId={account?.id ?? ""}
-                friends={friends}
-                onSearchFriends={friendsApi ? searchFriends : undefined}
-                onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
-                onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
-                onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
-              />
-            )}
+            <FriendsPanel
+              accountId={account?.id ?? ""}
+              friends={friends}
+              onSearchFriends={friendsApi ? searchFriends : undefined}
+              onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
+              onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
+              onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
+            />
           </aside>
         </div>
         <Modal

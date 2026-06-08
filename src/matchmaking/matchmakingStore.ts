@@ -38,14 +38,6 @@ export interface MatchRoomReadyState {
   respondedAt?: string;
 }
 
-export interface MatchChatMessage {
-  id: string;
-  kind: "system" | "player";
-  text: string;
-  createdAt: string;
-  accountId?: string;
-  displayName?: string;
-}
 
 export interface MatchMapSelectionState {
   mapPool: string[];
@@ -68,7 +60,6 @@ export interface MatchRoomRecord {
   partyId?: string;
   mapSelection?: MatchMapSelectionState;
   connect?: MatchConnectInfo;
-  chat?: MatchChatMessage[];
   createdAt: string;
   terminalStateAt?: string;
 }

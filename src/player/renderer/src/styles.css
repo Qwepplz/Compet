@@ -282,106 +282,6 @@ input {
   background: #050505;
 }
 
-.match-chat-panel {
-  display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto;
-  min-height: calc(100vh - 64px);
-  background: #0b0b0b;
-}
-
-.match-chat-header {
-  display: grid;
-  gap: 3px;
-  padding: 16px;
-  border-bottom: 1px solid #1b1b1b;
-}
-
-.match-chat-header strong {
-  color: #fff;
-  font-size: 15px;
-}
-
-.match-chat-header span {
-  color: #8b8b8b;
-  font-size: 11px;
-  overflow-wrap: anywhere;
-}
-
-.match-chat-messages {
-  display: grid;
-  align-content: start;
-  gap: 8px;
-  min-height: 0;
-  overflow-y: auto;
-  padding: 14px;
-}
-
-.match-chat-empty {
-  color: #6d6d6d;
-  font-size: 12px;
-}
-
-.match-chat-message {
-  display: grid;
-  gap: 4px;
-  max-width: 92%;
-  padding: 9px 10px;
-  border: 1px solid #222;
-  background: #151515;
-}
-
-.match-chat-message--self {
-  justify-self: end;
-  border-color: #3a271d;
-  background: #211711;
-}
-
-.match-chat-message--system {
-  max-width: 100%;
-  border-color: #252525;
-  background: #101010;
-  color: #a9a9a9;
-}
-
-.match-chat-message strong {
-  color: #fff;
-  font-size: 11px;
-}
-
-.match-chat-message p {
-  margin: 0;
-  color: #dedede;
-  font-size: 12px;
-  line-height: 1.42;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.match-chat-message--system p {
-  color: #a9a9a9;
-}
-
-.match-chat-message time {
-  color: #666;
-  font-size: 10px;
-}
-
-.match-chat-compose {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 8px;
-  padding: 12px;
-  border-top: 1px solid #1b1b1b;
-  background: #090909;
-}
-
-.match-chat-compose .ant-input-affix-wrapper,
-.match-chat-compose .ant-input {
-  border-color: #282828;
-  background: #111;
-  color: #fff;
-}
-
 .faceit-play {
   min-height: calc(100vh - 64px);
   padding: 70px 5vw 0;
@@ -1267,10 +1167,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   .player-app-sidebar {
     border-left: 0;
     border-top: 1px solid #171717;
-  }
-
-  .match-chat-panel {
-    min-height: 420px;
   }
 
   .faceit-play-hero,
