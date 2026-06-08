@@ -23,3 +23,7 @@ export function conflict(message = "Conflict"): HttpError {
 export function notFound(message = "Not found"): HttpError {
   return new HttpError(404, "not_found", message);
 }
+
+export function tooManyRequests(message = "Too many requests"): HttpError {
+  return new HttpError(429, "rate_limited", message);
+}

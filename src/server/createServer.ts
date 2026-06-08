@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import websocket from "@fastify/websocket";
 import { ZodError } from "zod";
 import { HttpError } from "../api/httpErrors.js";
+import { installApiRateLimit } from "../api/rateLimit.js";
 import { registerRoutes, type RouteDeps } from "../api/routes.js";
 import type { PresenceService } from "../presence/presenceService.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
@@ -18,6 +19,7 @@ export async function createServer(options: CreateServerOptions) {
   const fastifyOptions = options.https ? { logger: false, https: options.https } : { logger: false };
   const app = Fastify(fastifyOptions as any);
   await app.register(websocket);
+  installApiRateLimit(app);
   await registerRoutes(app, options);
   await registerWebSocket(app, options);
   app.setErrorHandler((error, _request, reply) => {
