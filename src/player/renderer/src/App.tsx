@@ -225,9 +225,9 @@ export function App() {
   const [changePasswordPending, setChangePasswordPending] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
-  const [updateUrl, setUpdateUrl] = useState(() => localStorage.getItem("compet.player.updateUrl") ?? "");
   const [currentVersion, setCurrentVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
@@ -867,22 +867,27 @@ export function App() {
   }
 
   async function checkUpdate() {
-    const latestUrl = updateUrl.trim();
-    if (!latestUrl) {
-      message.error("请输入更新源地址");
-      return;
-    }
     setCheckingUpdate(true);
     setUpdateResult(null);
     try {
-      localStorage.setItem("compet.player.updateUrl", latestUrl);
-      const result = await window.playerApi.checkUpdate(latestUrl) as UpdateCheckResult;
+      const result = await window.playerApi.checkUpdate() as UpdateCheckResult;
       setUpdateResult(result);
       message.success(result.updateAvailable ? "发现可用更新" : "当前已是最新版本");
     } catch (error) {
       message.error(error instanceof Error ? error.message : "检查更新失败");
     } finally {
       setCheckingUpdate(false);
+    }
+  }
+
+  async function installUpdate() {
+    setInstallingUpdate(true);
+    try {
+      await window.playerApi.installUpdate();
+      message.info("更新已下载，正在重启");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "安装更新失败");
+      setInstallingUpdate(false);
     }
   }
 
@@ -1287,14 +1292,17 @@ export function App() {
             ) : null}
             <div className="player-settings-update">
               <div className="player-settings-version">当前版本：{currentVersion || "读取中"}</div>
-              <Input
-                size="small"
-                value={updateUrl}
-                onChange={(event) => setUpdateUrl(event.target.value)}
-                placeholder="https://cdn.example.com/compet/client/latest.json"
-              />
               <Button size="small" onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={checkingUpdate}>
                 检查更新
+              </Button>
+              <Button
+                size="small"
+                type="primary"
+                onClick={() => void installUpdate()}
+                loading={installingUpdate}
+                disabled={checkingUpdate || installingUpdate || updateResult?.updateAvailable !== true}
+              >
+                下载并安装
               </Button>
               {updateResult ? (
                 <Alert

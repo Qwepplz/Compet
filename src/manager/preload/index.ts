@@ -26,7 +26,8 @@ export const managerApi = {
   listLogFiles: () => invoke("logs:listFiles"),
   readLogFile: (name: string) => invoke("logs:readFile", name),
   getVersion: (): Promise<string> => invoke("updates:version"),
-  checkUpdate: (latestUrl: string) => invoke("updates:check", latestUrl),
+  checkUpdate: () => invoke("updates:check"),
+  installUpdate: () => invoke("updates:install"),
 };
 
 contextBridge.exposeInMainWorld("managerApi", managerApi);

@@ -23,7 +23,8 @@ export const managerApi = {
   loadSavedLogin: () => window.managerApi.loadSavedLogin() as Promise<SavedLoginCredentials | null>,
   changePassword: (currentPassword: string, newPassword: string) => window.managerApi.changePassword(currentPassword, newPassword) as Promise<void>,
   getVersion: () => window.managerApi.getVersion() as Promise<string>,
-  checkUpdate: (latestUrl: string) => window.managerApi.checkUpdate(latestUrl) as Promise<UpdateCheckResult>,
+  checkUpdate: () => window.managerApi.checkUpdate() as Promise<UpdateCheckResult>,
+  installUpdate: () => window.managerApi.installUpdate() as Promise<UpdateCheckResult & { installing: boolean }>,
 };
 
 export const accountApi = {

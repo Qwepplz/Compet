@@ -10,8 +10,9 @@ internal static class CompetLauncher
     private static int Main(string[] args)
     {
         string root = AppDomain.CurrentDomain.BaseDirectory;
-        string electron = Path.Combine(root, "runtime", "electron", "electron.exe");
-        string app = Path.Combine(root, "resources", "app");
+        string electronRoot = Path.Combine(root, "runtime", "electron");
+        string electron = Path.Combine(electronRoot, "electron.exe");
+        string app = Path.Combine(electronRoot, "resources", "app");
 
         if (!File.Exists(electron))
         {
@@ -28,8 +29,8 @@ internal static class CompetLauncher
         var startInfo = new ProcessStartInfo
         {
             FileName = electron,
-            Arguments = BuildArguments(app, args),
-            WorkingDirectory = root,
+            Arguments = BuildArguments(args),
+            WorkingDirectory = electronRoot,
             UseShellExecute = false,
         };
 
@@ -37,14 +38,13 @@ internal static class CompetLauncher
         return 0;
     }
 
-    private static string BuildArguments(string app, string[] args)
+    private static string BuildArguments(string[] args)
     {
         var builder = new StringBuilder();
-        AppendArgument(builder, app);
-        foreach (string arg in args)
+        for (int i = 0; i < args.Length; i += 1)
         {
-            builder.Append(' ');
-            AppendArgument(builder, arg);
+            if (i > 0) builder.Append(' ');
+            AppendArgument(builder, args[i]);
         }
         return builder.ToString();
     }

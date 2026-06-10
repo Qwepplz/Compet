@@ -5,7 +5,7 @@ import { RemoteProfileService } from "./remoteProfileService.js";
 import { PROFILE_BASE_URL } from "./profileConfig.js";
 import { withAuthRetry } from "./authRetry.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
-import { checkForUpdates, getCurrentVersion } from "../../desktop/main/updateCheck.js";
+import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
 
 export interface SavedPlayerLogin {
   baseUrl: string;
@@ -188,5 +188,6 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   });
 
   ipcMain.handle("updates:version", () => getCurrentVersion());
-  ipcMain.handle("updates:check", (_event, latestUrl: string) => checkForUpdates("compet-player-client", latestUrl));
+  ipcMain.handle("updates:check", () => checkForUpdates("compet-player-client"));
+  ipcMain.handle("updates:install", () => installUpdate("compet-player-client", "Compet Player Client.exe"));
 }

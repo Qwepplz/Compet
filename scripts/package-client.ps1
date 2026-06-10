@@ -3,14 +3,15 @@ $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 $artifacts = Join-Path $repo "artifacts"
 $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Client"
-$appRoot = Join-Path $stage "resources\app"
 $electronRuntimeRoot = Join-Path $stage "runtime\electron"
+$appRoot = Join-Path $electronRuntimeRoot "resources\app"
 $archive = Join-Path $artifacts "Compet-Client.7z"
 $archiveTmp = "$archive.tmp"
 $supersededZip = Join-Path $artifacts "Compet-Client.zip"
 $supersededTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $launcherSource = Join-Path $repo "scripts\launcher\CompetLauncher.cs"
+$updaterSource = Join-Path $repo "scripts\launcher\CompetUpdater.cs"
 $clientExe = "Compet Player Client.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
@@ -80,20 +81,19 @@ function Set-ExeVersionInfo {
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
 }
 
-function New-LauncherExe {
-  param([Parameter(Mandatory = $true)][string]$ExePath)
+function New-CSharpExe {
+  param(
+    [Parameter(Mandatory = $true)][string]$SourcePath,
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [string[]]$References = @()
+  )
 
   $csc = Get-Command "csc.exe" -ErrorAction Stop
-  $cscArgs = @(
-    "/nologo",
-    "/target:winexe",
-    "/optimize+",
-    "/out:$ExePath",
-    "/reference:System.Windows.Forms.dll",
-    $launcherSource
-  )
+  $cscArgs = @("/nologo", "/target:winexe", "/optimize+", "/out:$ExePath")
+  foreach ($reference in $References) { $cscArgs += "/reference:$reference" }
+  $cscArgs += $SourcePath
   & $csc.Source @cscArgs
-  if ($LASTEXITCODE -ne 0) { throw "Launcher compilation failed with exit code $LASTEXITCODE" }
+  if ($LASTEXITCODE -ne 0) { throw "C# compilation failed with exit code $LASTEXITCODE" }
 }
 
 function Convert-ArchivePath {
@@ -201,7 +201,7 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client\app-package.json", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs")
+$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client\app-package.json", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
@@ -217,13 +217,23 @@ Set-ExeVersionInfo `
   -OriginalFilename "electron.exe" `
   -InternalName "Compet Player Client Runtime"
 $clientExePath = Join-Path $stage $clientExe
-New-LauncherExe -ExePath $clientExePath
+New-CSharpExe -SourcePath $launcherSource -ExePath $clientExePath -References @("System.Windows.Forms.dll")
 Set-ExeVersionInfo `
   -ExePath $clientExePath `
   -Description "Compet Player Client" `
   -ProductName "Compet Player Client" `
   -OriginalFilename $clientExe `
   -InternalName "Compet Player Client"
+$updaterRoot = Join-Path $stage "runtime\updater"
+New-Item -ItemType Directory -Path $updaterRoot -Force | Out-Null
+$updaterExePath = Join-Path $updaterRoot "Compet Updater.exe"
+New-CSharpExe -SourcePath $updaterSource -ExePath $updaterExePath
+Set-ExeVersionInfo `
+  -ExePath $updaterExePath `
+  -Description "Compet Updater" `
+  -ProductName "Compet Player Client" `
+  -OriginalFilename "Compet Updater.exe" `
+  -InternalName "Compet Updater"
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repo "out-player") -Destination $appRoot -Recurse

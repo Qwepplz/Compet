@@ -64,7 +64,8 @@ export const playerApi = {
   copyText: (text: string): Promise<void> => invoke("player:copyText", text),
   openConnectUrl: (connectUrl: string): Promise<void> => invoke("player:openConnectUrl", connectUrl),
   getVersion: (): Promise<string> => invoke("updates:version"),
-  checkUpdate: (latestUrl: string) => invoke("updates:check", latestUrl),
+  checkUpdate: () => invoke("updates:check"),
+  installUpdate: () => invoke("updates:install"),
 };
 
 contextBridge.exposeInMainWorld(

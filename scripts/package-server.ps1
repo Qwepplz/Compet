@@ -3,14 +3,15 @@ $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 $artifacts = Join-Path $repo "artifacts"
 $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Server"
-$appRoot = Join-Path $stage "resources\app"
 $electronRuntimeRoot = Join-Path $stage "runtime\electron"
+$appRoot = Join-Path $electronRuntimeRoot "resources\app"
 $archive = Join-Path $artifacts "Compet-Server.7z"
 $archiveTmp = "$archive.tmp"
 $supersededZip = Join-Path $artifacts "Compet-Server.zip"
 $supersededTarXz = Join-Path $artifacts "Compet-Server.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $launcherSource = Join-Path $repo "scripts\launcher\CompetLauncher.cs"
+$updaterSource = Join-Path $repo "scripts\launcher\CompetUpdater.cs"
 $nodeRuntime = (Get-Command "node.exe" -ErrorAction Stop).Source
 $serverExe = "Compet Server Manager.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
@@ -84,20 +85,19 @@ function Set-ExeVersionInfo {
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
 }
 
-function New-LauncherExe {
-  param([Parameter(Mandatory = $true)][string]$ExePath)
+function New-CSharpExe {
+  param(
+    [Parameter(Mandatory = $true)][string]$SourcePath,
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [string[]]$References = @()
+  )
 
   $csc = Get-Command "csc.exe" -ErrorAction Stop
-  $cscArgs = @(
-    "/nologo",
-    "/target:winexe",
-    "/optimize+",
-    "/out:$ExePath",
-    "/reference:System.Windows.Forms.dll",
-    $launcherSource
-  )
+  $cscArgs = @("/nologo", "/target:winexe", "/optimize+", "/out:$ExePath")
+  foreach ($reference in $References) { $cscArgs += "/reference:$reference" }
+  $cscArgs += $SourcePath
   & $csc.Source @cscArgs
-  if ($LASTEXITCODE -ne 0) { throw "Launcher compilation failed with exit code $LASTEXITCODE" }
+  if ($LASTEXITCODE -ne 0) { throw "C# compilation failed with exit code $LASTEXITCODE" }
 }
 
 function Convert-ArchivePath {
@@ -255,7 +255,7 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs")
+$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
@@ -271,13 +271,23 @@ Set-ExeVersionInfo `
   -OriginalFilename "electron.exe" `
   -InternalName "Compet Server Manager Runtime"
 $serverExePath = Join-Path $stage $serverExe
-New-LauncherExe -ExePath $serverExePath
+New-CSharpExe -SourcePath $launcherSource -ExePath $serverExePath -References @("System.Windows.Forms.dll")
 Set-ExeVersionInfo `
   -ExePath $serverExePath `
   -Description "Compet Server Manager" `
   -ProductName "Compet Server Manager" `
   -OriginalFilename $serverExe `
   -InternalName "Compet Server Manager"
+$updaterRoot = Join-Path $stage "runtime\updater"
+New-Item -ItemType Directory -Path $updaterRoot -Force | Out-Null
+$updaterExePath = Join-Path $updaterRoot "Compet Updater.exe"
+New-CSharpExe -SourcePath $updaterSource -ExePath $updaterExePath
+Set-ExeVersionInfo `
+  -ExePath $updaterExePath `
+  -Description "Compet Updater" `
+  -ProductName "Compet Server Manager" `
+  -OriginalFilename "Compet Updater.exe" `
+  -InternalName "Compet Updater"
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\node") -Force | Out-Null
 Copy-Item -LiteralPath $nodeRuntime -Destination (Join-Path $appRoot "runtime\node\node.exe")

@@ -26,9 +26,9 @@ export function SettingsPage() {
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string>();
-  const [updateUrl, setUpdateUrl] = useState(() => localStorage.getItem("compet.manager.updateUrl") ?? "");
   const [currentVersion, setCurrentVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
 
   async function loadConfig() {
@@ -106,16 +106,10 @@ export function SettingsPage() {
   }
 
   async function checkUpdate() {
-    const latestUrl = updateUrl.trim();
-    if (!latestUrl) {
-      message.error("请输入更新源地址");
-      return;
-    }
     setCheckingUpdate(true);
     setUpdateResult(null);
     try {
-      localStorage.setItem("compet.manager.updateUrl", latestUrl);
-      const result = await managerApi.checkUpdate(latestUrl);
+      const result = await managerApi.checkUpdate();
       setUpdateResult(result);
       message.success(result.updateAvailable ? "发现可用更新" : "当前已是最新版本");
     } catch (caught) {
@@ -123,6 +117,18 @@ export function SettingsPage() {
       message.error(messageText);
     } finally {
       setCheckingUpdate(false);
+    }
+  }
+
+  async function installUpdate() {
+    setInstallingUpdate(true);
+    try {
+      await managerApi.installUpdate();
+      message.info("更新已下载，正在重启");
+    } catch (caught) {
+      const messageText = caught instanceof Error ? caught.message : "安装更新失败";
+      message.error(messageText);
+      setInstallingUpdate(false);
     }
   }
 
@@ -187,12 +193,19 @@ export function SettingsPage() {
                 <InputNumber min={1} max={65535} precision={0} style={{ width: 180 }} />
               </Form.Item>
             </Space>
-            <Form.Item label="更新源">
+            <Form.Item label="软件更新">
               <div className="settings-version">当前版本：{currentVersion || "读取中"}</div>
               <Space.Compact style={{ width: "100%" }}>
-                <Input value={updateUrl} onChange={(event) => setUpdateUrl(event.target.value)} placeholder="https://cdn.example.com/compet/server/latest.json" />
                 <Button onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={loading || submitting || checkingUpdate}>
                   检查更新
+                </Button>
+                <Button
+                  type="primary"
+                  onClick={() => void installUpdate()}
+                  loading={installingUpdate}
+                  disabled={loading || submitting || checkingUpdate || installingUpdate || updateResult?.updateAvailable !== true}
+                >
+                  下载并安装
                 </Button>
               </Space.Compact>
             </Form.Item>
