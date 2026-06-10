@@ -4,11 +4,13 @@ $artifacts = Join-Path $repo "artifacts"
 $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Server"
 $appRoot = Join-Path $stage "resources\app"
+$electronRuntimeRoot = Join-Path $stage "runtime\electron"
 $archive = Join-Path $artifacts "Compet-Server.7z"
 $archiveTmp = "$archive.tmp"
 $supersededZip = Join-Path $artifacts "Compet-Server.zip"
 $supersededTarXz = Join-Path $artifacts "Compet-Server.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
+$launcherSource = Join-Path $repo "scripts\launcher\CompetLauncher.cs"
 $nodeRuntime = (Get-Command "node.exe" -ErrorAction Stop).Source
 $serverExe = "Compet Server Manager.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
@@ -80,6 +82,22 @@ function Set-ExeVersionInfo {
   )
   & $rcedit @rceditArgs
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
+}
+
+function New-LauncherExe {
+  param([Parameter(Mandatory = $true)][string]$ExePath)
+
+  $csc = Get-Command "csc.exe" -ErrorAction Stop
+  $cscArgs = @(
+    "/nologo",
+    "/target:winexe",
+    "/optimize+",
+    "/out:$ExePath",
+    "/reference:System.Windows.Forms.dll",
+    $launcherSource
+  )
+  & $csc.Source @cscArgs
+  if ($LASTEXITCODE -ne 0) { throw "Launcher compilation failed with exit code $LASTEXITCODE" }
 }
 
 function Convert-ArchivePath {
@@ -237,22 +255,29 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist")
+$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
 }
 
-Copy-Item -Path (Join-Path $electronDist "*") -Destination $stage -Recurse
+New-Item -ItemType Directory -Path $electronRuntimeRoot -Force | Out-Null
+Copy-Item -Path (Join-Path $electronDist "*") -Destination $electronRuntimeRoot -Recurse
+Remove-UnusedElectronFiles -RootDir $electronRuntimeRoot
+Set-ExeVersionInfo `
+  -ExePath (Join-Path $electronRuntimeRoot "electron.exe") `
+  -Description "Compet Server Manager Runtime" `
+  -ProductName "Compet Server Manager" `
+  -OriginalFilename "electron.exe" `
+  -InternalName "Compet Server Manager Runtime"
 $serverExePath = Join-Path $stage $serverExe
-Move-Item -LiteralPath (Join-Path $stage "electron.exe") -Destination $serverExePath
+New-LauncherExe -ExePath $serverExePath
 Set-ExeVersionInfo `
   -ExePath $serverExePath `
   -Description "Compet Server Manager" `
   -ProductName "Compet Server Manager" `
   -OriginalFilename $serverExe `
   -InternalName "Compet Server Manager"
-Remove-UnusedElectronFiles -RootDir $stage
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\node") -Force | Out-Null
 Copy-Item -LiteralPath $nodeRuntime -Destination (Join-Path $appRoot "runtime\node\node.exe")
@@ -279,15 +304,11 @@ Copy-NodeModulePackage "@phc\format"
 Copy-NodeModulePackage "node-gyp-build"
 Copy-NodeModulePackage "zod"
 Optimize-RuntimeNodeModules
-Copy-Item -LiteralPath (Join-Path $repo "packaging\server\README.txt") -Destination $stage
-Copy-Item -LiteralPath (Join-Path $repo "packaging\server\start-server-manager.cmd") -Destination $stage
-
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage $serverExe)),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "ffmpeg.dll")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "README.txt")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "start-server-manager.cmd")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $electronRuntimeRoot "electron.exe")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $electronRuntimeRoot "ffmpeg.dll")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "package.json")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "runtime\node\node.exe")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "dist\main.cjs")),

@@ -4,11 +4,13 @@ $artifacts = Join-Path $repo "artifacts"
 $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Client"
 $appRoot = Join-Path $stage "resources\app"
+$electronRuntimeRoot = Join-Path $stage "runtime\electron"
 $archive = Join-Path $artifacts "Compet-Client.7z"
 $archiveTmp = "$archive.tmp"
 $supersededZip = Join-Path $artifacts "Compet-Client.zip"
 $supersededTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
+$launcherSource = Join-Path $repo "scripts\launcher\CompetLauncher.cs"
 $clientExe = "Compet Player Client.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
@@ -76,6 +78,22 @@ function Set-ExeVersionInfo {
     --set-file-version $version `
     --set-product-version $version
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
+}
+
+function New-LauncherExe {
+  param([Parameter(Mandatory = $true)][string]$ExePath)
+
+  $csc = Get-Command "csc.exe" -ErrorAction Stop
+  $cscArgs = @(
+    "/nologo",
+    "/target:winexe",
+    "/optimize+",
+    "/out:$ExePath",
+    "/reference:System.Windows.Forms.dll",
+    $launcherSource
+  )
+  & $csc.Source @cscArgs
+  if ($LASTEXITCODE -ne 0) { throw "Launcher compilation failed with exit code $LASTEXITCODE" }
 }
 
 function Convert-ArchivePath {
@@ -183,35 +201,39 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client", "node_modules\electron\dist")
+$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client\app-package.json", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
 }
 
-Copy-Item -Path (Join-Path $electronDist "*") -Destination $stage -Recurse
+New-Item -ItemType Directory -Path $electronRuntimeRoot -Force | Out-Null
+Copy-Item -Path (Join-Path $electronDist "*") -Destination $electronRuntimeRoot -Recurse
+Remove-UnusedElectronFiles -RootDir $electronRuntimeRoot
+Set-ExeVersionInfo `
+  -ExePath (Join-Path $electronRuntimeRoot "electron.exe") `
+  -Description "Compet Player Client Runtime" `
+  -ProductName "Compet Player Client" `
+  -OriginalFilename "electron.exe" `
+  -InternalName "Compet Player Client Runtime"
 $clientExePath = Join-Path $stage $clientExe
-Move-Item -LiteralPath (Join-Path $stage "electron.exe") -Destination $clientExePath
+New-LauncherExe -ExePath $clientExePath
 Set-ExeVersionInfo `
   -ExePath $clientExePath `
   -Description "Compet Player Client" `
   -ProductName "Compet Player Client" `
   -OriginalFilename $clientExe `
   -InternalName "Compet Player Client"
-Remove-UnusedElectronFiles -RootDir $stage
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repo "out-player") -Destination $appRoot -Recurse
 Copy-Item -LiteralPath (Join-Path $repo "packaging\client\app-package.json") -Destination (Join-Path $appRoot "package.json")
-Copy-Item -LiteralPath (Join-Path $repo "packaging\client\README.txt") -Destination $stage
-Copy-Item -LiteralPath (Join-Path $repo "packaging\client\start-player-client.cmd") -Destination $stage
 
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage $clientExe)),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "ffmpeg.dll")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "README.txt")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage "start-player-client.cmd")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $electronRuntimeRoot "electron.exe")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $electronRuntimeRoot "ffmpeg.dll")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "package.json")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\main\index.cjs")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out-player\preload\index.js")),
