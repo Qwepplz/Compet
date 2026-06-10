@@ -336,5 +336,12 @@ $forbiddenArchiveEntryPatterns = @(
   "resources/app/sourcemod/*.sp"
 )
 New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
+$updateBaseUrl = if ($env:COMPET_SERVER_UPDATE_BASE_URL) { $env:COMPET_SERVER_UPDATE_BASE_URL } else { "https://example.invalid/compet/server" }
+& pwsh -NoProfile -File (Join-Path $repo "scripts\create-update-manifest.ps1") `
+  -AppId "compet-server-manager" `
+  -PackageDir $stage `
+  -OutputDir (Join-Path $artifacts "update\server") `
+  -LatestUrlBase $updateBaseUrl
+if ($LASTEXITCODE -ne 0) { throw "Server update manifest creation failed with exit code $LASTEXITCODE" }
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Created $archive"

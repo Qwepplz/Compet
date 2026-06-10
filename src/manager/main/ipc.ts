@@ -7,6 +7,7 @@ import { ServiceApiClient } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
 import { runLocalDiagnostics } from "./diagnostics.js";
 import { delay } from "../../shared/async.js";
+import { checkForUpdates, getCurrentVersion } from "../../desktop/main/updateCheck.js";
 
 export interface IpcDeps {
   configStore: FileConfigStore;
@@ -84,6 +85,8 @@ export function registerManagerIpc(deps: IpcDeps): void {
   ipcMain.handle("logs:recent", () => deps.logStore.recent());
   ipcMain.handle("logs:listFiles", () => deps.logStore.listFiles());
   ipcMain.handle("logs:readFile", (_event, name: string) => deps.logStore.readFile(name));
+  ipcMain.handle("updates:version", () => getCurrentVersion());
+  ipcMain.handle("updates:check", (_event, latestUrl: string) => checkForUpdates("compet-server-manager", latestUrl));
 }
 
 async function statusWithExternalProbe(deps: IpcDeps): Promise<ServiceStatus> {

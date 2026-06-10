@@ -21,6 +21,7 @@ body { font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; background
 .settings-body > .ant-spin-nested-loading { flex: 1; display: flex; width: 100%; }
 .settings-body .ant-spin-container { flex: 1; display: flex; }
 .settings-form { flex: 1; display: flex; flex-direction: column; width: 100%; }
+.settings-version { margin-bottom: 8px; color: #64748b; font-size: 12px; }
 .settings-actions { margin-top: auto; padding-top: 16px; display: flex; gap: 8px; }
 .manager-header > * { min-width: 0; }
 .manager-header .status-row { min-width: 0; justify-content: flex-end; }

@@ -254,5 +254,12 @@ $forbiddenArchiveEntryPatterns = @(
   "*.tmp"
 )
 New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
+$updateBaseUrl = if ($env:COMPET_CLIENT_UPDATE_BASE_URL) { $env:COMPET_CLIENT_UPDATE_BASE_URL } else { "https://example.invalid/compet/client" }
+& pwsh -NoProfile -File (Join-Path $repo "scripts\create-update-manifest.ps1") `
+  -AppId "compet-player-client" `
+  -PackageDir $stage `
+  -OutputDir (Join-Path $artifacts "update\client") `
+  -LatestUrlBase $updateBaseUrl
+if ($LASTEXITCODE -ne 0) { throw "Client update manifest creation failed with exit code $LASTEXITCODE" }
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Created $archive"

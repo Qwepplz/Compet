@@ -63,6 +63,8 @@ export const playerApi = {
     subscribe("player:account:updated", listener),
   copyText: (text: string): Promise<void> => invoke("player:copyText", text),
   openConnectUrl: (connectUrl: string): Promise<void> => invoke("player:openConnectUrl", connectUrl),
+  getVersion: (): Promise<string> => invoke("updates:version"),
+  checkUpdate: (latestUrl: string) => invoke("updates:check", latestUrl),
 };
 
 contextBridge.exposeInMainWorld(

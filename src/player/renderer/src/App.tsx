@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Button, Card, Form, Input, Modal, Spin, Switch, message } from "antd";
+import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, message } from "antd";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type {
   PlayerFriendListDto,
@@ -52,11 +52,25 @@ const defaultBaseUrl = "https://127.0.0.1:18443";
 type SavedPlayerLogin = { baseUrl: string; username?: string; password?: string };
 type LoginValues = { baseUrl: string; username: string; password: string };
 type PasswordChangeValues = { currentPassword: string; newPassword: string; confirmPassword: string };
+type UpdateCheckResult = {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  changedFiles: number;
+  changedBytes: number;
+  manifestUrl: string;
+};
 type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steamPersonaName" | "steamAvatarUrl">;
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
 
 function getCurrentRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
   return getDisplayedMatchRoom(matchmaking);
@@ -211,6 +225,10 @@ export function App() {
   const [changePasswordPending, setChangePasswordPending] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [updateUrl, setUpdateUrl] = useState(() => localStorage.getItem("compet.player.updateUrl") ?? "");
+  const [currentVersion, setCurrentVersion] = useState("");
+  const [checkingUpdate, setCheckingUpdate] = useState(false);
+  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
@@ -236,6 +254,7 @@ export function App() {
 
   useEffect(() => {
     void restoreSession();
+    void window.playerApi.getVersion().then(setCurrentVersion);
   }, []);
 
   useEffect(() => {
@@ -847,6 +866,26 @@ export function App() {
     }
   }
 
+  async function checkUpdate() {
+    const latestUrl = updateUrl.trim();
+    if (!latestUrl) {
+      message.error("请输入更新源地址");
+      return;
+    }
+    setCheckingUpdate(true);
+    setUpdateResult(null);
+    try {
+      localStorage.setItem("compet.player.updateUrl", latestUrl);
+      const result = await window.playerApi.checkUpdate(latestUrl) as UpdateCheckResult;
+      setUpdateResult(result);
+      message.success(result.updateAvailable ? "发现可用更新" : "当前已是最新版本");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "检查更新失败");
+    } finally {
+      setCheckingUpdate(false);
+    }
+  }
+
   async function searchFriends(query: string) {
     if (!friendsApi) return [];
     return friendsApi.searchFriends(query);
@@ -1246,6 +1285,29 @@ export function App() {
                 />
               </label>
             ) : null}
+            <div className="player-settings-update">
+              <div className="player-settings-version">当前版本：{currentVersion || "读取中"}</div>
+              <Input
+                size="small"
+                value={updateUrl}
+                onChange={(event) => setUpdateUrl(event.target.value)}
+                placeholder="https://cdn.example.com/compet/client/latest.json"
+              />
+              <Button size="small" onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={checkingUpdate}>
+                检查更新
+              </Button>
+              {updateResult ? (
+                <Alert
+                  type={updateResult.updateAvailable ? "info" : "success"}
+                  showIcon
+                  message={
+                    updateResult.updateAvailable
+                      ? `发现 ${updateResult.latestVersion}，需更新 ${updateResult.changedFiles} 个文件，约 ${formatBytes(updateResult.changedBytes)}`
+                      : `当前版本 ${updateResult.currentVersion} 已是最新`
+                  }
+                />
+              ) : null}
+            </div>
             <div className="player-settings-actions">
               <Button
                 size="small"

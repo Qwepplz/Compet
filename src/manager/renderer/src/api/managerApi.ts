@@ -1,5 +1,14 @@
 import type { AccountView, BootstrapAdminInput, CreateAccountInput, DiagnosticResult, LogEntry, LoginResult, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
 
+export interface UpdateCheckResult {
+  currentVersion: string;
+  latestVersion: string;
+  updateAvailable: boolean;
+  changedFiles: number;
+  changedBytes: number;
+  manifestUrl: string;
+}
+
 export const managerApi = {
   loadConfig: () => window.managerApi.loadConfig() as Promise<ManagerConfig>,
   saveConfig: (config: ManagerConfig) => window.managerApi.saveConfig(config) as Promise<void>,
@@ -13,6 +22,8 @@ export const managerApi = {
   login: (username: string, password: string) => window.managerApi.login(username, password) as Promise<LoginResult>,
   loadSavedLogin: () => window.managerApi.loadSavedLogin() as Promise<SavedLoginCredentials | null>,
   changePassword: (currentPassword: string, newPassword: string) => window.managerApi.changePassword(currentPassword, newPassword) as Promise<void>,
+  getVersion: () => window.managerApi.getVersion() as Promise<string>,
+  checkUpdate: (latestUrl: string) => window.managerApi.checkUpdate(latestUrl) as Promise<UpdateCheckResult>,
 };
 
 export const accountApi = {
