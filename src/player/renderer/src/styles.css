@@ -259,6 +259,11 @@ input {
   font-weight: 700;
 }
 
+.player-settings-update .ant-alert,
+.player-settings-update .ant-alert .ant-alert-message {
+  color: #1f1f1f;
+}
+
 .player-settings-actions .ant-btn {
   border: 1px solid #2a2a2a;
   border-radius: 8px;

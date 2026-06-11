@@ -195,11 +195,12 @@ export function SettingsPage() {
             </Space>
             <Form.Item label="软件更新">
               <div className="settings-version">当前版本：{currentVersion || "读取中"}</div>
-              <Space.Compact style={{ width: "100%" }}>
-                <Button onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={loading || submitting || checkingUpdate}>
+              <Space.Compact>
+                <Button size="small" onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={loading || submitting || checkingUpdate}>
                   检查更新
                 </Button>
                 <Button
+                  size="small"
                   type="primary"
                   onClick={() => void installUpdate()}
                   loading={installingUpdate}
