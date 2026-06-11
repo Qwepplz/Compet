@@ -18,13 +18,16 @@ process.on("unhandledRejection", (error) => appendBootLog(bootLogFile, "unhandle
 
 configureRemoteDesktopRendering();
 
-const appRoot = app.isPackaged ? app.getAppPath() : process.cwd();
+const appPath = app.getAppPath();
+const appPathIsResourcesApp = path.basename(appPath) === "app" && path.basename(path.dirname(appPath)) === "resources";
+const isPackagedRuntime = app.isPackaged || appPathIsResourcesApp;
+const appRoot = isPackagedRuntime ? appPath : process.cwd();
 const managerUserDataPath = ensureManagerUserDataPath({
   appRoot,
   defaultUserDataPath: app.getPath("userData"),
-  isPackaged: app.isPackaged,
+  isPackaged: isPackagedRuntime,
 });
-if (app.isPackaged) app.setPath("userData", managerUserDataPath);
+if (isPackagedRuntime) app.setPath("userData", managerUserDataPath);
 
 const configStore = new FileConfigStore(path.join(managerUserDataPath, "manager-config.json"), appRoot);
 const credentialStore = new SavedLoginStore(path.join(managerUserDataPath, "manager-login.json"));

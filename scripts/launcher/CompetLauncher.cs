@@ -29,7 +29,7 @@ internal static class CompetLauncher
         var startInfo = new ProcessStartInfo
         {
             FileName = electron,
-            Arguments = BuildArguments(args),
+            Arguments = BuildArguments(app, args),
             WorkingDirectory = electronRoot,
             UseShellExecute = false,
         };
@@ -38,12 +38,13 @@ internal static class CompetLauncher
         return 0;
     }
 
-    private static string BuildArguments(string[] args)
+    private static string BuildArguments(string app, string[] args)
     {
         var builder = new StringBuilder();
+        AppendArgument(builder, app);
         for (int i = 0; i < args.Length; i += 1)
         {
-            if (i > 0) builder.Append(' ');
+            builder.Append(' ');
             AppendArgument(builder, args[i]);
         }
         return builder.ToString();
@@ -52,13 +53,31 @@ internal static class CompetLauncher
     private static void AppendArgument(StringBuilder builder, string value)
     {
         builder.Append('"');
+        int backslashes = 0;
         foreach (char ch in value)
         {
-            if (ch == '"' || ch == '\\')
+            if (ch == '\\')
             {
-                builder.Append('\\');
+                backslashes += 1;
+                continue;
+            }
+            if (ch == '"')
+            {
+                builder.Append('\\', (backslashes * 2) + 1);
+                builder.Append('"');
+                backslashes = 0;
+                continue;
+            }
+            if (backslashes > 0)
+            {
+                builder.Append('\\', backslashes);
+                backslashes = 0;
             }
             builder.Append(ch);
+        }
+        if (backslashes > 0)
+        {
+            builder.Append('\\', backslashes * 2);
         }
         builder.Append('"');
     }
