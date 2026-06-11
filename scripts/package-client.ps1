@@ -264,7 +264,7 @@ $forbiddenArchiveEntryPatterns = @(
   "*.tmp"
 )
 New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
-$updateBaseUrl = if ($env:COMPET_CLIENT_UPDATE_BASE_URL) { $env:COMPET_CLIENT_UPDATE_BASE_URL } else { "https://example.invalid/compet/client" }
+$updateBaseUrl = if ($env:COMPET_CLIENT_UPDATE_BASE_URL) { $env:COMPET_CLIENT_UPDATE_BASE_URL } else { "https://qwepplz111.site/update/client" }
 & pwsh -NoProfile -File (Join-Path $repo "scripts\create-update-manifest.ps1") `
   -AppId "compet-player-client" `
   -PackageDir $stage `

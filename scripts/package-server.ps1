@@ -346,7 +346,7 @@ $forbiddenArchiveEntryPatterns = @(
   "resources/app/sourcemod/*.sp"
 )
 New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
-$updateBaseUrl = if ($env:COMPET_SERVER_UPDATE_BASE_URL) { $env:COMPET_SERVER_UPDATE_BASE_URL } else { "https://example.invalid/compet/server" }
+$updateBaseUrl = if ($env:COMPET_SERVER_UPDATE_BASE_URL) { $env:COMPET_SERVER_UPDATE_BASE_URL } else { "https://qwepplz111.site/update/server" }
 & pwsh -NoProfile -File (Join-Path $repo "scripts\create-update-manifest.ps1") `
   -AppId "compet-server-manager" `
   -PackageDir $stage `
