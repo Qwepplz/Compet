@@ -160,13 +160,13 @@ input {
 }
 
 .player-app-nav .ant-btn {
-  height: 34px;
+  height: 36px;
   padding: 0 14px;
   border: 1px solid #2a2a2a;
   border-radius: 8px;
   background: #111;
   color: #cfcfcf;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
 }
 
@@ -255,30 +255,50 @@ input {
 }
 
 .player-settings-update {
-  display: grid;
-  gap: 8px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 10px;
 }
 
 .player-settings-version {
   color: #9a9a9a;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 700;
 }
 
-.player-settings-actions .ant-btn {
+.player-settings-update .ant-alert {
+  align-self: stretch;
+}
+
+.player-settings .ant-btn {
+  height: 36px;
+  padding: 0 16px;
   border: 1px solid #2a2a2a;
   border-radius: 8px;
   background: #111;
   color: #cfcfcf;
-  font-size: 12px;
+  font-size: 13px;
   font-weight: 800;
   box-shadow: none;
 }
 
-.player-settings-actions .ant-btn:not(:disabled):hover,
-.player-settings-actions .ant-btn:not(:disabled):focus-visible {
+.player-settings .ant-btn-primary {
+  border-color: #ff5500;
+  background: #ff5500;
+  color: #fff;
+}
+
+.player-settings .ant-btn:not(:disabled):hover,
+.player-settings .ant-btn:not(:disabled):focus-visible {
   border-color: #ff5500;
   color: #fff;
+}
+
+.player-settings .ant-btn-primary:not(:disabled):hover,
+.player-settings .ant-btn-primary:not(:disabled):focus-visible {
+  background: #ff6a1f;
+  border-color: #ff6a1f;
 }
 
 .player-app-layout {
@@ -494,7 +514,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-main-cta,
 .faceit-secondary-cta,
 .faceit-connect-button {
-  height: 48px;
+  height: 44px;
   min-width: 118px;
   border-radius: 8px;
   box-shadow: none;
@@ -876,16 +896,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   font-weight: 900;
 }
 
-.faceit-ready-list,
-.faceit-map-pool {
+.faceit-ready-list {
   display: grid;
   gap: 8px;
   width: 100%;
-}
-
-.faceit-map-pool {
-  grid-template-columns: 1fr;
-  gap: 6px;
 }
 
 .faceit-ready-row,
@@ -933,54 +947,12 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 10px;
 }
 
-.faceit-map-card.ant-btn {
-  height: auto;
-  min-height: 38px;
-  overflow: hidden;
-  padding: 0;
-  border: 1px solid #242424;
-  background: #191919;
-  text-align: left;
-}
-
-.faceit-map-card-layout {
-  display: grid;
-  grid-template-columns: minmax(128px, 42%) minmax(0, 1fr) 64px;
-  align-items: stretch;
-  width: 100%;
-  min-height: 38px;
-}
-
-.faceit-map-card.ant-btn:not(:disabled):hover,
-.faceit-map-card.ant-btn:not(:disabled):focus {
-  border-color: #ff5500;
-  background: #15110f;
-}
-
-.faceit-map-card--removed.ant-btn,
-.faceit-map-card--removed.ant-btn:disabled {
-  border-color: #202020;
-  background: #151515;
-  cursor: not-allowed;
-  opacity: 1;
-}
-
 .faceit-map-thumb {
   display: block;
   min-height: 38px;
   background-color: #333;
   background-position: center;
   background-size: cover;
-}
-
-.faceit-map-card--removed .faceit-map-thumb {
-  filter: grayscale(1);
-  opacity: 0.42;
-}
-
-.faceit-map-card--removed .faceit-map-card-main strong,
-.faceit-map-card--removed .faceit-map-card-action {
-  color: #666;
 }
 
 .faceit-map-thumb--de_mirage {
@@ -1023,48 +995,15 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background-image: url("./assets/maps/de_anubis.jpg");
 }
 
-.faceit-map-card-main {
-  display: grid;
-  align-content: center;
-  gap: 1px;
-  min-width: 0;
-  padding: 5px 8px;
-  overflow: visible;
-}
-
-.faceit-map-card-main strong {
-  color: #fff;
-  font-size: 12px;
-  line-height: 1.12;
-  overflow: visible;
-  overflow-wrap: normal;
-  text-overflow: clip;
-  white-space: nowrap;
-}
-
-.faceit-map-card-action {
-  display: grid;
-  align-items: center;
-  justify-items: end;
-  min-width: 0;
-  padding: 0 10px 0 0;
-  color: #4f4f4f;
-  font-size: 10px;
-  font-weight: 900;
-  text-align: right;
-  white-space: nowrap;
-}
-
-.faceit-map-pool .ant-btn,
 .faceit-connect-panel .ant-btn {
   width: 100%;
-  min-height: 38px;
+  min-height: 36px;
   border-radius: 4px;
   font-weight: 900;
 }
 
 .faceit-connect-panel .faceit-connect-button {
-  min-height: 40px;
+  min-height: 44px;
   border-radius: 8px;
 }
 
@@ -1095,7 +1034,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .player-social-title {
   margin: 4px 0 0;
   color: #fff;
-  font-size: 15px;
+  font-size: 16px;
 }
 
 .player-social-search {

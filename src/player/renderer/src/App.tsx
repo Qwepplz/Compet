@@ -1299,7 +1299,6 @@ export function App() {
                       ) : null}
                       <div className="player-settings-actions">
                         <Button
-                          size="small"
                           onClick={() => {
                             setSettingsModalOpen(false);
                             setPasswordModalOpen(true);
@@ -1307,7 +1306,7 @@ export function App() {
                         >
                           修改密码
                         </Button>
-                        <Button size="small" onClick={() => void logout()}>
+                        <Button onClick={() => void logout()}>
                           退出登录
                         </Button>
                       </div>
@@ -1323,7 +1322,6 @@ export function App() {
                         <div className="player-settings-version">当前版本：{currentVersion || "读取中"}</div>
                         {updateResult?.updateAvailable === true ? (
                           <Button
-                            size="small"
                             type="primary"
                             onClick={() => void installUpdate()}
                             loading={installingUpdate}
@@ -1332,7 +1330,7 @@ export function App() {
                             下载并安装
                           </Button>
                         ) : (
-                          <Button size="small" onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={checkingUpdate}>
+                          <Button onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={checkingUpdate}>
                             检查更新
                           </Button>
                         )}
