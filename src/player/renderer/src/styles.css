@@ -454,7 +454,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-queue-bar {
   display: grid;
-  grid-template-columns: 1fr auto minmax(220px, 300px);
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 18px;
   min-height: 84px;
@@ -464,6 +464,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-queue-tabs {
+  grid-column: 1;
   display: flex;
   align-items: center;
   gap: 26px;
@@ -478,8 +479,9 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-queue-actions {
+  grid-column: 2;
   display: flex;
-  justify-content: flex-end;
+  justify-content: center;
   gap: 10px;
 }
 
@@ -507,6 +509,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-binding-warning {
+  grid-column: 3;
   justify-self: end;
   color: #ffbd4a;
   font-size: 12px;
@@ -1193,6 +1196,16 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   .faceit-queue-bar {
     grid-template-columns: 1fr;
     padding: 18px;
+  }
+
+  .faceit-queue-tabs,
+  .faceit-queue-actions,
+  .faceit-binding-warning {
+    grid-column: 1;
+  }
+
+  .faceit-queue-actions {
+    justify-content: stretch;
   }
 
   .faceit-server-pill {
