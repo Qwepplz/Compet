@@ -210,12 +210,6 @@ foreach ($relative in $required) {
 New-Item -ItemType Directory -Path $electronRuntimeRoot -Force | Out-Null
 Copy-Item -Path (Join-Path $electronDist "*") -Destination $electronRuntimeRoot -Recurse
 Remove-UnusedElectronFiles -RootDir $electronRuntimeRoot
-Set-ExeVersionInfo `
-  -ExePath (Join-Path $electronRuntimeRoot "electron.exe") `
-  -Description "Compet Player Client Runtime" `
-  -ProductName "Compet Player Client" `
-  -OriginalFilename "electron.exe" `
-  -InternalName "Compet Player Client Runtime"
 $clientExePath = Join-Path $stage $clientExe
 New-CSharpExe -SourcePath $launcherSource -ExePath $clientExePath -References @("System.Windows.Forms.dll")
 Set-ExeVersionInfo `
