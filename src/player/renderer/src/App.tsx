@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, message } from "antd";
+import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type {
   PlayerFriendListDto,
@@ -1266,70 +1266,93 @@ export function App() {
           onCancel={() => setSettingsModalOpen(false)}
         >
           <div className="player-settings">
-            <label className="player-settings-row">
-              <span>匹配音效</span>
-              <Switch
-                aria-label="匹配音效"
-                checked={matchSoundEnabled}
-                checkedChildren="开"
-                unCheckedChildren="关"
-                onChange={setMatchSoundEnabled}
-                size="small"
-              />
-            </label>
-            {account?.dev ? (
-              <label className="player-settings-row">
-                <span>开发模式（固定阵容）</span>
-                <Switch
-                  aria-label="开发模式"
-                  checked={devModeEnabled}
-                  checkedChildren="开"
-                  unCheckedChildren="关"
-                  onChange={setDevModeEnabled}
-                  size="small"
-                />
-              </label>
-            ) : null}
-            <div className="player-settings-update">
-              <div className="player-settings-version">当前版本：{currentVersion || "读取中"}</div>
-              <Button size="small" onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={checkingUpdate}>
-                检查更新
-              </Button>
-              <Button
-                size="small"
-                type="primary"
-                onClick={() => void installUpdate()}
-                loading={installingUpdate}
-                disabled={checkingUpdate || installingUpdate || updateResult?.updateAvailable !== true}
-              >
-                下载并安装
-              </Button>
-              {updateResult ? (
-                <Alert
-                  type={updateResult.updateAvailable ? "info" : "success"}
-                  showIcon
-                  message={
-                    updateResult.updateAvailable
-                      ? `发现 ${updateResult.latestVersion}，需更新 ${updateResult.changedFiles} 个文件，约 ${formatBytes(updateResult.changedBytes)}`
-                      : `当前版本 ${updateResult.currentVersion} 已是最新`
-                  }
-                />
-              ) : null}
-            </div>
-            <div className="player-settings-actions">
-              <Button
-                size="small"
-                onClick={() => {
-                  setSettingsModalOpen(false);
-                  setPasswordModalOpen(true);
-                }}
-              >
-                修改密码
-              </Button>
-              <Button size="small" onClick={() => void logout()}>
-                退出登录
-              </Button>
-            </div>
+            <Tabs
+              items={[
+                {
+                  key: "general",
+                  label: "常规",
+                  children: (
+                    <div className="player-settings-pane">
+                      <label className="player-settings-row">
+                        <span>匹配音效</span>
+                        <Switch
+                          aria-label="匹配音效"
+                          checked={matchSoundEnabled}
+                          checkedChildren="开"
+                          unCheckedChildren="关"
+                          onChange={setMatchSoundEnabled}
+                          size="small"
+                        />
+                      </label>
+                      {account?.dev ? (
+                        <label className="player-settings-row">
+                          <span>开发模式（固定阵容）</span>
+                          <Switch
+                            aria-label="开发模式"
+                            checked={devModeEnabled}
+                            checkedChildren="开"
+                            unCheckedChildren="关"
+                            onChange={setDevModeEnabled}
+                            size="small"
+                          />
+                        </label>
+                      ) : null}
+                      <div className="player-settings-actions">
+                        <Button
+                          size="small"
+                          onClick={() => {
+                            setSettingsModalOpen(false);
+                            setPasswordModalOpen(true);
+                          }}
+                        >
+                          修改密码
+                        </Button>
+                        <Button size="small" onClick={() => void logout()}>
+                          退出登录
+                        </Button>
+                      </div>
+                    </div>
+                  ),
+                },
+                {
+                  key: "about",
+                  label: "关于",
+                  children: (
+                    <div className="player-settings-pane">
+                      <div className="player-settings-update">
+                        <div className="player-settings-version">当前版本：{currentVersion || "读取中"}</div>
+                        {updateResult?.updateAvailable === true ? (
+                          <Button
+                            size="small"
+                            type="primary"
+                            onClick={() => void installUpdate()}
+                            loading={installingUpdate}
+                            disabled={installingUpdate}
+                          >
+                            下载并安装
+                          </Button>
+                        ) : (
+                          <Button size="small" onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={checkingUpdate}>
+                            检查更新
+                          </Button>
+                        )}
+                        {updateResult ? (
+                          <Alert
+                            type={updateResult.updateAvailable ? "info" : "success"}
+                            showIcon
+                            message={
+                              updateResult.updateAvailable
+                                ? `发现 ${updateResult.latestVersion}，需更新 ${updateResult.changedFiles} 个文件，约 ${formatBytes(updateResult.changedBytes)}`
+                                : `当前版本 ${updateResult.currentVersion} 已是最新`
+                            }
+                          />
+                        ) : null}
+                      </div>
+                    </div>
+                  ),
+                },
+              ]}
+            />
           </div>
         </Modal>
       </div>

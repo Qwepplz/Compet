@@ -231,6 +231,12 @@ input {
   gap: 14px;
 }
 
+.player-settings-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
 .player-settings-row {
   display: flex;
   align-items: center;
