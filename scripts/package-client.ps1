@@ -15,6 +15,7 @@ $updaterSource = Join-Path $repo "scripts\launcher\CompetUpdater.cs"
 $clientExe = "Compet Player Client.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
+$packageVersion = [string]((Get-Content -LiteralPath (Join-Path $repo "packaging\client\app-package.json") -Raw | ConvertFrom-Json).version)
 
 function Get-ArchiveEntryPath {
   param(
@@ -47,12 +48,10 @@ function Get-SevenZipCommand {
 }
 
 function Get-PackageVersion {
-  $packageJson = Get-Content -LiteralPath (Join-Path $repo "package.json") -Raw | ConvertFrom-Json
-  $version = [string]$packageJson.version
-  if ($version -match '^\d+\.\d+\.\d+$') {
-    return "$version.0"
+  if ($packageVersion -match '^\d+\.\d+\.\d+$') {
+    return "$packageVersion.0"
   }
-  return $version
+  return $packageVersion
 }
 
 function Set-ExeVersionInfo {
@@ -263,7 +262,8 @@ $updateBaseUrl = if ($env:COMPET_CLIENT_UPDATE_BASE_URL) { $env:COMPET_CLIENT_UP
   -AppId "compet-player-client" `
   -PackageDir $stage `
   -OutputDir (Join-Path $artifacts "update\client") `
-  -LatestUrlBase $updateBaseUrl
+  -LatestUrlBase $updateBaseUrl `
+  -Version $packageVersion
 if ($LASTEXITCODE -ne 0) { throw "Client update manifest creation failed with exit code $LASTEXITCODE" }
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Created $archive"

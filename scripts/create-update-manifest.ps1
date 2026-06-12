@@ -2,17 +2,16 @@ param(
   [Parameter(Mandatory = $true)][string]$AppId,
   [Parameter(Mandatory = $true)][string]$PackageDir,
   [Parameter(Mandatory = $true)][string]$OutputDir,
-  [Parameter(Mandatory = $true)][string]$LatestUrlBase
+  [Parameter(Mandatory = $true)][string]$LatestUrlBase,
+  [Parameter(Mandatory = $true)][string]$Version
 )
 
 $ErrorActionPreference = "Stop"
 
-$repo = Resolve-Path (Join-Path $PSScriptRoot "..")
-$packageJson = Get-Content -LiteralPath (Join-Path $repo "package.json") -Raw | ConvertFrom-Json
-$version = [string]$packageJson.version
-if ($version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
-  throw "Package version is not SemVer: $version"
+if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$') {
+  throw "Version is not SemVer: $Version"
 }
+$version = $Version
 
 $packageRoot = Resolve-Path $PackageDir
 $outputRoot = New-Item -ItemType Directory -Path $OutputDir -Force

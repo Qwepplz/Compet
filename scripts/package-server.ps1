@@ -16,6 +16,7 @@ $nodeRuntime = (Get-Command "node.exe" -ErrorAction Stop).Source
 $serverExe = "Compet Server Manager.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
+$packageVersion = [string]((Get-Content -LiteralPath (Join-Path $repo "packaging\server\app-package.json") -Raw | ConvertFrom-Json).version)
 
 function Get-ArchiveEntryPath {
   param(
@@ -48,12 +49,10 @@ function Get-SevenZipCommand {
 }
 
 function Get-PackageVersion {
-  $packageJson = Get-Content -LiteralPath (Join-Path $repo "package.json") -Raw | ConvertFrom-Json
-  $version = [string]$packageJson.version
-  if ($version -match '^\d+\.\d+\.\d+$') {
-    return "$version.0"
+  if ($packageVersion -match '^\d+\.\d+\.\d+$') {
+    return "$packageVersion.0"
   }
-  return $version
+  return $packageVersion
 }
 
 function Set-ExeVersionInfo {
@@ -345,7 +344,8 @@ $updateBaseUrl = if ($env:COMPET_SERVER_UPDATE_BASE_URL) { $env:COMPET_SERVER_UP
   -AppId "compet-server-manager" `
   -PackageDir $stage `
   -OutputDir (Join-Path $artifacts "update\server") `
-  -LatestUrlBase $updateBaseUrl
+  -LatestUrlBase $updateBaseUrl `
+  -Version $packageVersion
 if ($LASTEXITCODE -ne 0) { throw "Server update manifest creation failed with exit code $LASTEXITCODE" }
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Created $archive"
