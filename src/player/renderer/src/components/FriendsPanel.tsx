@@ -1,5 +1,5 @@
 import { Button, Input } from "antd";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
 import { SteamAvatar } from "./SteamAvatar.js";
 
@@ -7,6 +7,8 @@ interface FriendsPanelProps {
   accountId: string;
   friends: PlayerFriendListDto;
   onSearchFriends?: (query: string) => Promise<PlayerFriendSearchResultDto[]>;
+  onReenrichFriends?: (results: PlayerFriendSearchResultDto[]) => Promise<PlayerFriendSearchResultDto[]>;
+  onProfilesUpdated?: (listener: () => void) => () => void;
   onSendFriendRequest?: (accountId: string) => Promise<void>;
   onAcceptFriendRequest?: (requestId: string) => Promise<void>;
   onDeclineFriendRequest?: (requestId: string) => Promise<void>;
@@ -23,6 +25,8 @@ export function FriendsPanel({
   accountId,
   friends,
   onSearchFriends,
+  onReenrichFriends,
+  onProfilesUpdated,
   onSendFriendRequest,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
@@ -31,6 +35,8 @@ export function FriendsPanel({
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<PlayerFriendSearchResultDto[]>([]);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const searchResultsRef = useRef<PlayerFriendSearchResultDto[]>([]);
+  searchResultsRef.current = searchResults;
 
   const friendIds = useMemo(() => new Set(friends.friends.map((friend) => friend.accountId)), [friends.friends]);
   const pendingAccountIds = useMemo(
@@ -40,6 +46,19 @@ export function FriendsPanel({
     ]),
     [friends.incomingRequests, friends.outgoingRequests],
   );
+
+  useEffect(() => {
+    if (!onProfilesUpdated || !onReenrichFriends) return;
+    return onProfilesUpdated(() => {
+      const current = searchResultsRef.current;
+      if (current.length === 0) return;
+      void onReenrichFriends(current)
+        .then((enriched) => {
+          setSearchResults((latest) => (latest === current ? enriched : latest));
+        })
+        .catch(() => undefined);
+    });
+  }, [onProfilesUpdated, onReenrichFriends]);
 
   async function handleSearch() {
     const trimmed = query.trim();

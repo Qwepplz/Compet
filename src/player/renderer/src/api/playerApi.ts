@@ -19,6 +19,7 @@ export interface PlayerRealtimeApi {
   onRealtimeStatus(listener: (status: PlayerRealtimeStatusDto) => void): () => void;
   onRealtimeSnapshot(listener: (snapshot: PlayerRealtimeSnapshotDto) => void): () => void;
   onAccountUpdated(listener: (account: AccountView) => void): () => void;
+  onProfilesUpdated?(listener: () => void): () => void;
 }
 
 export interface PlayerSavedLoginApi {
@@ -27,6 +28,7 @@ export interface PlayerSavedLoginApi {
 
 export interface PlayerFriendsApi {
   searchFriends(query: string): Promise<PlayerFriendSearchResultDto[]>;
+  reenrichFriends?(results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]>;
   listFriends(): Promise<PlayerFriendListDto>;
   sendFriendRequest(accountId: string): Promise<PlayerFriendRequestDto>;
   acceptFriendRequest(requestId: string): Promise<PlayerFriendListDto>;

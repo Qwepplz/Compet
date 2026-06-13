@@ -1,5 +1,5 @@
 import { clipboard, ipcMain, shell } from "electron";
-import type { PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason, PlayerRealtimeSnapshotScope } from "../shared/types.js";
+import type { PlayerFriendSearchResultDto, PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason, PlayerRealtimeSnapshotScope } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { RemoteProfileService } from "./remoteProfileService.js";
 import { PROFILE_BASE_URL } from "./profileConfig.js";
@@ -102,6 +102,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   });
 
   ipcMain.handle("friends:search", (_event, query: string) => withSavedAuth(deps, (client) => client.searchFriends(query)));
+  ipcMain.handle("friends:reenrich", (_event, results: PlayerFriendSearchResultDto[]) => withSavedAuth(deps, (client) => client.reenrichFriendSearchResults(results)));
   ipcMain.handle("friends:list", () => withSavedAuth(deps, (client) => client.listFriends()));
   ipcMain.handle("friends:request", (_event, accountId: string) => withSavedAuth(deps, (client) => client.sendFriendRequest(accountId)));
   ipcMain.handle("friends:acceptRequest", (_event, requestId: string) => withSavedAuth(deps, (client) => client.acceptFriendRequest(requestId)));

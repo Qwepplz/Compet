@@ -171,6 +171,7 @@ export function createPreviewPlayerApi() {
         }));
     },
     listFriends: async (): Promise<PlayerFriendListDto> => previewFriends,
+    reenrichFriends: async (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => results,
     sendFriendRequest: async (accountId: string): Promise<PlayerFriendRequestDto> => ({
       id: `preview-request-${accountId}`,
       accountId,
@@ -252,6 +253,9 @@ export function createPreviewPlayerApi() {
       return () => snapshotListeners.delete(listener);
     },
     onAccountUpdated: (_listener: (account: AccountView) => void): (() => void) => {
+      return () => undefined;
+    },
+    onProfilesUpdated: (_listener: () => void): (() => void) => {
       return () => undefined;
     },
     copyText: async (): Promise<void> => undefined,

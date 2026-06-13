@@ -36,6 +36,7 @@ export const playerApi = {
   restoreSession: (): Promise<RestoreSessionResult | null> => invoke("session:restore"),
   loadSavedLogin: (): Promise<SavedPlayerLogin | null> => invoke("session:credentials"),
   searchFriends: (query: string): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:search", query),
+  reenrichFriends: (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:reenrich", results),
   listFriends: (): Promise<PlayerFriendListDto> => invoke("friends:list"),
   sendFriendRequest: (accountId: string): Promise<PlayerFriendRequestDto> => invoke("friends:request", accountId),
   acceptFriendRequest: (requestId: string): Promise<PlayerFriendListDto> => invoke("friends:acceptRequest", requestId),
@@ -61,6 +62,8 @@ export const playerApi = {
     subscribe("player:realtime:snapshot", listener),
   onAccountUpdated: (listener: (account: AccountView) => void): (() => void) =>
     subscribe("player:account:updated", listener),
+  onProfilesUpdated: (listener: () => void): (() => void) =>
+    subscribe("player:profiles:updated", () => listener()),
   copyText: (text: string): Promise<void> => invoke("player:copyText", text),
   openConnectUrl: (connectUrl: string): Promise<void> => invoke("player:openConnectUrl", connectUrl),
   getVersion: (): Promise<string> => invoke("updates:version"),

@@ -34,6 +34,7 @@ const realtimeStatusChannel = "player:realtime:status";
 const realtimeEventChannel = "player:realtime:event";
 const realtimeSnapshotChannel = "player:realtime:snapshot";
 const accountUpdatedChannel = "player:account:updated";
+const profilesUpdatedChannel = "player:profiles:updated";
 const PROFILES_UPDATED_DEBOUNCE_MS = 300;
 const MAX_QUEUED_REALTIME_EVENTS = 200;
 const REALTIME_EVENT_ENRICH_TIMEOUT_MS = 1_500;
@@ -168,6 +169,7 @@ function handleProfilesUpdated(): void {
   if (profilesUpdatedTimer !== undefined) return;
   profilesUpdatedTimer = setTimeout(() => {
     profilesUpdatedTimer = undefined;
+    broadcast(profilesUpdatedChannel, undefined);
     if (!apiClient) return;
     void refreshAccount().catch(() => undefined);
     if (realtimeSessionVersion > 0) {

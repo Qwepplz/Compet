@@ -117,6 +117,10 @@ export class PlayerApiClient {
     return this.request<PlayerFriendListDto>("GET", "/friends").then((friends) => this.enrichFriendList(friends));
   }
 
+  reenrichFriendSearchResults(results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> {
+    return this.enrichFriendSearchResults(results);
+  }
+
   async sendFriendRequest(accountId: string): Promise<PlayerFriendRequestDto> {
     const response = await this.commandOrRequest<{ request: PlayerFriendRequestDto }>(
       "friends.sendRequest",

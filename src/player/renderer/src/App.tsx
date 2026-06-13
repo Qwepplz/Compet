@@ -1213,6 +1213,8 @@ export function App() {
               accountId={account?.id ?? ""}
               friends={friends}
               onSearchFriends={friendsApi ? searchFriends : undefined}
+              onReenrichFriends={friendsApi?.reenrichFriends ? (results) => friendsApi.reenrichFriends!(results) : undefined}
+              onProfilesUpdated={realtimeApi?.onProfilesUpdated ? (listener) => realtimeApi.onProfilesUpdated!(listener) : undefined}
               onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
               onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
               onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
