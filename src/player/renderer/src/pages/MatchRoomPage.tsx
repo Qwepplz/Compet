@@ -5,7 +5,7 @@ import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTea
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { formatMapName } from "../mapDisplay.js";
 import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
-import { getRandomizingDisplayMap, isMapRandomizingPreReveal, isMapRandomizingRevealed } from "../randomMapAnimation.js";
+import { getRandomizingDisplayMap, isMapRandomizingRevealed } from "../randomMapAnimation.js";
 import { participantDisplayName } from "../playerDisplay.js";
 
 interface MatchRoomPageProps {
@@ -116,13 +116,21 @@ export function MatchRoomPage({
   onCopyText,
 }: MatchRoomPageProps) {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const randomizingPreReveal = room?.phase === "map_randomizing" && isMapRandomizingPreReveal(room.mapSelection, nowMs);
+  const randomizing = room?.phase === "map_randomizing" && !isMapRandomizingRevealed(room.mapSelection, nowMs);
 
   useEffect(() => {
-    const intervalMs = randomizingPreReveal ? 125 : 1000;
-    const timer = window.setInterval(() => setNowMs(Date.now()), intervalMs);
-    return () => window.clearInterval(timer);
-  }, [randomizingPreReveal]);
+    if (!randomizing) {
+      const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+      return () => window.clearInterval(timer);
+    }
+    let frame = 0;
+    const tick = () => {
+      setNowMs(Date.now());
+      frame = window.requestAnimationFrame(tick);
+    };
+    tick();
+    return () => window.cancelAnimationFrame(frame);
+  }, [randomizing]);
 
   const connect = room?.connect;
   const selectedMap = getSelectedMap(room, nowMs);
