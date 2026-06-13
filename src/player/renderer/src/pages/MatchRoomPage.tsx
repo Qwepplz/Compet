@@ -4,8 +4,9 @@ import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { formatMapName } from "../mapDisplay.js";
+import { mapImageUrl } from "../mapAssets.js";
 import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
-import { getRandomizingDisplayMap, isMapRandomizingRevealed } from "../randomMapAnimation.js";
+import { RandomMapReel } from "../components/RandomMapReel.js";
 import { participantDisplayName } from "../playerDisplay.js";
 
 interface MatchRoomPageProps {
@@ -61,10 +62,6 @@ function participantMeta(participant: PlayerMatchParticipantDto): string {
   return participant.botCategory === "pro" ? "Pro-Bot" : "BOT";
 }
 
-function mapThumbClass(map: string): string {
-  return `faceit-map-thumb faceit-map-thumb--${map.toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`;
-}
-
 
 function isReadyAnonymous(phase: string | undefined, participant: PlayerMatchParticipantDto, accountId: string | undefined): boolean {
   if (phase !== "ready") return false;
@@ -116,29 +113,14 @@ export function MatchRoomPage({
   onCopyText,
 }: MatchRoomPageProps) {
   const [nowMs, setNowMs] = useState(() => Date.now());
-  const randomizing = room?.phase === "map_randomizing" && !isMapRandomizingRevealed(room.mapSelection, nowMs);
 
   useEffect(() => {
-    if (!randomizing) {
-      const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
-      return () => window.clearInterval(timer);
-    }
-    let frame = 0;
-    const tick = () => {
-      setNowMs(Date.now());
-      frame = window.requestAnimationFrame(tick);
-    };
-    tick();
-    return () => window.cancelAnimationFrame(frame);
-  }, [randomizing]);
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   const connect = room?.connect;
   const selectedMap = getSelectedMap(room, nowMs);
-  const randomizingDisplayMap = room?.phase === "map_randomizing"
-    ? getRandomizingDisplayMap(room.mapSelection, nowMs)
-    : undefined;
-  const randomizingRevealed = room?.phase === "map_randomizing" && isMapRandomizingRevealed(room.mapSelection, nowMs);
-  const randomizingMapName = randomizingDisplayMap ? formatMapName(randomizingDisplayMap) : "--";
   const roomPhase = phaseLabel(room?.phase);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
@@ -209,7 +191,11 @@ export function MatchRoomPage({
               <section className="faceit-final-map-preview" aria-label="最终地图">
                 <span>最终地图</span>
                 <strong>{formatMapName(selectedMap)}</strong>
-                <span className={`faceit-final-map-thumb ${mapThumbClass(selectedMap)}`} aria-hidden="true" />
+                <span
+                  className="faceit-final-map-thumb"
+                  style={mapImageUrl(selectedMap) ? { backgroundImage: `url("${mapImageUrl(selectedMap)}")` } : undefined}
+                  aria-hidden="true"
+                />
               </section>
             ) : null}
 
@@ -257,17 +243,8 @@ export function MatchRoomPage({
               </section>
             ) : null}
 
-            {room.phase === "map_randomizing" ? (
-              <section className="faceit-connect-panel faceit-map-randomizing-panel" aria-live="polite">
-                <span>{randomizingRevealed ? "随机完成" : "随机地图中"}</span>
-                <div className="faceit-random-map-card" aria-label={randomizingRevealed ? `最终地图 ${randomizingMapName}` : "随机地图动画"}>
-                  {randomizingDisplayMap ? (
-                    <span className={`faceit-random-map-thumb faceit-map-thumb--${randomizingDisplayMap.toLowerCase().replace(/[^a-z0-9_-]/g, "-")}`} aria-hidden="true" />
-                  ) : null}
-                  <strong>{randomizingMapName}</strong>
-                </div>
-                <small>{randomizingRevealed ? "本场地图已确定，正在准备服务器。" : "系统正在随机选择本场地图。"}</small>
-              </section>
+            {room.phase === "map_randomizing" && room.mapSelection ? (
+              <RandomMapReel mapSelection={room.mapSelection} />
             ) : null}
 
             {room.phase === "match_room" || room.phase === "server_prepare" ? (

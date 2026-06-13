@@ -37,6 +37,7 @@ import { loadMatchSoundEnabled, saveMatchSoundEnabled } from "./matchSoundPrefer
 import { loadDevModeEnabled, saveDevModeEnabled } from "./devModePreference.js";
 import { getVisiblePartyForHome } from "./partyDisplay.js";
 import { playerAccountLabel } from "./playerDisplay.js";
+import { preloadMapImages } from "./mapAssets.js";
 import {
   mergeFriendListSnapshot,
   mergePartyInvitationsSnapshot,
@@ -253,6 +254,7 @@ export function App() {
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
 
   useEffect(() => {
+    preloadMapImages();
     void restoreSession();
     void window.playerApi.getVersion().then(setCurrentVersion);
   }, []);
