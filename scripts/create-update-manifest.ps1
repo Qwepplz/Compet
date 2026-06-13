@@ -18,10 +18,11 @@ $outputRoot = New-Item -ItemType Directory -Path $OutputDir -Force
 Remove-Item -LiteralPath (Join-Path $outputRoot "files") -Recurse -Force -ErrorAction SilentlyContinue
 
 $base = $LatestUrlBase.TrimEnd('/')
-$releasePath = Join-Path $outputRoot "releases\$version"
+$releasesRoot = Join-Path $outputRoot "releases"
+$releasePath = Join-Path $releasesRoot $version
 for ($attempt = 1; $attempt -le 5; $attempt++) {
   try {
-    Remove-Item -LiteralPath $releasePath -Recurse -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $releasesRoot -Recurse -Force -ErrorAction SilentlyContinue
     break
   } catch {
     if ($attempt -eq 5) { throw }
