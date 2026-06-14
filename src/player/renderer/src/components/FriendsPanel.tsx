@@ -116,7 +116,7 @@ export function FriendsPanel({
       <div className="player-social-search">
         <Input
           value={query}
-          placeholder="输入 Steam64、Steam 链接或账号名"
+          placeholder="输入账号用户名"
           onChange={(event) => setQuery(event.target.value)}
           onPressEnter={() => void handleSearch()}
           disabled={!onSearchFriends}
@@ -128,7 +128,6 @@ export function FriendsPanel({
 
       <div className="player-social-stack">
         <div>
-          <div className="player-social-subtitle">搜索结果</div>
           {searchResults.length > 0 ? (
             <div className="player-social-list">
               {searchResults.map((result) => {
@@ -159,12 +158,11 @@ export function FriendsPanel({
               })}
             </div>
           ) : (
-            <div className="player-empty">输入 Steam64、Steam 链接或账号名后搜索玩家。</div>
+            <div className="player-empty">输入账号用户名后搜索玩家。</div>
           )}
         </div>
 
         <div>
-          <div className="player-social-subtitle">收到的请求</div>
           {friends.incomingRequests.length > 0 ? (
             <div className="player-social-list">
               {friends.incomingRequests.map((request) => (
@@ -205,7 +203,6 @@ export function FriendsPanel({
         </div>
 
         <div>
-          <div className="player-social-subtitle">好友列表</div>
           {friends.friends.length > 0 ? (
             <div className="player-social-list">
               {friends.friends.map((friend) => (
