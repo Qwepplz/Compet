@@ -186,7 +186,6 @@ export function HomePage({
             <div className={`faceit-party-slot ${isSelf ? "faceit-party-slot--self" : ""}`} key={index}>
               <SteamAvatar avatarUrl={member?.avatarUrl} label={label} />
               <strong>{label}</strong>
-              <span>{isSelf ? (hasSteamBinding ? "已绑定 Steam" : "未绑定 Steam") : "队伍成员"}</span>
             </div>
           ) : (
             <button

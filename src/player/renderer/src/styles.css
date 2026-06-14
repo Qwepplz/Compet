@@ -331,6 +331,7 @@ input {
 .faceit-play-hero {
   display: grid;
   grid-template-columns: minmax(320px, 520px);
+  justify-content: center;
   gap: 14px;
   align-items: center;
   min-height: 132px;

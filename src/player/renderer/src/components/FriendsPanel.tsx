@@ -141,7 +141,6 @@ export function FriendsPanel({
                     <SteamAvatar avatarUrl={result.steamAvatarUrl} label={result.displayName} />
                     <div className="player-social-row-main">
                       <strong>{result.displayName}</strong>
-                      <span>已绑定 Steam</span>
                       <span className={result.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
                         {result.online ? "在线" : "离线"}
                       </span>
