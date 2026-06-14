@@ -965,6 +965,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 8px;
 }
 
+.player-add-friend {
+  display: grid;
+  gap: 14px;
+}
+
 .player-social-stack,
 .player-social-list {
   display: grid;

@@ -1,4 +1,5 @@
-import { Button, Input } from "antd";
+import { Button, Input, Modal } from "antd";
+import { UserAddOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendSearchResultDto, PlayerPartyInvitationDto } from "../../../shared/types.js";
@@ -42,6 +43,7 @@ export function FriendsPanel({
   onDeclinePartyInvite,
 }: FriendsPanelProps) {
   const [query, setQuery] = useState("");
+  const [addOpen, setAddOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<PlayerFriendSearchResultDto[]>([]);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
@@ -150,55 +152,16 @@ export function FriendsPanel({
           <div className="player-kicker">Friends</div>
           <h3 className="player-social-title">好友</h3>
         </div>
-      </div>
-
-      <div className="player-social-search">
-        <Input
-          value={query}
-          placeholder="输入账号用户名"
-          onChange={(event) => setQuery(event.target.value)}
-          onPressEnter={() => void handleSearch()}
+        <Button
+          aria-label="添加好友"
+          type="text"
+          icon={<UserAddOutlined />}
+          onClick={() => setAddOpen(true)}
           disabled={!onSearchFriends}
         />
-        <Button aria-label="搜索" type="primary" onClick={() => void handleSearch()} loading={searching} disabled={!onSearchFriends}>
-          搜索
-        </Button>
       </div>
 
       <div className="player-social-stack">
-        {searchResults.length > 0 ? (
-          <div>
-            <div className="player-social-list">
-              {searchResults.map((result) => {
-                const isSelf = result.accountId === accountId;
-                const isFriend = friendIds.has(result.accountId);
-                const hasPending = pendingAccountIds.has(result.accountId) || isSelf;
-                return (
-                  <div className="player-social-row" key={result.accountId}>
-                    <SteamAvatar avatarUrl={result.steamAvatarUrl} label={result.displayName} />
-                    <div className="player-social-row-main">
-                      <strong>{result.displayName}</strong>
-                      <span className={result.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
-                        {result.online ? "在线" : "离线"}
-                      </span>
-                      {!result.online && result.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(result.lastSeenAt)}</span> : null}
-                    </div>
-                    <Button
-                      aria-label="发送好友请求"
-                      size="small"
-                      onClick={() => void handleSendRequest(result.accountId)}
-                      disabled={!result.online || isFriend || hasPending || !onSendFriendRequest}
-                      loading={pendingRequestId === result.accountId}
-                    >
-                      发送好友请求
-                    </Button>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        ) : null}
-
         {partyInvitations.length > 0 ? (
           <div>
             <div className="player-social-list">
@@ -297,6 +260,64 @@ export function FriendsPanel({
           </div>
         ) : null}
       </div>
+
+      <Modal
+        centered
+        footer={null}
+        open={addOpen}
+        title="添加好友"
+        onCancel={() => {
+          setAddOpen(false);
+          setQuery("");
+          setSearchResults([]);
+        }}
+      >
+        <div className="player-add-friend">
+          <div className="player-social-search">
+            <Input
+              value={query}
+              placeholder="输入账号用户名"
+              onChange={(event) => setQuery(event.target.value)}
+              onPressEnter={() => void handleSearch()}
+              disabled={!onSearchFriends}
+            />
+            <Button aria-label="搜索" type="primary" onClick={() => void handleSearch()} loading={searching} disabled={!onSearchFriends}>
+              搜索
+            </Button>
+          </div>
+
+          {searchResults.length > 0 ? (
+            <div className="player-social-list">
+              {searchResults.map((result) => {
+                const isSelf = result.accountId === accountId;
+                const isFriend = friendIds.has(result.accountId);
+                const hasPending = pendingAccountIds.has(result.accountId) || isSelf;
+                return (
+                  <div className="player-social-row" key={result.accountId}>
+                    <SteamAvatar avatarUrl={result.steamAvatarUrl} label={result.displayName} />
+                    <div className="player-social-row-main">
+                      <strong>{result.displayName}</strong>
+                      <span className={result.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
+                        {result.online ? "在线" : "离线"}
+                      </span>
+                      {!result.online && result.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(result.lastSeenAt)}</span> : null}
+                    </div>
+                    <Button
+                      aria-label="发送好友请求"
+                      size="small"
+                      onClick={() => void handleSendRequest(result.accountId)}
+                      disabled={!result.online || isFriend || hasPending || !onSendFriendRequest}
+                      loading={pendingRequestId === result.accountId}
+                    >
+                      发送好友请求
+                    </Button>
+                  </div>
+                );
+              })}
+            </div>
+          ) : null}
+        </div>
+      </Modal>
     </section>
   );
 }
