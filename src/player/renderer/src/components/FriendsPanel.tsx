@@ -25,7 +25,16 @@ function formatLastSeen(lastSeenAt?: string): string {
   if (!lastSeenAt) return "";
   const date = new Date(lastSeenAt);
   if (Number.isNaN(date.getTime())) return lastSeenAt;
-  return date.toLocaleString("zh-CN", { hour12: false, month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+  const diffMinutes = Math.floor((Date.now() - date.getTime()) / 60000);
+  if (diffMinutes < 1) return "刚刚";
+  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  const diffHours = Math.floor(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours} 小时前`;
+  const diffDays = Math.floor(diffHours / 24);
+  if (diffDays < 30) return `${diffDays} 天前`;
+  const diffMonths = Math.floor(diffDays / 30);
+  if (diffMonths < 12) return `${diffMonths} 个月前`;
+  return `${Math.floor(diffDays / 365)} 年前`;
 }
 
 export function FriendsPanel({
@@ -248,7 +257,6 @@ export function FriendsPanel({
                   <SteamAvatar avatarUrl={friend.steamAvatarUrl} label={friend.displayName} />
                   <div className="player-social-row-main">
                     <strong>{friend.displayName}</strong>
-                    <span>好友</span>
                     <span className={friend.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
                       {friend.online ? "在线" : "离线"}
                     </span>
