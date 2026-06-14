@@ -7,7 +7,7 @@ export const theme: ThemeConfig = {
     colorBgBase: "#0f0f10",
     colorTextBase: "#f5f5f5",
     borderRadius: 8,
-    fontSize: 14,
+    fontSize: 16,
   },
   components: {
     Layout: { bodyBg: "#0f0f10", headerBg: "#161616", siderBg: "#161616" },

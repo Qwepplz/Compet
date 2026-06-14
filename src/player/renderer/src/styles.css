@@ -1,37 +1,26 @@
 @font-face {
-  font-family: "Saira";
+  font-family: "Play";
   font-style: normal;
-  font-weight: 100 900;
-  font-stretch: 100%;
+  font-weight: 400;
   font-display: swap;
-  src: url("./assets/fonts/saira-latin.woff2") format("woff2");
+  src: url("./assets/fonts/play-latin-400.woff2") format("woff2");
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 @font-face {
-  font-family: "Saira";
+  font-family: "Play";
   font-style: normal;
-  font-weight: 100 900;
-  font-stretch: 100%;
+  font-weight: 700;
   font-display: swap;
-  src: url("./assets/fonts/saira-latin-ext.woff2") format("woff2");
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-
-@font-face {
-  font-family: "Saira";
-  font-style: normal;
-  font-weight: 100 900;
-  font-stretch: 100%;
-  font-display: swap;
-  src: url("./assets/fonts/saira-vietnamese.woff2") format("woff2");
-  unicode-range: U+0102-0103, U+0110-0111, U+0128-0129, U+0168-0169, U+01A0-01A1, U+01AF-01B0, U+0300-0301, U+0303-0304, U+0308-0309, U+0323, U+0329, U+1EA0-1EF9, U+20AB;
+  src: url("./assets/fonts/play-latin-700.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 
 :root {
   color: #f5f5f5;
   background: #050505;
-  font-family: "Saira", "Microsoft YaHei", sans-serif;
+  font-family: "Play", "Microsoft YaHei", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
 * {
@@ -90,8 +79,8 @@ input {
 
 .player-kicker {
   color: #ff5500;
-  font-size: 11px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.12em;
   text-transform: uppercase;
 }
@@ -99,7 +88,7 @@ input {
 .player-title {
   margin: 10px 0 8px;
   color: #fff;
-  font-size: 30px;
+  font-size: 35px;
   line-height: 1.1;
 }
 
@@ -110,7 +99,7 @@ input {
 }
 
 .player-copy--small {
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .player-loading {
@@ -157,8 +146,8 @@ input {
   border-radius: 50%;
   background: #262626;
   color: #d8d8d8;
-  font-size: 13px;
-  font-weight: 900;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .player-app-avatar img {
@@ -174,7 +163,7 @@ input {
 
 .player-app-brand strong {
   color: #fff;
-  font-size: 14px;
+  font-size: 16px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
@@ -199,8 +188,8 @@ input {
   border-radius: 999px;
   background: #131313;
   color: #d7d7d7;
-  font-size: 11px;
-  font-weight: 800;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .player-status-pill--server {
@@ -249,8 +238,8 @@ input {
   justify-content: space-between;
   gap: 12px;
   color: #d7d7d7;
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 15px;
+  font-weight: 700;
 }
 
 .player-settings-actions {
@@ -269,7 +258,7 @@ input {
 
 .player-settings-version {
   color: #9a9a9a;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -284,8 +273,8 @@ input {
   border-radius: 8px;
   background: #111;
   color: #cfcfcf;
-  font-size: 13px;
-  font-weight: 800;
+  font-size: 15px;
+  font-weight: 700;
   box-shadow: none;
 }
 
@@ -344,26 +333,6 @@ input {
   border-bottom: 1px solid #222;
 }
 
-.faceit-player-identity {
-  display: flex;
-  align-items: center;
-  gap: 20px;
-}
-
-.faceit-rank-ring {
-  display: grid;
-  place-items: center;
-  width: 88px;
-  height: 88px;
-  border: 6px solid #303030;
-  border-left-color: #181818;
-  border-radius: 50%;
-  color: #9f9f9f;
-  font-size: 28px;
-  font-weight: 900;
-}
-
-.faceit-rank-ring img,
 .faceit-avatar img,
 .faceit-player-avatar img {
   width: 100%;
@@ -372,45 +341,24 @@ input {
   object-fit: cover;
 }
 
-.faceit-match-summary span {
-  color: #ff7a2f;
-  font-size: 12px;
-  font-weight: 900;
-  text-transform: uppercase;
-}
-
-.faceit-player-identity h1 {
-  margin: 2px 0 4px;
-  color: #fff;
-  font-size: 24px;
-  line-height: 1.15;
-}
-
-.faceit-player-identity p,
-.faceit-match-summary p {
-  margin: 0;
-  color: #b8b8b8;
-  font-size: 12px;
-}
-
 .faceit-match-summary {
-  min-height: 96px;
-  padding: 18px 22px;
-  border: 1px solid #3b2017;
-  border-radius: 10px;
-  background: rgba(16, 16, 16, 0.92);
+  display: inline-grid;
+  place-items: center;
+  justify-self: center;
+  padding: 10px 28px;
+  border: 1px solid rgba(255, 85, 0, 0.35);
+  border-radius: 999px;
+  background: rgba(255, 85, 0, 0.22);
 }
 
-.faceit-match-summary strong {
-  display: block;
-  margin: 8px 0;
+.faceit-queue-title {
+  margin: 0;
   color: #fff;
-  overflow-wrap: anywhere;
-}
-
-.faceit-match-summary--compact {
-  background: #101010;
-  border-color: #2b2b2b;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 .faceit-party-stage {
@@ -425,20 +373,20 @@ input {
   display: grid;
   place-items: center;
   align-content: center;
-  gap: 10px;
+  gap: 14px;
   min-height: 236px;
-  border: 1px solid #383838;
-  border-radius: 14px;
-  background: #111;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  background: #131313;
   color: #dcdcdc;
-  font-size: 13px;
+  font-size: 16px;
 }
 
 .faceit-party-slot--self {
   min-height: 270px;
   margin-top: -14px;
-  border-color: #4a4a4a;
-  background: #151515;
+  border-color: #ff5500;
+  background: #151212;
 }
 
 button.faceit-party-slot {
@@ -466,23 +414,25 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   border-radius: 50%;
   background: #333;
   color: #cfcfcf;
-  font-size: 30px;
-  font-weight: 900;
+  font-size: 35px;
+  font-weight: 700;
 }
 
 .faceit-party-slot strong {
   color: #fff;
+  font-size: 16px;
+  font-weight: 700;
 }
 
 .faceit-party-slot span {
   color: #9f9f9f;
-  font-size: 13px;
+  font-size: 14px;
 }
 
 .faceit-plus {
-  color: #777 !important;
+  color: #555 !important;
   font-size: 48px !important;
-  font-weight: 200;
+  font-weight: 400;
 }
 
 .faceit-queue-bar {
@@ -506,11 +456,15 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-main-cta,
 .faceit-secondary-cta,
 .faceit-connect-button {
-  height: 44px;
-  min-width: 118px;
+  height: 48px;
+  min-width: 160px;
+  padding: 0 32px;
   border-radius: 8px;
   box-shadow: none;
-  font-weight: 900;
+  font-size: 16px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
 }
 
 .faceit-main-cta,
@@ -530,8 +484,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   grid-column: 3;
   justify-self: end;
   color: #ffbd4a;
-  font-size: 12px;
-  font-weight: 800;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .faceit-invite-modal .ant-modal-content {
@@ -570,7 +524,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-invite-row .faceit-avatar {
   width: 44px;
   height: 44px;
-  font-size: 18px;
+  font-size: 21px;
 }
 
 .faceit-invite-main {
@@ -588,7 +542,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-invite-main span {
   color: #8f8f8f;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .faceit-server-pill {
@@ -599,7 +553,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   font-family: Consolas, "SFMono-Regular", monospace;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .faceit-matchroom {
@@ -620,15 +574,15 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-matchroom-top h2 {
   margin: 0;
   color: #fff;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .faceit-matchroom-top nav {
   display: flex;
   gap: 34px;
   color: #898989;
-  font-size: 11px;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 700;
 }
 
 .faceit-nav-active {
@@ -652,18 +606,18 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 6px;
   justify-items: center;
   color: #bfbfbf;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .faceit-team-summary strong,
 .faceit-match-status strong {
   color: #fff;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .faceit-match-status span {
   color: #ff5500;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .faceit-match-grid {
@@ -684,8 +638,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   display: flex;
   justify-content: space-between;
   color: #9b9b9b;
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .faceit-team-title strong {
@@ -722,7 +676,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   border-radius: 50%;
   background: #2b2b2b;
   color: #fff;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .faceit-player-main {
@@ -755,8 +709,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background: #ff5500;
   color: #111;
   box-shadow: inset 0 -2px 0 rgba(0, 0, 0, 0.28);
-  font-size: 11px;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 700;
   line-height: 1;
 }
 
@@ -767,11 +721,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-player-main span,
 .faceit-player-score {
   color: #8f8f8f;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .faceit-player-score {
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .faceit-center-panel {
@@ -800,16 +754,16 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-final-map-preview > span {
   color: #8d8d8d;
-  font-size: 11px;
-  font-weight: 900;
+  font-size: 13px;
+  font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
 .faceit-final-map-preview strong {
   color: #fff;
-  font-size: 22px;
-  font-weight: 900;
+  font-size: 25px;
+  font-weight: 700;
   line-height: 1.08;
   text-align: center;
   white-space: nowrap;
@@ -872,8 +826,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   border-radius: 4px;
   background: rgb(0 0 0 / 55%);
   color: #fff;
-  font-size: 10px;
-  font-weight: 800;
+  font-size: 12px;
+  font-weight: 700;
   letter-spacing: 0.04em;
 }
 
@@ -891,8 +845,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-reel-final-name {
   color: #fff;
-  font-size: 22px;
-  font-weight: 900;
+  font-size: 25px;
+  font-weight: 700;
   line-height: 1.08;
   text-align: center;
   white-space: nowrap;
@@ -909,8 +863,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-connect-panel > span {
   color: #fff;
-  font-size: 12px;
-  font-weight: 900;
+  font-size: 14px;
+  font-weight: 700;
 }
 
 .faceit-connect-panel > strong {
@@ -919,8 +873,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-countdown {
   color: #ff5500 !important;
-  font-size: 24px;
-  font-weight: 900;
+  font-size: 28px;
+  font-weight: 700;
 }
 
 .faceit-ready-list {
@@ -951,7 +905,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #999;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .faceit-ready-row strong,
@@ -978,7 +932,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   width: 100%;
   min-height: 36px;
   border-radius: 4px;
-  font-weight: 900;
+  font-weight: 700;
 }
 
 .faceit-connect-panel .faceit-connect-button {
@@ -1013,7 +967,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .player-social-title {
   margin: 4px 0 0;
   color: #fff;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .player-social-search {
@@ -1043,7 +997,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .player-social-row .faceit-avatar {
   width: 40px;
   height: 40px;
-  font-size: 16px;
+  font-size: 18px;
 }
 
 .player-social-row-main {
@@ -1062,7 +1016,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .player-social-meta,
 .player-empty {
   color: #858585;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .player-social-row-actions,

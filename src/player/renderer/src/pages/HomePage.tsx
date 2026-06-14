@@ -99,9 +99,7 @@ export function HomePage({
       <h2 className="player-sr-only">作战中心</h2>
       <div className="faceit-play-hero">
         <div className="faceit-match-summary">
-          <span>匹配队列</span>
-          <strong>5v5 · BO1</strong>
-          <p>Ready check、地图禁选和进服信息会在匹配成功后进入比赛房间。</p>
+          <h1 className="faceit-queue-title">5V5 Queue</h1>
         </div>
       </div>
 
