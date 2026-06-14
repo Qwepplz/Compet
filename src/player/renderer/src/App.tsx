@@ -1188,17 +1188,6 @@ export function App() {
             </div>
           </div>
 
-          <div className="player-app-nav">
-            <Button aria-label="主页" type={activeView === "home" ? "primary" : "default"} onClick={() => setActiveView("home")}>
-              主页
-            </Button>
-            {currentRoom ? (
-              <Button aria-label="比赛房间" type={activeView === "match-room" ? "primary" : "default"} onClick={() => setActiveView("match-room")}>
-                比赛房间
-              </Button>
-            ) : null}
-          </div>
-
           <div className="player-app-meta">
             <span aria-label="当前服务器地址" className="player-status-pill player-status-pill--server">
               {baseUrl}
