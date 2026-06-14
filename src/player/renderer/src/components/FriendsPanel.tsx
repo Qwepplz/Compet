@@ -166,8 +166,8 @@ export function FriendsPanel({
       </div>
 
       <div className="player-social-stack">
-        <div>
-          {searchResults.length > 0 ? (
+        {searchResults.length > 0 ? (
+          <div>
             <div className="player-social-list">
               {searchResults.map((result) => {
                 const isSelf = result.accountId === accountId;
@@ -196,10 +196,8 @@ export function FriendsPanel({
                 );
               })}
             </div>
-          ) : (
-            <div className="player-empty">输入账号用户名后搜索玩家。</div>
-          )}
-        </div>
+          </div>
+        ) : null}
 
         {partyInvitations.length > 0 ? (
           <div>
@@ -241,8 +239,8 @@ export function FriendsPanel({
           </div>
         ) : null}
 
-        <div>
-          {friends.incomingRequests.length > 0 ? (
+        {friends.incomingRequests.length > 0 ? (
+          <div>
             <div className="player-social-list">
               {friends.incomingRequests.map((request) => (
                 <div className="player-social-row" key={request.id}>
@@ -276,13 +274,11 @@ export function FriendsPanel({
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="player-empty">暂无待处理请求。</div>
-          )}
-        </div>
+          </div>
+        ) : null}
 
-        <div>
-          {friends.friends.length > 0 ? (
+        {friends.friends.length > 0 ? (
+          <div>
             <div className="player-social-list">
               {friends.friends.map((friend) => (
                 <div className="player-social-row" key={friend.friendshipId}>
@@ -298,10 +294,8 @@ export function FriendsPanel({
                 </div>
               ))}
             </div>
-          ) : (
-            <div className="player-empty">暂无好友。</div>
-          )}
-        </div>
+          </div>
+        ) : null}
       </div>
     </section>
   );
