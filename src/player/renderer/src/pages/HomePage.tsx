@@ -1,7 +1,7 @@
 import { Button, Modal, message } from "antd";
 import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
-import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto, PlayerPartyInvitationDto } from "../../../shared/types.js";
+import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { playerAccountLabel } from "../playerDisplay.js";
 
@@ -9,12 +9,9 @@ interface HomePageProps {
   account: AccountView | null;
   friends: PlayerFriendListDto;
   party: PlayerPartyDto | null;
-  partyInvitations: PlayerPartyInvitationDto[];
   matchmakingPending?: boolean;
   devModeEnabled?: boolean;
   onInviteFriend?: (accountId: string) => Promise<void>;
-  onAcceptPartyInvite?: (invitationId: string) => Promise<void>;
-  onDeclinePartyInvite?: (invitationId: string) => Promise<void>;
   onLeaveParty?: () => Promise<void>;
   onStartMatchmaking?: (options?: { dev?: boolean }) => Promise<void>;
 }
@@ -30,10 +27,6 @@ function memberDisplay(accountId: string, account: AccountView | null, friends: 
     label: friend?.steamPersonaName ?? friend?.displayName ?? "玩家",
     avatarUrl: friend?.steamAvatarUrl,
   };
-}
-
-function memberLabel(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): string {
-  return memberDisplay(accountId, account, friends).label;
 }
 
 function slotAccountId(index: number, account: AccountView | null, party: PlayerPartyDto | null): string | null {
@@ -53,18 +46,14 @@ export function HomePage({
   account,
   friends,
   party,
-  partyInvitations,
   matchmakingPending = false,
   devModeEnabled = false,
   onInviteFriend,
-  onAcceptPartyInvite,
-  onDeclinePartyInvite,
   onLeaveParty,
   onStartMatchmaking,
 }: HomePageProps) {
   const [inviteOpen, setInviteOpen] = useState(false);
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
-  const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [leavingParty, setLeavingParty] = useState(false);
   const [matchingPending, setMatchingPending] = useState(false);
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
@@ -82,30 +71,6 @@ export function HomePage({
       void message.error(error instanceof Error ? error.message : "发送队伍邀请失败");
     } finally {
       setBusyInviteId(null);
-    }
-  }
-
-  async function acceptPartyInvitation(invitationId: string) {
-    if (!onAcceptPartyInvite) return;
-    setBusyPartyInvitationId(invitationId);
-    try {
-      await onAcceptPartyInvite(invitationId);
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : "接受队伍邀请失败");
-    } finally {
-      setBusyPartyInvitationId(null);
-    }
-  }
-
-  async function declinePartyInvitation(invitationId: string) {
-    if (!onDeclinePartyInvite) return;
-    setBusyPartyInvitationId(invitationId);
-    try {
-      await onDeclinePartyInvite(invitationId);
-    } catch (error) {
-      void message.error(error instanceof Error ? error.message : "拒绝队伍邀请失败");
-    } finally {
-      setBusyPartyInvitationId(null);
     }
   }
 
@@ -139,42 +104,6 @@ export function HomePage({
           <p>Ready check、地图禁选和进服信息会在匹配成功后进入比赛房间。</p>
         </div>
       </div>
-
-      {partyInvitations.length > 0 ? (
-        <div className="faceit-invite-list" aria-label="待处理队伍邀请">
-          {partyInvitations.map((invitation) => {
-            const fromLabel = memberLabel(invitation.fromAccountId, account, friends);
-            return (
-              <div className="faceit-invite-row" key={invitation.id}>
-                <SteamAvatar avatarUrl={memberDisplay(invitation.fromAccountId, account, friends).avatarUrl} label={fromLabel} />
-                <div className="faceit-invite-main">
-                  <strong>{fromLabel}</strong>
-                  <span>邀请你加入队伍</span>
-                </div>
-                <div className="player-social-row-actions">
-                  <Button
-                    size="small"
-                    type="primary"
-                    onClick={() => void acceptPartyInvitation(invitation.id)}
-                    loading={busyPartyInvitationId === invitation.id}
-                    disabled={!onAcceptPartyInvite}
-                  >
-                    接受
-                  </Button>
-                  <Button
-                    size="small"
-                    onClick={() => void declinePartyInvitation(invitation.id)}
-                    loading={busyPartyInvitationId === invitation.id}
-                    disabled={!onDeclinePartyInvite}
-                  >
-                    拒绝
-                  </Button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      ) : null}
 
       <div className="faceit-party-stage">
         {[0, 1, 2, 3, 4].map((index) => {

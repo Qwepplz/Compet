@@ -1,17 +1,23 @@
 import { Button, Input } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
+import type { AccountView } from "../../../../manager/shared/types.js";
+import type { PlayerFriendListDto, PlayerFriendSearchResultDto, PlayerPartyInvitationDto } from "../../../shared/types.js";
 import { SteamAvatar } from "./SteamAvatar.js";
+import { playerAccountLabel } from "../playerDisplay.js";
 
 interface FriendsPanelProps {
   accountId: string;
+  account: AccountView | null;
   friends: PlayerFriendListDto;
+  partyInvitations: PlayerPartyInvitationDto[];
   onSearchFriends?: (query: string) => Promise<PlayerFriendSearchResultDto[]>;
   onReenrichFriends?: (results: PlayerFriendSearchResultDto[]) => Promise<PlayerFriendSearchResultDto[]>;
   onProfilesUpdated?: (listener: () => void) => () => void;
   onSendFriendRequest?: (accountId: string) => Promise<void>;
   onAcceptFriendRequest?: (requestId: string) => Promise<void>;
   onDeclineFriendRequest?: (requestId: string) => Promise<void>;
+  onAcceptPartyInvite?: (invitationId: string) => Promise<void>;
+  onDeclinePartyInvite?: (invitationId: string) => Promise<void>;
 }
 
 function formatLastSeen(lastSeenAt?: string): string {
@@ -23,18 +29,23 @@ function formatLastSeen(lastSeenAt?: string): string {
 
 export function FriendsPanel({
   accountId,
+  account,
   friends,
+  partyInvitations,
   onSearchFriends,
   onReenrichFriends,
   onProfilesUpdated,
   onSendFriendRequest,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
+  onAcceptPartyInvite,
+  onDeclinePartyInvite,
 }: FriendsPanelProps) {
   const [query, setQuery] = useState("");
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<PlayerFriendSearchResultDto[]>([]);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const searchResultsRef = useRef<PlayerFriendSearchResultDto[]>([]);
   searchResultsRef.current = searchResults;
 
@@ -104,6 +115,34 @@ export function FriendsPanel({
     }
   }
 
+  async function handleAcceptPartyInvite(invitationId: string) {
+    if (!onAcceptPartyInvite) return;
+    setBusyPartyInvitationId(invitationId);
+    try {
+      await onAcceptPartyInvite(invitationId);
+    } finally {
+      setBusyPartyInvitationId(null);
+    }
+  }
+
+  async function handleDeclinePartyInvite(invitationId: string) {
+    if (!onDeclinePartyInvite) return;
+    setBusyPartyInvitationId(invitationId);
+    try {
+      await onDeclinePartyInvite(invitationId);
+    } finally {
+      setBusyPartyInvitationId(null);
+    }
+  }
+
+  function inviterDisplay(fromAccountId: string): { label: string; avatarUrl?: string } {
+    if (fromAccountId === account?.id) {
+      return { label: playerAccountLabel(account), avatarUrl: account.steamAvatarUrl };
+    }
+    const friend = friends.friends.find((entry) => entry.accountId === fromAccountId);
+    return { label: friend?.steamPersonaName ?? friend?.displayName ?? "玩家", avatarUrl: friend?.steamAvatarUrl };
+  }
+
   return (
     <section className="player-social-panel">
       <div className="player-social-header">
@@ -161,6 +200,46 @@ export function FriendsPanel({
             <div className="player-empty">输入账号用户名后搜索玩家。</div>
           )}
         </div>
+
+        {partyInvitations.length > 0 ? (
+          <div>
+            <div className="player-social-list">
+              {partyInvitations.map((invitation) => {
+                const inviter = inviterDisplay(invitation.fromAccountId);
+                return (
+                  <div className="player-social-row" key={invitation.id}>
+                    <SteamAvatar avatarUrl={inviter.avatarUrl} label={inviter.label} />
+                    <div className="player-social-row-main">
+                      <strong>{inviter.label}</strong>
+                      <span>邀请你加入队伍</span>
+                    </div>
+                    <div className="player-social-row-actions">
+                      <Button
+                        aria-label="接受"
+                        size="small"
+                        type="primary"
+                        onClick={() => void handleAcceptPartyInvite(invitation.id)}
+                        loading={busyPartyInvitationId === invitation.id}
+                        disabled={!onAcceptPartyInvite}
+                      >
+                        接受
+                      </Button>
+                      <Button
+                        aria-label="拒绝"
+                        size="small"
+                        onClick={() => void handleDeclinePartyInvite(invitation.id)}
+                        loading={busyPartyInvitationId === invitation.id}
+                        disabled={!onDeclinePartyInvite}
+                      >
+                        拒绝
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
 
         <div>
           {friends.incomingRequests.length > 0 ? (

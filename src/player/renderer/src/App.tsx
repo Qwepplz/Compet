@@ -1059,12 +1059,9 @@ export function App() {
         account={account}
         friends={friends}
         party={visibleHomeParty}
-        partyInvitations={matchmaking.partyInvitations}
         matchmakingPending={matchmakingFeedbackPending}
         devModeEnabled={devModeEnabled}
         onInviteFriend={partyApi && !hasActiveMatch ? inviteToParty : undefined}
-        onAcceptPartyInvite={partyApi ? acceptPartyInvite : undefined}
-        onDeclinePartyInvite={partyApi ? declinePartyInvite : undefined}
         onLeaveParty={partyApi && party && !hasActiveMatch ? leaveParty : undefined}
         onStartMatchmaking={
           partyApi && canUseMatchmaking && !hasActiveMatch && (!party || party.ownerAccountId === account?.id)
@@ -1202,13 +1199,17 @@ export function App() {
           <aside className="player-app-sidebar">
             <FriendsPanel
               accountId={account?.id ?? ""}
+              account={account}
               friends={friends}
+              partyInvitations={matchmaking.partyInvitations}
               onSearchFriends={friendsApi ? searchFriends : undefined}
               onReenrichFriends={friendsApi?.reenrichFriends ? (results) => friendsApi.reenrichFriends!(results) : undefined}
               onProfilesUpdated={realtimeApi?.onProfilesUpdated ? (listener) => realtimeApi.onProfilesUpdated!(listener) : undefined}
               onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
               onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
               onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
+              onAcceptPartyInvite={partyApi ? acceptPartyInvite : undefined}
+              onDeclinePartyInvite={partyApi ? declinePartyInvite : undefined}
             />
           </aside>
         </div>
