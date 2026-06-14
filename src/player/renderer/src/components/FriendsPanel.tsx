@@ -111,7 +111,6 @@ export function FriendsPanel({
           <div className="player-kicker">Friends</div>
           <h3 className="player-social-title">好友</h3>
         </div>
-        <span className="player-status-pill">{friends.friends.length} 人</span>
       </div>
 
       <div className="player-social-search">

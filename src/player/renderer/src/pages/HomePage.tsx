@@ -241,9 +241,6 @@ export function HomePage({
       </Modal>
 
       <div className="faceit-queue-bar">
-        <div className="faceit-queue-tabs">
-          <strong>匹配</strong>
-        </div>
         {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
         <div className="faceit-queue-actions">
           {party ? (

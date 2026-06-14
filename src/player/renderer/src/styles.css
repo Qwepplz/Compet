@@ -490,21 +490,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   border-radius: 8px 8px 0 0;
 }
 
-.faceit-queue-tabs {
-  grid-column: 1;
-  display: flex;
-  align-items: center;
-  gap: 26px;
-  color: #a8a8a8;
-  font-size: 13px;
-  font-weight: 800;
-  text-transform: uppercase;
-}
-
-.faceit-queue-tabs strong {
-  color: #ff5500;
-}
-
 .faceit-queue-actions {
   grid-column: 2;
   display: flex;
@@ -1131,7 +1116,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     padding: 18px;
   }
 
-  .faceit-queue-tabs,
   .faceit-queue-actions,
   .faceit-binding-warning {
     grid-column: 1;
