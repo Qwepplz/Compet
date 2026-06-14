@@ -59,4 +59,15 @@ export class SessionService {
   async revokeSessionsForAccount(accountId: string): Promise<number> {
     return this.repository.revokeForAccount(accountId, new Date().toISOString());
   }
+
+  async listLatestLastSeenByAccount(): Promise<Map<string, string>> {
+    const latest = new Map<string, string>();
+    for (const session of await this.repository.list()) {
+      const current = latest.get(session.accountId);
+      if (!current || Date.parse(session.lastSeenAt) > Date.parse(current)) {
+        latest.set(session.accountId, session.lastSeenAt);
+      }
+    }
+    return latest;
+  }
 }

@@ -47,6 +47,15 @@ export class PresenceService {
     return this.get(accountId).online;
   }
 
+  seedLastSeen(accountId: string, lastSeenAt: string): void {
+    const state = this.states.get(accountId);
+    if (state) {
+      if (state.connectionCount === 0 && !state.lastSeenAt) state.lastSeenAt = lastSeenAt;
+      return;
+    }
+    this.states.set(accountId, { connectionCount: 0, lastSeenAt });
+  }
+
   get(accountId: string): PresenceSummary {
     return toSummary(accountId, this.states.get(accountId));
   }

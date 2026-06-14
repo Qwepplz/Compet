@@ -52,6 +52,9 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   const records = new MatchRecordStore(recordsDir);
   const events = new RealtimeEventBus();
   const presence = new PresenceService();
+  for (const [accountId, lastSeenAt] of await sessions.listLatestLastSeenByAccount()) {
+    presence.seedLastSeen(accountId, lastSeenAt);
+  }
   const friends = new FriendService({
     store: await FriendStore.create(path.join(recordsDir, "friends")),
     accounts,
