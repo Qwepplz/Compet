@@ -690,6 +690,12 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   min-width: 0;
 }
 
+.faceit-verif-badge {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+}
+
 .faceit-player-main strong {
   display: block;
   min-width: 0;

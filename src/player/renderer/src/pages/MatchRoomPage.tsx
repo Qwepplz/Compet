@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
+import { VerificationBadge } from "../components/VerificationBadge.js";
 import { formatMapName } from "../mapDisplay.js";
 import { mapImageUrl } from "../mapAssets.js";
 import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
@@ -57,9 +58,10 @@ function participantName(participant: PlayerMatchParticipantDto): string {
   return participantDisplayName(participant);
 }
 
-function participantMeta(participant: PlayerMatchParticipantDto): string {
-  if (participant.kind === "human") return "Player";
-  return participant.botCategory === "pro" ? "Pro-Bot" : "BOT";
+function participantBadge(participant: PlayerMatchParticipantDto): { variant: "gold" | "white"; title: string } | null {
+  if (participant.kind === "human") return { variant: "gold", title: "Player" };
+  if (participant.botCategory === "pro") return { variant: "white", title: "Pro-Bot" };
+  return null;
 }
 
 
@@ -85,17 +87,18 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
           const displayName = anonymous ? "已匹配玩家" : participantName(participant);
           const avatarLabel = anonymous ? undefined : participantName(participant);
           const avatarUrl = anonymous ? undefined : participant.steamAvatarUrl;
+          const badge = anonymous ? null : participantBadge(participant);
           return (
             <div className={`faceit-player-card${isSelf ? " faceit-player-card--self" : ""}`} key={participant.id}>
               <SteamAvatar className="faceit-player-avatar" avatarUrl={avatarUrl} label={avatarLabel} />
               <div className="faceit-player-main">
                 <div className="faceit-player-name-line">
                   <strong>{displayName}</strong>
+                  {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
                   {!anonymous && participant.isCaptain ? (
                     <span className="faceit-captain-badge" aria-label="队长" title="队长">C</span>
                   ) : null}
                 </div>
-                <span>{anonymous ? "" : participantMeta(participant)}</span>
               </div>
             </div>
           );
