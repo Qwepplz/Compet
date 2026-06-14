@@ -97,11 +97,6 @@ export function HomePage({
   return (
     <div className="faceit-play">
       <h2 className="player-sr-only">作战中心</h2>
-      <div className="faceit-play-hero">
-        <div className="faceit-match-summary">
-          <h1 className="faceit-queue-title">5V5 Queue</h1>
-        </div>
-      </div>
 
       <div className="faceit-party-stage">
         {[0, 1, 2, 3, 4].map((index) => {
