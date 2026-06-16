@@ -1,5 +1,5 @@
-import { Button, Input, Modal } from "antd";
-import { UserAddOutlined } from "@ant-design/icons";
+import { Badge, Button, Input, Modal } from "antd";
+import { TeamOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendSearchResultDto, PlayerPartyInvitationDto } from "../../../shared/types.js";
@@ -7,6 +7,7 @@ import { SteamAvatar } from "./SteamAvatar.js";
 import { playerAccountLabel } from "../playerDisplay.js";
 
 interface FriendsPanelProps {
+  expanded: boolean;
   accountId: string;
   account: AccountView | null;
   friends: PlayerFriendListDto;
@@ -38,6 +39,7 @@ function formatLastSeen(lastSeenAt?: string): string {
 }
 
 export function FriendsPanel({
+  expanded,
   accountId,
   account,
   friends,
@@ -154,14 +156,23 @@ export function FriendsPanel({
     return { label: friend?.steamPersonaName ?? friend?.displayName ?? "玩家", avatarUrl: friend?.steamAvatarUrl };
   }
 
+  const pendingCount = friends.incomingRequests.length + partyInvitations.length;
+  const open = expanded || addOpen;
+
   return (
-    <section className="player-social-panel">
+    <section className={`player-social-panel${open ? "" : " player-social-panel--collapsed"}`}>
       <div className="player-social-header">
-        <div>
+        <Badge className="player-social-rail" count={open ? 0 : pendingCount} size="small">
+          <span className="player-social-rail-icon" aria-label="好友列表">
+            <TeamOutlined />
+          </span>
+        </Badge>
+        <div className="player-social-heading">
           <div className="player-kicker">Friends</div>
           <h3 className="player-social-title">好友</h3>
         </div>
         <Button
+          className="player-social-add"
           aria-label="添加好友"
           type="text"
           icon={<UserAddOutlined />}
@@ -172,7 +183,7 @@ export function FriendsPanel({
 
       <div className="player-social-stack">
         {partyInvitations.length > 0 ? (
-          <div>
+          <div className="player-social-group player-social-group--pending">
             <div className="player-social-list">
               {partyInvitations.map((invitation) => {
                 const inviter = inviterDisplay(invitation.fromAccountId);
@@ -212,7 +223,7 @@ export function FriendsPanel({
         ) : null}
 
         {friends.incomingRequests.length > 0 ? (
-          <div>
+          <div className="player-social-group player-social-group--pending">
             <div className="player-social-list">
               {friends.incomingRequests.map((request) => (
                 <div className="player-social-row" key={request.id}>
@@ -250,7 +261,7 @@ export function FriendsPanel({
         ) : null}
 
         {friends.friends.length > 0 ? (
-          <div>
+          <div className="player-social-group">
             <div className="player-social-list">
               {friends.friends.map((friend) => (
                 <div className="player-social-row" key={friend.friendshipId}>

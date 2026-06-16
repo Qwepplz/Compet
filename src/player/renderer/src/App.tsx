@@ -226,6 +226,7 @@ export function App() {
   const [changePasswordPending, setChangePasswordPending] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [friendsExpanded, setFriendsExpanded] = useState(false);
   const [currentVersion, setCurrentVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
@@ -1194,10 +1195,15 @@ export function App() {
           </div>
         </div>
 
-        <div className="player-app-layout">
+        <div className={`player-app-layout${friendsExpanded ? "" : " player-app-layout--collapsed"}`}>
           <main className="player-app-main">{renderAuthenticatedView()}</main>
-          <aside className="player-app-sidebar">
+          <aside
+            className="player-app-sidebar"
+            onMouseEnter={() => setFriendsExpanded(true)}
+            onMouseLeave={() => setFriendsExpanded(false)}
+          >
             <FriendsPanel
+              expanded={friendsExpanded}
               accountId={account?.id ?? ""}
               account={account}
               friends={friends}

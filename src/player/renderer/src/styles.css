@@ -32,6 +32,7 @@ body,
 #root {
   margin: 0;
   min-height: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -300,6 +301,7 @@ input {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
   min-height: calc(100vh - 64px);
+  transition: grid-template-columns 0.26s ease;
 }
 
 .player-app-main {
@@ -312,6 +314,12 @@ input {
   gap: 1px;
   border-left: 1px solid #171717;
   background: #050505;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.player-app-layout--collapsed {
+  grid-template-columns: minmax(0, 1fr) 88px;
 }
 
 .faceit-play {
@@ -339,6 +347,7 @@ input {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.12fr) minmax(0, 1fr) minmax(0, 1fr);
   justify-content: center;
   align-content: center;
+  align-items: center;
   gap: clamp(12px, 1.6vw, 28px);
   width: 100%;
   max-width: 1040px;
@@ -352,7 +361,7 @@ input {
   align-content: center;
   gap: 18px;
   min-width: 0;
-  min-height: 260px;
+  aspect-ratio: 5 / 7;
   padding: 0 12px;
   border: 2px solid #2a2a2a;
   border-radius: 10px;
@@ -362,8 +371,13 @@ input {
 }
 
 .faceit-party-slot--self {
-  min-height: 296px;
   margin-top: -18px;
+}
+
+.faceit-party-slot .faceit-avatar {
+  width: 70%;
+  height: auto;
+  aspect-ratio: 1;
 }
 
 button.faceit-party-slot {
@@ -940,12 +954,84 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .player-social-panel {
   display: grid;
-  gap: 14px;
-  padding: 16px;
+  gap: 12px;
+  padding: 12px;
   background: transparent;
+  width: 340px;
+  justify-self: start;
 }
 
-.player-social-header,
+.player-social-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding-left: 12px;
+}
+
+.player-social-rail {
+  flex: 0 0 auto;
+}
+
+.player-social-rail-icon {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: #121212;
+  border: 2px solid #1f1f1f;
+  color: #ff5500;
+  font-size: 18px;
+}
+
+.player-social-heading {
+  flex: 1 1 auto;
+  min-width: 0;
+  transition: opacity 0.2s ease;
+}
+
+.player-social-add {
+  flex: 0 0 auto;
+  transition: opacity 0.2s ease;
+}
+
+.player-social-panel--collapsed .player-social-heading,
+.player-social-panel--collapsed .player-social-add {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.player-social-group--pending {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows 0.26s ease, opacity 0.2s ease;
+}
+
+.player-social-group--pending > .player-social-list {
+  overflow: hidden;
+  min-height: 0;
+}
+
+.player-social-panel--collapsed .player-social-group--pending {
+  grid-template-rows: 0fr;
+  opacity: 0;
+}
+
+.player-social-row {
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.player-social-panel--collapsed .player-social-row {
+  background: transparent;
+  border-color: transparent;
+}
+
+.player-social-panel--collapsed .player-social-row-main,
+.player-social-panel--collapsed .player-social-row-actions {
+  visibility: hidden;
+}
+
 .player-team-header {
   display: flex;
   align-items: start;
@@ -973,7 +1059,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .player-social-stack,
 .player-social-list {
   display: grid;
-  gap: 10px;
+  gap: 8px;
 }
 
 .player-social-row {
@@ -1037,8 +1123,13 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 @media (max-width: 1180px) {
-  .player-app-layout {
+  .player-app-layout,
+  .player-app-layout--collapsed {
     grid-template-columns: 1fr;
+  }
+
+  .player-social-panel {
+    width: auto;
   }
 
   .player-app-sidebar {
