@@ -861,16 +861,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   text-align: center;
 }
 
-.faceit-connect-panel > span {
-  color: #fff;
-  font-size: 14px;
-  font-weight: 700;
-}
-
-.faceit-connect-panel > strong {
-  color: #fff;
-}
-
 .faceit-countdown {
   color: #ff5500 !important;
   font-size: 28px;

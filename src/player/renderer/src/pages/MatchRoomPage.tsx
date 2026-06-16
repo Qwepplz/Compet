@@ -30,7 +30,7 @@ function formatCountdown(deadlineAt: string | undefined, nowMs: number, maxSecon
   return `${minutes}:${seconds}`;
 }
 
-function phaseLabel(phase?: PlayerLiveMatchStateDto["phase"]): string {
+function phaseLabel(phase?: PlayerLiveMatchStateDto["phase"]): string | null {
   switch (phase) {
     case "ready":
       return "准备确认";
@@ -41,7 +41,7 @@ function phaseLabel(phase?: PlayerLiveMatchStateDto["phase"]): string {
     case "server_prepare":
       return "服务器准备中";
     case "connect":
-      return "可以进服";
+      return null;
     case "live":
       return "比赛进行中";
     case "completed":
@@ -169,7 +169,7 @@ export function MatchRoomPage({
         </div>
         <div className="faceit-match-status">
           <strong>5v5 · BO1</strong>
-          <span>{roomPhase}</span>
+          {roomPhase ? <span>{roomPhase}</span> : null}
           {selectedMap ? <small>{formatMapName(selectedMap)}</small> : null}
         </div>
         <div className="faceit-team-summary faceit-team-summary--right">
@@ -260,20 +260,16 @@ export function MatchRoomPage({
 
             {room.phase === "connect" || room.phase === "live" ? (
               <section className="faceit-connect-panel">
-                <span>Time To Connect</span>
-                <strong className="faceit-countdown faceit-countdown--ready">{connect ? "READY" : "--:--"}</strong>
                 {connect ? (
-                  <>
-                    <Button
-                      aria-label="复制进服指令"
-                      type="primary"
-                      className="faceit-connect-button"
-                      onClick={() => void onCopyText?.(connect.connectCommand)}
-                      disabled={!onCopyText}
-                    >
-                      复制进服指令
-                    </Button>
-                  </>
+                  <Button
+                    aria-label="复制进服指令"
+                    type="primary"
+                    className="faceit-connect-button"
+                    onClick={() => void onCopyText?.(connect.connectCommand)}
+                    disabled={!onCopyText}
+                  >
+                    复制进服指令
+                  </Button>
                 ) : (
                   <small>连接信息尚未下发。</small>
                 )}
