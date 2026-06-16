@@ -352,9 +352,9 @@ input {
   align-content: center;
   gap: 18px;
   min-width: 0;
-  min-height: 300px;
+  min-height: 260px;
   padding: 0 12px;
-  border: 1px solid #2a2a2a;
+  border: 2px solid #2a2a2a;
   border-radius: 10px;
   background: #131313;
   color: #dcdcdc;
@@ -362,7 +362,7 @@ input {
 }
 
 .faceit-party-slot--self {
-  min-height: 340px;
+  min-height: 296px;
   margin-top: -18px;
 }
 
@@ -395,6 +395,20 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   font-weight: 700;
 }
 
+.faceit-party-slot-name {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
+  min-width: 0;
+}
+
+.faceit-party-slot-name .faceit-verif-badge {
+  width: 18px;
+  height: 18px;
+}
+
 .faceit-party-slot strong {
   max-width: 100%;
   color: #fff;
@@ -421,10 +435,9 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   grid-template-columns: 1fr auto 1fr;
   align-items: center;
   gap: 18px;
-  min-height: 108px;
+  min-height: 88px;
+  margin-top: 36px;
   padding: 0 22px;
-  background: #111;
-  border-radius: 8px;
 }
 
 .faceit-queue-actions {
@@ -939,8 +952,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   display: grid;
   gap: 14px;
   padding: 16px;
-  background: #0b0b0b;
-  border-bottom: 1px solid #1a1a1a;
+  background: transparent;
 }
 
 .player-social-header,
@@ -982,7 +994,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   min-height: 64px;
   padding: 10px;
   background: #121212;
-  border: 1px solid #1f1f1f;
+  border: 2px solid #1f1f1f;
   border-radius: 8px;
 }
 

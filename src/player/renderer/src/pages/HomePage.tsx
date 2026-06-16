@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
+import { VerificationBadge } from "../components/VerificationBadge.js";
 import { playerAccountLabel } from "../playerDisplay.js";
 
 interface HomePageProps {
@@ -107,7 +108,10 @@ export function HomePage({
           return label ? (
             <div className={`faceit-party-slot ${isSelf ? "faceit-party-slot--self" : ""}`} key={index}>
               <SteamAvatar avatarUrl={member?.avatarUrl} label={label} />
-              <strong>{label}</strong>
+              <div className="faceit-party-slot-name">
+                <strong>{label}</strong>
+                <VerificationBadge variant="gold" title="Player" />
+              </div>
             </div>
           ) : (
             <button
