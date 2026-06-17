@@ -13,7 +13,6 @@ import { OverviewPage } from "./pages/OverviewPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
 
 const initialStatus: ServiceStatus = { state: "stopped", baseUrl: "https://127.0.0.1:18443" };
-const implementedPages = new Set(["overview", "accounts", "diagnostics", "logs", "settings"]);
 
 export function App() {
   const [status, setStatus] = useState<ServiceStatus>(initialStatus);
@@ -189,7 +188,6 @@ export function App() {
       {page === "diagnostics" && <DiagnosticsPage />}
       {page === "logs" && <LogsPage />}
       {page === "settings" && <SettingsPage />}
-      {!implementedPages.has(page) && <div className="placeholder-panel">该页面将在后续任务实现</div>}
     </AppShell>
   );
 }

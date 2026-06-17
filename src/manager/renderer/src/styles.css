@@ -15,7 +15,6 @@ body { font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; background
 .metric-label { margin-bottom: 6px; color: #64748b; font-size: 12px; }
 .metric-value { overflow-wrap: anywhere; font-size: 15px; color: #172033; }
 .action-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
-.placeholder-panel { padding: 32px; border: 1px dashed #cbd5e1; border-radius: 8px; background: #fff; color: #64748b; text-align: center; }
 .settings-page { min-height: calc(100vh - 84px); display: flex; flex-direction: column; }
 .settings-body { flex: 1; display: flex; min-height: 0; }
 .settings-body > .ant-spin-nested-loading { flex: 1; display: flex; width: 100%; }
