@@ -352,7 +352,7 @@ input {
   width: 100%;
   max-width: 1040px;
   margin: 0 auto;
-  padding: 36px 0;
+  padding: 44px 0 28px;
 }
 
 .faceit-party-slot {
@@ -361,7 +361,7 @@ input {
   align-content: center;
   gap: 18px;
   min-width: 0;
-  aspect-ratio: 5 / 7;
+  aspect-ratio: 5 / 8;
   padding: 0 12px;
   border: 2px solid #2a2a2a;
   border-radius: 10px;
@@ -450,7 +450,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   align-items: center;
   gap: 18px;
   min-height: 88px;
-  margin-top: 36px;
+  margin-top: 52px;
   padding: 0 22px;
 }
 

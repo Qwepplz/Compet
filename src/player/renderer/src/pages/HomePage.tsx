@@ -181,7 +181,7 @@ export function HomePage({
             disabled={primaryDisabled}
             loading={isMatchmakingPending}
           >
-            {isMatchmakingPending ? "正在匹配" : "匹配比赛"}
+            {isMatchmakingPending ? "正在匹配" : "开始匹配"}
           </Button>
         </div>
       </div>
