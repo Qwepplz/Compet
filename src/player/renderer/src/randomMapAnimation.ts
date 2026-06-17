@@ -4,9 +4,8 @@ type MapSelection = PlayerLiveMatchStateDto["mapSelection"];
 
 export const MAP_REEL_VISIBLE_TILES = 3;
 
-export function mapReelOffset(viewportWidth: number, index: number): number {
-  const tileWidth = viewportWidth / MAP_REEL_VISIBLE_TILES;
-  return viewportWidth / 2 - (index + 0.5) * tileWidth;
+export function mapReelOffset(index: number): number {
+  return 50 - (index + 0.5) * (100 / MAP_REEL_VISIBLE_TILES);
 }
 
 export function mapReelDurationMs(mapSelection: NonNullable<MapSelection>, nowMs: number): number {

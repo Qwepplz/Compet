@@ -14,30 +14,28 @@ export function RandomMapReel({ mapSelection }: { mapSelection: MapSelection }) 
   const tiles = [...reel, ...reel.slice(0, TRAILING_PAD)];
 
   const stripRef = useRef<HTMLDivElement>(null);
-  const viewportRef = useRef<HTMLDivElement>(null);
   const [settled, setSettled] = useState(() => isMapRandomizingRevealed(mapSelection, Date.now()));
 
   useLayoutEffect(() => {
     const strip = stripRef.current;
-    const viewport = viewportRef.current;
-    if (!strip || !viewport) return;
-    const target = mapReelOffset(viewport.clientWidth, winnerIndex);
+    if (!strip) return;
+    const target = mapReelOffset(winnerIndex);
 
     if (isMapRandomizingRevealed(mapSelection, Date.now())) {
       strip.style.transition = "none";
-      strip.style.transform = `translateX(${target}px)`;
+      strip.style.transform = `translateX(${target}%)`;
       setSettled(true);
       return;
     }
 
     strip.style.transition = "none";
-    strip.style.transform = `translateX(${mapReelOffset(viewport.clientWidth, 1)}px)`;
+    strip.style.transform = `translateX(${mapReelOffset(1)}%)`;
     void strip.offsetWidth;
 
     const durationMs = mapReelDurationMs(mapSelection, Date.now());
     const handle = requestAnimationFrame(() => {
       strip.style.transition = `transform ${durationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`;
-      strip.style.transform = `translateX(${target}px)`;
+      strip.style.transform = `translateX(${target}%)`;
     });
     const onEnd = () => setSettled(true);
     strip.addEventListener("transitionend", onEnd, { once: true });
@@ -53,7 +51,6 @@ export function RandomMapReel({ mapSelection }: { mapSelection: MapSelection }) 
       <span>{settled ? "随机完成" : "随机地图中"}</span>
       <div
         className="faceit-reel-viewport"
-        ref={viewportRef}
         aria-label={settled ? `最终地图 ${formatMapName(finalMap)}` : "随机地图动画"}
       >
         <div className="faceit-reel-strip" ref={stripRef}>
