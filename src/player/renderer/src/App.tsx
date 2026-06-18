@@ -35,6 +35,7 @@ import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
 import { loadMatchSoundEnabled, saveMatchSoundEnabled } from "./matchSoundPreference.js";
 import { loadDevModeEnabled, saveDevModeEnabled } from "./devModePreference.js";
+import { randomMatchmakingDelayMs } from "./matchTimers.js";
 import { getVisiblePartyForHome } from "./partyDisplay.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import { preloadMapImages } from "./mapAssets.js";
@@ -66,6 +67,10 @@ const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], o
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
+
+function waitForMatchmakingDelay(delayMs: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
+}
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -1013,6 +1018,7 @@ export function App() {
       if (!party) {
         await createParty();
       }
+      await waitForMatchmakingDelay(randomMatchmakingDelayMs());
       await startPartyMatchmaking(options);
     } catch (error) {
       setMatchmakingFeedbackPending(false);

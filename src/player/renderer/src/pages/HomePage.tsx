@@ -1,9 +1,10 @@
-import { Button, Modal, message } from "antd";
-import { useState } from "react";
+import { Button, Modal, Spin, message } from "antd";
+import { useEffect, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
+import { formatMatchmakingElapsed } from "../matchTimers.js";
 import { playerAccountLabel } from "../playerDisplay.js";
 
 interface HomePageProps {
@@ -57,10 +58,25 @@ export function HomePage({
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
   const [leavingParty, setLeavingParty] = useState(false);
   const [matchingPending, setMatchingPending] = useState(false);
+  const [matchingStartedAt, setMatchingStartedAt] = useState<number | null>(null);
+  const [matchingNowMs, setMatchingNowMs] = useState(() => Date.now());
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
   const hasSteamBinding = Boolean(account?.steam64?.trim());
   const isMatchmakingPending = matchingPending || matchmakingPending;
   const primaryDisabled = !hasSteamBinding || !canStart || isMatchmakingPending;
+  const matchingElapsedMs = matchingStartedAt ? matchingNowMs - matchingStartedAt : 0;
+
+  useEffect(() => {
+    if (!isMatchmakingPending) {
+      setMatchingStartedAt(null);
+      return;
+    }
+    const startedAt = Date.now();
+    setMatchingStartedAt(startedAt);
+    setMatchingNowMs(startedAt);
+    const timer = window.setInterval(() => setMatchingNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, [isMatchmakingPending]);
 
   async function inviteFriend(accountId: string) {
     if (!onInviteFriend) return;
@@ -179,9 +195,16 @@ export function HomePage({
             className="faceit-main-cta"
             onClick={() => void startMatchmaking()}
             disabled={primaryDisabled}
-            loading={isMatchmakingPending}
           >
-            {isMatchmakingPending ? "正在匹配" : "开始匹配"}
+            <span className="faceit-matchmaking-content">
+              <span>{isMatchmakingPending ? "正在匹配" : "开始匹配"}</span>
+              {isMatchmakingPending ? (
+                <span className="faceit-matchmaking-indicator" aria-live="polite">
+                  <Spin size="small" />
+                  <span>{formatMatchmakingElapsed(matchingElapsedMs)}</span>
+                </span>
+              ) : null}
+            </span>
           </Button>
         </div>
       </div>

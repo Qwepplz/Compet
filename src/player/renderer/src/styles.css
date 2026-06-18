@@ -497,6 +497,29 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   padding-inline: 0;
 }
 
+.faceit-matchmaking-content {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+
+.faceit-matchmaking-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.faceit-matchmaking-indicator .ant-spin {
+  color: #fff;
+}
+
 .faceit-queue-actions .faceit-secondary-cta {
   grid-column: 2;
   justify-self: end;

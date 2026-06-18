@@ -6,6 +6,7 @@ import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
 import { formatMapName } from "../mapDisplay.js";
 import { mapImageUrl } from "../mapAssets.js";
+import { formatReadyCountdown } from "../matchTimers.js";
 import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
 import { RandomMapReel } from "../components/RandomMapReel.js";
 import { participantDisplayName } from "../playerDisplay.js";
@@ -16,18 +17,6 @@ interface MatchRoomPageProps {
   onAcceptReady?: () => Promise<void>;
   onDeclineReady?: () => Promise<void>;
   onCopyText?: (text: string) => Promise<void>;
-}
-
-function formatCountdown(deadlineAt: string | undefined, nowMs: number, maxSeconds?: number): string {
-  if (!deadlineAt) return "--:--";
-  const deadlineMs = new Date(deadlineAt).getTime();
-  if (!Number.isFinite(deadlineMs)) return "--:--";
-  const remainingMs = deadlineMs - nowMs;
-  const remainingSeconds = Math.max(0, Math.ceil(remainingMs / 1000));
-  const displayedSeconds = Math.min(maxSeconds ?? remainingSeconds, remainingSeconds);
-  const minutes = Math.floor(displayedSeconds / 60).toString().padStart(2, "0");
-  const seconds = (displayedSeconds % 60).toString().padStart(2, "0");
-  return `${minutes}:${seconds}`;
 }
 
 function phaseLabel(phase?: PlayerLiveMatchStateDto["phase"]): string | null {
@@ -213,7 +202,7 @@ export function MatchRoomPage({
             {room.phase === "ready" ? (
               <section className="faceit-connect-panel">
                 <span>{readyCountdownStarted ? "准备倒计时" : "准备倒计时启动中"}</span>
-                <strong className="faceit-countdown">{readyCountdownStarted ? formatCountdown(room.readyDeadlineAt, nowMs) : "--:--"}</strong>
+                <strong className="faceit-countdown">{readyCountdownStarted ? formatReadyCountdown(room.readyDeadlineAt, nowMs) : "--:--"}</strong>
                 <div className="faceit-ready-list">
                   {(room.ready ?? []).map((entry) => (
                     <div className="faceit-ready-row" key={entry.accountId}>
