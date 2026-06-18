@@ -19,6 +19,7 @@ interface HomePageProps {
 }
 
 const partyMemberSlotOrder = [3, 1, 4, 0];
+const PARTY_SLOT_COUNT = 5;
 
 function memberDisplay(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): { label: string; avatarUrl?: string } {
   if (accountId === account?.id) {
@@ -33,7 +34,7 @@ function memberDisplay(accountId: string, account: AccountView | null, friends: 
 
 function slotAccountId(index: number, account: AccountView | null, party: PlayerPartyDto | null): string | null {
   if (index === 2) return account?.id ?? null;
-  const otherMemberIds = party?.memberAccountIds.filter((memberId) => memberId !== account?.id).slice(0, 4) ?? [];
+  const otherMemberIds = party?.memberAccountIds.filter((memberId) => memberId !== account?.id).slice(0, PARTY_SLOT_COUNT - 1) ?? [];
   const memberIndex = partyMemberSlotOrder.indexOf(index);
   return memberIndex >= 0 ? otherMemberIds[memberIndex] ?? null : null;
 }
@@ -41,6 +42,7 @@ function slotAccountId(index: number, account: AccountView | null, party: Player
 function canInviteFriend(friend: PlayerFriendDto, party: PlayerPartyDto | null, account: AccountView | null): boolean {
   if (!friend.online) return false;
   if (friend.accountId === account?.id) return false;
+  if (party && party.memberAccountIds.length >= PARTY_SLOT_COUNT) return false;
   return !(party?.memberAccountIds.includes(friend.accountId) ?? false);
 }
 

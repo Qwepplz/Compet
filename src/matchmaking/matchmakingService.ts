@@ -23,7 +23,7 @@ const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "
 const MAP_RANDOMIZATION_MS = 7_000;
 const MAP_RANDOMIZATION_REEL_LENGTH = 20;
 const RECENT_MAP_EXCLUSION_COUNT = 3;
-const MAX_PARTY_HUMANS = 10;
+const MAX_PARTY_HUMANS = 5;
 const READY_TIMEOUT_MS = 45_000;
 
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
@@ -312,7 +312,7 @@ export class MatchmakingService {
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
       this.requireOpenParty(party);
-      if (useDev && party.memberAccountIds.length > 5) throw new Error("dev mode allows at most 5 players");
+      if (party.memberAccountIds.length > MAX_PARTY_HUMANS) throw new Error("party is full");
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
       const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms());
       if (existingRooms.some((room) => isServerManagedPhase(room.phase))) {
