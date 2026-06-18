@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
+import { SettingOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type {
   PlayerFriendListDto,
@@ -1324,8 +1325,8 @@ export function App() {
 
   return (
     <div className="player-shell player-shell--app">
-      <div className="player-app-frame">
-        <div className="player-app-topbar">
+      <div className={`player-app-frame${friendsExpanded ? "" : " player-app-frame--collapsed"}`}>
+        <div className="player-app-profile">
           <div className="player-app-brand">
             <SteamAvatar className="player-app-avatar" avatarUrl={account?.steamAvatarUrl} label={accountLabel} />
             <div className="player-app-brand-copy">
@@ -1333,13 +1334,21 @@ export function App() {
               <strong>{accountLabel}</strong>
             </div>
           </div>
+        </div>
 
+        <div className="player-app-chrome">
           <div className="player-app-meta">
             <span aria-label="当前服务器地址" className="player-status-pill player-status-pill--server">
               {baseUrl}
             </span>
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
-            <Button onClick={() => setSettingsModalOpen(true)}>设置</Button>
+            <Button
+              aria-label="设置"
+              className="player-app-settings-button"
+              icon={<SettingOutlined />}
+              type="text"
+              onClick={() => setSettingsModalOpen(true)}
+            />
           </div>
         </div>
 

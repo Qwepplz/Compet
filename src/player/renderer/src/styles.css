@@ -70,10 +70,9 @@ input {
 }
 
 .player-app-frame {
+  position: relative;
   min-height: 100vh;
-  background:
-    linear-gradient(180deg, rgba(12, 12, 12, 0.96), rgba(3, 3, 3, 1)),
-    radial-gradient(circle at 50% 22%, rgba(255, 85, 0, 0.13), transparent 28%);
+  background: #000;
 }
 
 .player-header {
@@ -122,15 +121,30 @@ input {
   white-space: nowrap;
 }
 
-.player-app-topbar {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 24px;
-  min-height: 64px;
-  padding: 0 18px;
-  border-bottom: 1px solid #171717;
-  background: #030303;
+.player-app-profile {
+  position: absolute;
+  top: 16px;
+  left: 18px;
+  z-index: 6;
+  min-width: 0;
+  max-width: 224px;
+}
+
+.player-app-chrome {
+  position: absolute;
+  top: 15px;
+  right: calc(340px + 18px);
+  left: 260px;
+  z-index: 6;
+  display: flex;
+  justify-content: flex-end;
+  min-width: 0;
+  pointer-events: none;
+  transition: right 0.26s ease;
+}
+
+.player-app-frame--collapsed .player-app-chrome {
+  right: calc(88px + 18px);
 }
 
 .player-app-brand {
@@ -162,13 +176,18 @@ input {
 
 .player-app-brand-copy {
   min-width: 0;
+  overflow: hidden;
 }
 
 .player-app-brand strong {
+  display: block;
+  overflow: hidden;
   color: #fff;
   font-size: 16px;
   letter-spacing: 0.08em;
+  text-overflow: ellipsis;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .player-app-brand .player-kicker {
@@ -178,8 +197,43 @@ input {
 .player-app-meta {
   display: flex;
   align-items: center;
+  justify-content: flex-end;
   gap: 10px;
   min-width: 0;
+  max-width: 100%;
+  pointer-events: auto;
+}
+
+.player-app-settings-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #d7d7d7;
+  box-shadow: none;
+}
+
+.player-app-settings-button:not(:disabled):hover,
+.player-app-settings-button:not(:disabled):focus-visible {
+  background: rgba(255, 85, 0, 0.12);
+  color: #ff6a1f;
+}
+
+.player-app-settings-button.ant-btn:not(:disabled):hover,
+.player-app-settings-button.ant-btn:not(:disabled):focus,
+.player-app-settings-button.ant-btn:not(:disabled):focus-visible {
+  border: 0 !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+  outline: 0 !important;
+  outline-width: 0 !important;
+  outline-color: transparent !important;
 }
 
 .player-status-pill {
@@ -196,7 +250,9 @@ input {
 }
 
 .player-status-pill--server {
-  max-width: min(310px, 30vw);
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: min(310px, 100%);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -273,7 +329,7 @@ input {
   height: 36px;
   padding: 0 16px;
   border: 1px solid #2a2a2a;
-  border-radius: 8px;
+  border-radius: 4px;
   background: #111;
   color: #cfcfcf;
   font-size: 15px;
@@ -302,12 +358,13 @@ input {
 .player-app-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 340px;
-  min-height: calc(100vh - 64px);
+  min-height: 100vh;
   transition: grid-template-columns 0.26s ease;
 }
 
 .player-app-main {
   min-width: 0;
+  background: #000;
 }
 
 .player-app-sidebar {
@@ -315,7 +372,8 @@ input {
   align-content: start;
   gap: 1px;
   border-left: 1px solid #171717;
-  background: #050505;
+  border-radius: 16px 0 0 16px;
+  background: #121212;
   min-width: 0;
   overflow: hidden;
 }
@@ -328,13 +386,10 @@ input {
   display: flex;
   flex-direction: column;
   justify-content: center;
-  min-height: calc(100vh - 64px);
+  min-height: 100vh;
   padding: 28px clamp(28px, 3vw, 48px);
   container-type: inline-size;
-  background:
-    linear-gradient(180deg, rgba(7, 7, 7, 0.1), #050505 76%),
-    repeating-linear-gradient(0deg, transparent 0 39px, rgba(255, 255, 255, 0.025) 40px),
-    repeating-linear-gradient(90deg, transparent 0 67px, rgba(255, 255, 255, 0.025) 68px);
+  background: #000;
 }
 
 .faceit-avatar img,
@@ -369,7 +424,7 @@ input {
   aspect-ratio: 5 / 10;
   padding: 0 12px;
   border: 2px solid #2a2a2a;
-  border-radius: 10px;
+  border-radius: 16px;
   background: #131313;
   color: #dcdcdc;
   font-size: 18px;
@@ -478,7 +533,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   height: 56px;
   min-width: 160px;
   padding: 0 32px;
-  border-radius: 8px;
+  border-radius: 4px;
   box-shadow: none;
   font-size: 16px;
   font-weight: 700;
@@ -495,6 +550,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   min-height: 44px;
   aspect-ratio: 188 / 59;
   padding-inline: 0;
+  font-size: 20px;
 }
 
 .faceit-matchmaking-content {
@@ -998,7 +1054,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-connect-panel .faceit-connect-button {
   min-height: 44px;
-  border-radius: 8px;
+  border-radius: 4px;
 }
 
 .faceit-empty-room {
@@ -1265,12 +1321,18 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   }
 }
 
-.ant-btn-primary:not(:disabled),
-.ant-btn-primary:not(:disabled):hover,
-.ant-btn-primary:not(:disabled):focus {
+.ant-btn-primary:not(:disabled) {
   color: #fff;
   background: #ff5500;
   border-color: #ff5500;
+  box-shadow: none;
+}
+
+.ant-btn-primary:not(:disabled):hover,
+.ant-btn-primary:not(:disabled):focus {
+  color: #fff;
+  background: #ff6c20;
+  border-color: #ff6c20;
   box-shadow: none;
 }
 
@@ -1280,6 +1342,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     grid-template-columns: 1fr;
   }
 
+  .player-app-chrome,
+  .player-app-frame--collapsed .player-app-chrome {
+    right: 18px;
+  }
+
   .player-social-panel {
     width: auto;
   }
@@ -1287,6 +1354,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   .player-app-sidebar {
     border-left: 0;
     border-top: 1px solid #171717;
+    border-radius: 16px 16px 0 0;
   }
 
   .faceit-match-grid {
@@ -1322,18 +1390,30 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     padding: 18px 12px;
   }
 
-  .player-app-topbar {
-    grid-template-columns: 1fr;
-    min-height: auto;
-    padding: 12px;
+  .player-shell--app {
+    padding: 0;
+  }
+
+  .player-app-profile {
+    top: 12px;
+    left: 12px;
+    max-width: calc(100% - 24px);
+  }
+
+  .player-app-chrome,
+  .player-app-frame--collapsed .player-app-chrome {
+    top: 58px;
+    right: 12px;
+    left: 12px;
+    justify-content: flex-start;
   }
 
   .player-app-meta {
-    flex-wrap: wrap;
+    width: 100%;
   }
 
   .faceit-play {
-    padding: 24px 12px 0;
+    padding: 104px 12px 0;
   }
 
   .faceit-party-stage {
