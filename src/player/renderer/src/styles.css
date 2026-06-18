@@ -1170,6 +1170,100 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 8px;
 }
 
+.player-party-invite-toasts {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 900;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.player-party-invite-toast {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  overflow: hidden;
+  padding: 14px;
+  background: #121212;
+  border: 2px solid #2a2a2a;
+  border-radius: 8px;
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.42);
+  pointer-events: auto;
+}
+
+.player-party-invite-progress {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  height: 3px;
+  background: #ff5500;
+  transform: scaleX(1);
+  transform-origin: right;
+  animation: player-party-invite-timeout var(--party-invite-timeout-ms, 30s) linear forwards;
+}
+
+.player-party-invite-body {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.player-party-invite-avatar {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: #262626;
+  color: #d8d8d8;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.player-party-invite-avatar img {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+.player-party-invite-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.player-party-invite-copy strong {
+  overflow: hidden;
+  color: #fff;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-party-invite-copy span {
+  color: #929292;
+  font-size: 13px;
+}
+
+.player-party-invite-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@keyframes player-party-invite-timeout {
+  to {
+    transform: scaleX(0);
+  }
+}
+
 .ant-btn-primary:not(:disabled),
 .ant-btn-primary:not(:disabled):hover,
 .ant-btn-primary:not(:disabled):focus {

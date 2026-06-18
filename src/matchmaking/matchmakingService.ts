@@ -24,6 +24,7 @@ const MAP_RANDOMIZATION_MS = 7_000;
 const MAP_RANDOMIZATION_REEL_LENGTH = 20;
 const RECENT_MAP_EXCLUSION_COUNT = 3;
 const MAX_PARTY_HUMANS = 5;
+const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 45_000;
 
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
@@ -80,6 +81,7 @@ export class MatchmakingService {
   private readonly setTimeoutFn: ReadyTimeoutScheduler;
   private readonly clearTimeoutFn: ReadyTimeoutCanceler;
   private readonly unrefReadyTimeouts: boolean;
+  private readonly partyInviteTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly mapSelectionTimeouts = new Map<string, ReadyTimeoutHandle>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
@@ -248,6 +250,7 @@ export class MatchmakingService {
         createdAt: this.now(),
       };
       await this.deps.store.saveInvitations([...invitations, invitation]);
+      this.schedulePartyInviteTimeout(invitation);
       await this.emit({ type: "party_invite_received", accountIds: [ownerAccountId, toAccountId], invitation });
       return invitation;
     });
@@ -296,10 +299,9 @@ export class MatchmakingService {
       if (invitation.status !== "pending") throw new Error("party invitation is not pending");
 
       const resolvedInvitation: PartyInvitationRecord = { ...invitation, status: "declined", resolvedAt: this.now() };
-      await this.deps.store.saveInvitations(
-        invitations.map((candidate) => (candidate.id === invitation.id ? resolvedInvitation : candidate)),
-      );
-      await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation: resolvedInvitation });
+      const resolvedInvitations = invitations.map((candidate) => (candidate.id === invitation.id ? resolvedInvitation : candidate));
+      await this.deps.store.saveInvitations(resolvedInvitations);
+      await this.emitResolvedInvitations(invitations, resolvedInvitations);
     });
   }
 
@@ -592,6 +594,7 @@ export class MatchmakingService {
     for (const invitation of next) {
       const previousInvitation = previous.find((candidate) => candidate.id === invitation.id);
       if (previousInvitation?.status === "pending" && invitation.status !== "pending") {
+        this.clearPartyInviteTimeout(invitation.id);
         await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation });
       }
     }
@@ -620,8 +623,41 @@ export class MatchmakingService {
     const expiredById = new Map(expired.map((invitation) => [invitation.id, invitation]));
     await this.deps.store.saveInvitations(invitations.map((invitation) => expiredById.get(invitation.id) ?? invitation));
     for (const invitation of expired) {
+      this.clearPartyInviteTimeout(invitation.id);
       await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation });
     }
+  }
+
+  private schedulePartyInviteTimeout(invitation: PartyInvitationRecord): void {
+    if (invitation.status !== "pending") return;
+    this.clearPartyInviteTimeout(invitation.id);
+    const timeout = this.setTimeoutFn(() => {
+      void this.timeoutPartyInvite(invitation.id).catch(() => undefined);
+    }, PARTY_INVITE_TIMEOUT_MS);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.partyInviteTimeouts.set(invitation.id, timeout);
+  }
+
+  private clearPartyInviteTimeout(invitationId: string): void {
+    const timeout = this.partyInviteTimeouts.get(invitationId);
+    if (!timeout) return;
+    this.clearTimeoutFn(timeout);
+    this.partyInviteTimeouts.delete(invitationId);
+  }
+
+  private timeoutPartyInvite(invitationId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      const invitations = await this.deps.store.listInvitations();
+      const invitation = invitations.find((candidate) => candidate.id === invitationId);
+      if (!invitation || invitation.status !== "pending") {
+        this.clearPartyInviteTimeout(invitationId);
+        return;
+      }
+      const resolvedInvitation: PartyInvitationRecord = { ...invitation, status: "timed_out", resolvedAt: this.now() };
+      const resolvedInvitations = invitations.map((candidate) => (candidate.id === invitationId ? resolvedInvitation : candidate));
+      await this.deps.store.saveInvitations(resolvedInvitations);
+      await this.emitResolvedInvitations(invitations, resolvedInvitations);
+    });
   }
 
   private enqueueMutation<T>(run: () => Promise<T>): Promise<T> {

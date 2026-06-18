@@ -27,7 +27,7 @@ export interface PartyInvitationRecord {
   partyId: string;
   fromAccountId: string;
   toAccountId: string;
-  status: "pending" | "accepted" | "declined" | "expired";
+  status: "pending" | "accepted" | "declined" | "expired" | "timed_out";
   createdAt: string;
   resolvedAt?: string;
 }

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type {
@@ -65,6 +65,7 @@ type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steam
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
+const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
 
 function waitForMatchmakingDelay(delayMs: number): Promise<void> {
@@ -191,12 +192,29 @@ function partyMemberDisplayName(accountId: string, account: AccountView | null, 
   return friend?.steamPersonaName ?? friend?.displayName ?? "玩家";
 }
 
+function partyInviteAccountDisplay(
+  accountId: string,
+  account: AccountView | null,
+  friends: PlayerFriendListDto,
+): { label: string; avatarUrl?: string } {
+  if (accountId === account?.id) return { label: playerAccountLabel(account), avatarUrl: account.steamAvatarUrl };
+  const friend = friends.friends.find((entry) => entry.accountId === accountId);
+  return { label: friend?.steamPersonaName ?? friend?.displayName ?? "玩家", avatarUrl: friend?.steamAvatarUrl };
+}
+
+function partyInviteRemainingMs(invitation: PlayerPartyInvitationDto, nowMs = Date.now()): number {
+  const createdAt = Date.parse(invitation.createdAt);
+  if (!Number.isFinite(createdAt)) return PARTY_INVITE_TIMEOUT_MS;
+  return Math.max(0, createdAt + PARTY_INVITE_TIMEOUT_MS - nowMs);
+}
+
 function notifyPartyMembershipChange(
   previous: PlayerPartyDto | null,
   next: PlayerPartyDto | null,
   currentAccountId: string | undefined,
   account: AccountView | null,
   friends: PlayerFriendListDto,
+  suppressedJoinedAccountIds?: Set<string>,
 ): void {
   if (!previous || !currentAccountId || previous.id !== next?.id) return;
   const previousMembers = previous.memberAccountIds;
@@ -204,11 +222,63 @@ function notifyPartyMembershipChange(
   if (previousMembers.length < 2 && nextMembers.length < 2) return;
 
   for (const joinedAccountId of nextMembers.filter((memberId) => !previousMembers.includes(memberId) && memberId !== currentAccountId)) {
+    if (suppressedJoinedAccountIds?.delete(joinedAccountId)) continue;
     void message.info(`${partyMemberDisplayName(joinedAccountId, account, friends)} 已加入队伍`);
   }
   for (const leftAccountId of previousMembers.filter((memberId) => !nextMembers.includes(memberId) && memberId !== currentAccountId)) {
     void message.info(`${partyMemberDisplayName(leftAccountId, account, friends)} 已退出队伍`);
   }
+}
+
+interface PartyInviteToastsProps {
+  invitations: PlayerPartyInvitationDto[];
+  account: AccountView | null;
+  friends: PlayerFriendListDto;
+  busyInvitationId: string | null;
+  onAccept: (invitationId: string) => Promise<void>;
+  onDecline: (invitationId: string) => Promise<void>;
+  onIgnore: (invitationId: string) => void;
+}
+
+function PartyInviteToasts({
+  invitations,
+  account,
+  friends,
+  busyInvitationId,
+  onAccept,
+  onDecline,
+  onIgnore,
+}: PartyInviteToastsProps) {
+  if (invitations.length === 0) return null;
+
+  return (
+    <div className="player-party-invite-toasts" aria-live="polite">
+      {invitations.map((invitation) => {
+        const inviter = partyInviteAccountDisplay(invitation.fromAccountId, account, friends);
+        const progressStyle = {
+          "--party-invite-timeout-ms": `${partyInviteRemainingMs(invitation)}ms`,
+        } as CSSProperties;
+        const busy = busyInvitationId === invitation.id;
+        return (
+          <div className="player-party-invite-toast" key={invitation.id}>
+            <div className="player-party-invite-progress" style={progressStyle} />
+            <div className="player-party-invite-body">
+              <SteamAvatar className="player-party-invite-avatar" avatarUrl={inviter.avatarUrl} label={inviter.label} />
+              <div className="player-party-invite-copy">
+                <strong>{inviter.label}</strong>
+                <span>邀请你加入队伍</span>
+              </div>
+            </div>
+            <div className="player-party-invite-actions">
+              <Button autoInsertSpace={false} size="small" type="primary" loading={busy} disabled={busy} onClick={() => void onAccept(invitation.id)}>接受</Button>
+              <Button autoInsertSpace={false} size="small" loading={busy} disabled={busy} onClick={() => void onDecline(invitation.id)}>拒绝</Button>
+              <Button autoInsertSpace={false} size="small" disabled={busy} onClick={() => onIgnore(invitation.id)}>忽略</Button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function App() {
@@ -231,6 +301,7 @@ export function App() {
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
+  const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
@@ -238,6 +309,8 @@ export function App() {
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
+  const partyInviteAutoIgnoreTimeouts = useRef(new Map<string, number>());
+  const acceptedInviteJoinMessageAccountIds = useRef(new Set<string>());
   const enteredReadyRoomIds = useRef(new Set<string>());
   const playedMatchSoundRoomIds = useRef(new Set<string>());
   const pendingMatchSoundRoomIds = useRef(new Set<string>());
@@ -269,6 +342,28 @@ export function App() {
       setMatchmakingFeedbackPending(false);
     }
   }, [activeMatchRoom?.id]);
+
+  useEffect(() => {
+    const invitationIds = new Set(matchmaking.partyInvitations.map((invitation) => invitation.id));
+    for (const [invitationId, timeout] of partyInviteAutoIgnoreTimeouts.current) {
+      if (!invitationIds.has(invitationId)) {
+        window.clearTimeout(timeout);
+        partyInviteAutoIgnoreTimeouts.current.delete(invitationId);
+      }
+    }
+    for (const invitation of matchmaking.partyInvitations) {
+      if (partyInviteAutoIgnoreTimeouts.current.has(invitation.id)) continue;
+      const timeout = window.setTimeout(() => ignorePartyInvite(invitation.id), partyInviteRemainingMs(invitation));
+      partyInviteAutoIgnoreTimeouts.current.set(invitation.id, timeout);
+    }
+  }, [matchmaking.partyInvitations]);
+
+  useEffect(() => () => {
+    for (const timeout of partyInviteAutoIgnoreTimeouts.current.values()) {
+      window.clearTimeout(timeout);
+    }
+    partyInviteAutoIgnoreTimeouts.current.clear();
+  }, []);
 
   useEffect(() => {
     if (!matchSoundEnabled) return;
@@ -560,7 +655,7 @@ export function App() {
       case "party_updated":
         setParty((current) => {
           const nextParty = event.party ? mergePartySnapshot(current, event.party) : null;
-          notifyPartyMembershipChange(current, nextParty, account?.id, account, friends);
+          notifyPartyMembershipChange(current, nextParty, account?.id, account, friends, acceptedInviteJoinMessageAccountIds.current);
           return nextParty;
         });
         setMatchmaking((current) => ({
@@ -575,18 +670,26 @@ export function App() {
             ...current,
             partyInvitations: upsertPartyInvitation(current.partyInvitations, event.invitation),
           }));
-          void message.info({
-            key: `party-invite-${event.invitation.id}`,
-            content: "收到队伍邀请",
-          });
         }
         return;
       case "party_invite_resolved":
         resolvedPartyInvitationIds.current.add(event.invitation.id);
+        clearPartyInviteAutoIgnoreTimeout(event.invitation.id);
         setMatchmaking((current) => ({
           ...current,
           partyInvitations: removePartyInvitation(current.partyInvitations, event.invitation.id),
         }));
+        if (event.invitation.fromAccountId === account?.id) {
+          const invitee = partyInviteAccountDisplay(event.invitation.toAccountId, account, friends).label;
+          if (event.invitation.status === "accepted") {
+            acceptedInviteJoinMessageAccountIds.current.add(event.invitation.toAccountId);
+            void message.success(`${invitee}接受了你的邀请`);
+          } else if (event.invitation.status === "declined") {
+            void message.info(`${invitee}拒绝了你的邀请`);
+          } else if (event.invitation.status === "timed_out") {
+            void message.info(`${invitee}超时未回应`);
+          }
+        }
         if (
           event.invitation.status === "accepted"
           && (event.invitation.fromAccountId === account?.id || event.invitation.toAccountId === account?.id)
@@ -693,6 +796,22 @@ export function App() {
     return currentInvitations.filter((invitation) => invitation.id !== invitationId);
   }
 
+  function clearPartyInviteAutoIgnoreTimeout(invitationId: string) {
+    const timeout = partyInviteAutoIgnoreTimeouts.current.get(invitationId);
+    if (timeout === undefined) return;
+    window.clearTimeout(timeout);
+    partyInviteAutoIgnoreTimeouts.current.delete(invitationId);
+  }
+
+  function ignorePartyInvite(invitationId: string) {
+    resolvedPartyInvitationIds.current.add(invitationId);
+    clearPartyInviteAutoIgnoreTimeout(invitationId);
+    setMatchmaking((current) => ({
+      ...current,
+      partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
+    }));
+  }
+
   function applyPresenceUpdate(currentFriends: PlayerFriendListDto, accountId: string, online: boolean, lastSeenAt?: string): PlayerFriendListDto {
     const applyEntry = <T extends { accountId?: string; fromAccountId?: string; toAccountId?: string; online?: boolean; lastSeenAt?: string }>(
       entry: T,
@@ -737,6 +856,7 @@ export function App() {
       setBaseUrl(restored.baseUrl);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
+      acceptedInviteJoinMessageAccountIds.current.clear();
       enteredReadyRoomIds.current.clear();
       setAccount(restored.account);
       setFriends(emptyFriends);
@@ -782,6 +902,7 @@ export function App() {
         setAccount(loginResult.account);
         resolvedFriendRequestIds.current.clear();
         resolvedPartyInvitationIds.current.clear();
+        acceptedInviteJoinMessageAccountIds.current.clear();
         enteredReadyRoomIds.current.clear();
         setFriends(emptyFriends);
         setParty(null);
@@ -799,6 +920,7 @@ export function App() {
       setAccount(restored.account);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
+      acceptedInviteJoinMessageAccountIds.current.clear();
       enteredReadyRoomIds.current.clear();
       setFriends(emptyFriends);
       setParty(restored.matchmaking.party ?? null);
@@ -834,6 +956,7 @@ export function App() {
         setAccount(restored.account);
         resolvedFriendRequestIds.current.clear();
         resolvedPartyInvitationIds.current.clear();
+        acceptedInviteJoinMessageAccountIds.current.clear();
         enteredReadyRoomIds.current.clear();
         setFriends(emptyFriends);
         setParty(restored.matchmaking.party ?? null);
@@ -860,6 +983,7 @@ export function App() {
       setAccount(null);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
+      acceptedInviteJoinMessageAccountIds.current.clear();
       enteredReadyRoomIds.current.clear();
       setFriends(emptyFriends);
       setParty(null);
@@ -958,26 +1082,38 @@ export function App() {
 
   async function acceptPartyInvite(invitationId: string) {
     if (!partyApi) return;
-    const nextParty = await partyApi.acceptPartyInvite(invitationId);
-    resolvedPartyInvitationIds.current.add(invitationId);
-    setParty(nextParty);
-    setMatchmaking((current) => ({
-      ...current,
-      party: nextParty,
-      partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
-    }));
-    void message.success("已加入队伍");
+    setBusyPartyInvitationId(invitationId);
+    try {
+      const nextParty = await partyApi.acceptPartyInvite(invitationId);
+      resolvedPartyInvitationIds.current.add(invitationId);
+      clearPartyInviteAutoIgnoreTimeout(invitationId);
+      setParty(nextParty);
+      setMatchmaking((current) => ({
+        ...current,
+        party: nextParty,
+        partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
+      }));
+      void message.success("已加入队伍");
+    } finally {
+      setBusyPartyInvitationId(null);
+    }
   }
 
   async function declinePartyInvite(invitationId: string) {
     if (!partyApi) return;
-    await partyApi.declinePartyInvite(invitationId);
-    resolvedPartyInvitationIds.current.add(invitationId);
-    setMatchmaking((current) => ({
-      ...current,
-      partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
-    }));
-    void message.info("已拒绝队伍邀请");
+    setBusyPartyInvitationId(invitationId);
+    try {
+      await partyApi.declinePartyInvite(invitationId);
+      resolvedPartyInvitationIds.current.add(invitationId);
+      clearPartyInviteAutoIgnoreTimeout(invitationId);
+      setMatchmaking((current) => ({
+        ...current,
+        partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
+      }));
+      void message.info("已拒绝队伍邀请");
+    } finally {
+      setBusyPartyInvitationId(null);
+    }
   }
 
   async function leaveParty() {
@@ -1212,18 +1348,24 @@ export function App() {
               accountId={account?.id ?? ""}
               account={account}
               friends={friends}
-              partyInvitations={matchmaking.partyInvitations}
               onSearchFriends={friendsApi ? searchFriends : undefined}
               onReenrichFriends={friendsApi?.reenrichFriends ? (results) => friendsApi.reenrichFriends!(results) : undefined}
               onProfilesUpdated={realtimeApi?.onProfilesUpdated ? (listener) => realtimeApi.onProfilesUpdated!(listener) : undefined}
               onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
               onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
               onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
-              onAcceptPartyInvite={partyApi ? acceptPartyInvite : undefined}
-              onDeclinePartyInvite={partyApi ? declinePartyInvite : undefined}
             />
           </aside>
         </div>
+        <PartyInviteToasts
+          invitations={matchmaking.partyInvitations}
+          account={account}
+          friends={friends}
+          busyInvitationId={busyPartyInvitationId}
+          onAccept={acceptPartyInvite}
+          onDecline={declinePartyInvite}
+          onIgnore={ignorePartyInvite}
+        />
         <Modal
           centered
           footer={null}
