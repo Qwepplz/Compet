@@ -2,7 +2,6 @@ import { clipboard, ipcMain, shell } from "electron";
 import type { PlayerFriendSearchResultDto, PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason, PlayerRealtimeSnapshotScope } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { RemoteProfileService } from "./remoteProfileService.js";
-import { PROFILE_BASE_URL } from "./profileConfig.js";
 import { withAuthRetry } from "./authRetry.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
 import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
@@ -46,6 +45,7 @@ export interface RestoreSessionResult extends RestoredPlayerSession {
 }
 
 const profileBootLogFile = "compet-player-client-boot.log";
+const PROFILE_BASE_URL = process.env.COMPET_PROFILE_BASE_URL ?? "https://qwepplz111.site/cos-upload/";
 let profilesUpdatedHandler: (() => void) | undefined;
 const sharedProfileService = new RemoteProfileService({
   baseUrl: PROFILE_BASE_URL,

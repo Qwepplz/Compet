@@ -1,7 +1,6 @@
 import { useLayoutEffect, useRef, useState } from "react";
 import type { PlayerLiveMatchStateDto } from "../../../shared/types.js";
-import { formatMapName } from "../mapDisplay.js";
-import { mapImageUrl } from "../mapAssets.js";
+import { formatMapName, mapImageUrl } from "../mapAssets.js";
 import { isMapRandomizingRevealed, mapReelDurationMs, mapReelOffset } from "../randomMapAnimation.js";
 
 type MapSelection = NonNullable<PlayerLiveMatchStateDto["mapSelection"]>;

@@ -36,7 +36,6 @@ import { MatchRoomPage } from "./pages/MatchRoomPage.js";
 import { loadMatchSoundEnabled, saveMatchSoundEnabled } from "./matchSoundPreference.js";
 import { loadDevModeEnabled, saveDevModeEnabled } from "./devModePreference.js";
 import { randomMatchmakingDelayMs } from "./matchTimers.js";
-import { getVisiblePartyForHome } from "./partyDisplay.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import { preloadMapImages } from "./mapAssets.js";
 import {
@@ -252,7 +251,7 @@ export function App() {
   const matchRoomApi = hasMatchRoomApi(window.playerApi) ? window.playerApi : undefined;
   const currentRoom = getCurrentRoom(matchmaking);
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
-  const visibleHomeParty = getVisiblePartyForHome(party);
+  const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
   const hasActiveMatch = Boolean(activeMatchRoom);

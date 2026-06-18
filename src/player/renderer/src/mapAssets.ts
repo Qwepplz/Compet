@@ -11,6 +11,10 @@ const MAP_IMAGE_URLS: Record<string, string> = {
   de_anubis: new URL("./assets/maps/de_anubis.jpg", import.meta.url).href,
 };
 
+export function formatMapName(map: string): string {
+  return map.replace(/^de_/, "").replace(/_/g, " ").toUpperCase();
+}
+
 export function mapImageUrl(map: string): string | undefined {
   return MAP_IMAGE_URLS[map.toLowerCase()];
 }
