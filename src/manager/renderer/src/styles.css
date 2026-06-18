@@ -1,11 +1,12 @@
 html, body, #root { width: 100%; height: 100%; margin: 0; }
-body { font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; background: #f4f6f8; color: #172033; }
+body { overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; background: #f4f6f8; color: #172033; }
 * { box-sizing: border-box; }
-.manager-shell { min-height: 100vh; }
-.manager-sider { border-right: 1px solid #e5e7eb; }
+.manager-shell { height: 100vh; }
+.manager-shell > .ant-layout { min-width: 0; min-height: 0; height: 100vh; }
+.manager-sider { height: 100vh; border-right: 1px solid #e5e7eb; }
 .manager-brand { height: 52px; display: flex; align-items: center; padding: 0 16px; font-weight: 700; color: #172033; }
 .manager-header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 16px; border-bottom: 1px solid #e5e7eb; background: #fff; }
-.manager-content { padding: 16px; overflow: auto; }
+.manager-content { min-height: 0; padding: 16px; overflow: auto; }
 .page-title { margin: 0 0 12px; font-size: 18px; font-weight: 600; }
 .status-row { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; max-width: 100%; }
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
