@@ -391,6 +391,19 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     }
   });
 
+  app.post("/party/invitations/:id/ignore", async (request, reply) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const matchmaking = requireMatchmaking(deps);
+    const { id } = accountIdParamsSchema.parse(request.params);
+    try {
+      await matchmaking.ignorePartyInvite(auth.account.id, id);
+      return reply.status(204).send();
+    } catch (error) {
+      mapMatchmakingServiceError(error);
+    }
+  });
+
   app.post("/party/matchmaking/start", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);

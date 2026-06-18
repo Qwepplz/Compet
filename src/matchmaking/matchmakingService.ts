@@ -232,7 +232,7 @@ export class MatchmakingService {
       if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(toAccountId) && !isSoloOpenParty(candidate))) {
         throw new Error("account is already in another party");
       }
-      const invitations = await this.deps.store.listInvitations();
+      const invitations = await this.timeoutOverduePartyInvites(await this.deps.store.listInvitations());
       if (invitations.some((candidate) => candidate.partyId === party.id && candidate.toAccountId === toAccountId && candidate.status === "pending")) {
         throw new Error("party invitation already pending");
       }
@@ -259,7 +259,7 @@ export class MatchmakingService {
   acceptPartyInvite(accountId: string, invitationId: string): Promise<PartyRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
-      const invitations = await this.deps.store.listInvitations();
+      const invitations = await this.timeoutOverduePartyInvites(await this.deps.store.listInvitations());
       const invitation = this.findInvitation(invitations, invitationId);
       if (invitation.toAccountId !== accountId) throw new Error("party invitation does not belong to account");
       if (invitation.status !== "pending") throw new Error("party invitation is not pending");
@@ -293,12 +293,27 @@ export class MatchmakingService {
   declinePartyInvite(accountId: string, invitationId: string): Promise<void> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
-      const invitations = await this.deps.store.listInvitations();
+      const invitations = await this.timeoutOverduePartyInvites(await this.deps.store.listInvitations());
       const invitation = this.findInvitation(invitations, invitationId);
       if (invitation.toAccountId !== accountId) throw new Error("party invitation does not belong to account");
       if (invitation.status !== "pending") throw new Error("party invitation is not pending");
 
       const resolvedInvitation: PartyInvitationRecord = { ...invitation, status: "declined", resolvedAt: this.now() };
+      const resolvedInvitations = invitations.map((candidate) => (candidate.id === invitation.id ? resolvedInvitation : candidate));
+      await this.deps.store.saveInvitations(resolvedInvitations);
+      await this.emitResolvedInvitations(invitations, resolvedInvitations);
+    });
+  }
+
+  ignorePartyInvite(accountId: string, invitationId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.requireAccount(accountId);
+      const invitations = await this.timeoutOverduePartyInvites(await this.deps.store.listInvitations());
+      const invitation = this.findInvitation(invitations, invitationId);
+      if (invitation.toAccountId !== accountId) throw new Error("party invitation does not belong to account");
+      if (invitation.status !== "pending") throw new Error("party invitation is not pending");
+
+      const resolvedInvitation: PartyInvitationRecord = { ...invitation, status: "timed_out", resolvedAt: this.now() };
       const resolvedInvitations = invitations.map((candidate) => (candidate.id === invitation.id ? resolvedInvitation : candidate));
       await this.deps.store.saveInvitations(resolvedInvitations);
       await this.emitResolvedInvitations(invitations, resolvedInvitations);
@@ -515,7 +530,7 @@ export class MatchmakingService {
       .map((room) => this.toPlayerPublicRoom(room, accountId));
     const party = (await this.deps.store.listParties()).find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
     const partyInvitations = (await this.deps.store.listInvitations()).filter(
-      (invitation) => invitation.toAccountId === accountId && invitation.status === "pending",
+      (invitation) => invitation.toAccountId === accountId && invitation.status === "pending" && !this.isPartyInviteOverdue(invitation),
     );
     return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms) };
   }
@@ -636,6 +651,26 @@ export class MatchmakingService {
     }, PARTY_INVITE_TIMEOUT_MS);
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.partyInviteTimeouts.set(invitation.id, timeout);
+  }
+
+  private isPartyInviteOverdue(invitation: PartyInvitationRecord): boolean {
+    if (invitation.status !== "pending") return false;
+    const createdAtMs = Date.parse(invitation.createdAt);
+    const nowMs = Date.parse(this.now());
+    return Number.isFinite(createdAtMs) && Number.isFinite(nowMs) && nowMs - createdAtMs >= PARTY_INVITE_TIMEOUT_MS;
+  }
+
+  private async timeoutOverduePartyInvites(invitations: PartyInvitationRecord[]): Promise<PartyInvitationRecord[]> {
+    if (!invitations.some((invitation) => this.isPartyInviteOverdue(invitation))) return invitations;
+    const resolvedAt = this.now();
+    const resolvedInvitations = invitations.map((invitation) => (
+      this.isPartyInviteOverdue(invitation)
+        ? { ...invitation, status: "timed_out" as const, resolvedAt }
+        : invitation
+    ));
+    await this.deps.store.saveInvitations(resolvedInvitations);
+    await this.emitResolvedInvitations(invitations, resolvedInvitations);
+    return resolvedInvitations;
   }
 
   private clearPartyInviteTimeout(invitationId: string): void {

@@ -41,6 +41,7 @@ export interface PlayerPartyApi {
   inviteToParty(accountId: string): Promise<PlayerPartyInvitationDto>;
   acceptPartyInvite(invitationId: string): Promise<PlayerPartyDto>;
   declinePartyInvite(invitationId: string): Promise<void>;
+  ignorePartyInvite(invitationId: string): Promise<void>;
   leaveParty(): Promise<void>;
   startPartyMatchmaking(options?: { dev?: boolean }): Promise<PlayerLiveMatchStateDto>;
 }
@@ -76,7 +77,7 @@ export function hasFriendsApi(api: Window["playerApi"]): api is PlayerApiWithFri
 }
 
 export function hasPartyApi(api: Window["playerApi"]): api is PlayerApiWithParty {
-  return hasMethods(api, ["getParty", "createParty", "inviteToParty", "acceptPartyInvite", "declinePartyInvite", "leaveParty", "startPartyMatchmaking"]);
+  return hasMethods(api, ["getParty", "createParty", "inviteToParty", "acceptPartyInvite", "declinePartyInvite", "ignorePartyInvite", "leaveParty", "startPartyMatchmaking"]);
 }
 
 export function hasMatchRoomApi(api: Window["playerApi"]): api is PlayerApiWithMatchRoom {

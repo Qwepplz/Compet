@@ -6,6 +6,7 @@ export type RealtimeCommand =
   | { type: "command"; commandId: string; name: "party.invite"; payload: { accountId: string } }
   | { type: "command"; commandId: string; name: "party.acceptInvite"; payload: { invitationId: string } }
   | { type: "command"; commandId: string; name: "party.declineInvite"; payload: { invitationId: string } }
+  | { type: "command"; commandId: string; name: "party.ignoreInvite"; payload: { invitationId: string } }
   | { type: "command"; commandId: string; name: "party.leave"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "party.startMatchmaking"; payload: { dev?: boolean } }
   | { type: "command"; commandId: string; name: "matchmaking.acceptReady"; payload: Record<string, never> }
@@ -47,6 +48,7 @@ export interface RealtimeCommandMatchmaking {
   inviteToParty(ownerAccountId: string, toAccountId: string): Promise<unknown>;
   acceptPartyInvite(accountId: string, invitationId: string): Promise<unknown>;
   declinePartyInvite(accountId: string, invitationId: string): Promise<unknown>;
+  ignorePartyInvite(accountId: string, invitationId: string): Promise<unknown>;
   leaveParty(accountId: string): Promise<unknown>;
   startPartyMatchmaking(ownerAccountId: string, options?: { dev?: boolean }): Promise<unknown>;
   acceptReady(accountId: string): Promise<unknown>;
@@ -77,6 +79,7 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
         : undefined;
     case "party.acceptInvite":
     case "party.declineInvite":
+    case "party.ignoreInvite":
       return typeof payload.invitationId === "string"
         ? { type: "command", commandId: record.commandId, name: record.name, payload: { invitationId: payload.invitationId } }
         : undefined;
@@ -133,6 +136,10 @@ export async function executeRealtimeCommand(
       case "party.declineInvite":
         if (!matchmaking) return commandUnavailable(command.commandId);
         await matchmaking.declinePartyInvite(accountId, command.payload.invitationId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
+      case "party.ignoreInvite":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        await matchmaking.ignorePartyInvite(accountId, command.payload.invitationId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
       case "party.leave":
         if (!matchmaking) return commandUnavailable(command.commandId);

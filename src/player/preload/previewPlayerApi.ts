@@ -205,6 +205,7 @@ export function createPreviewPlayerApi() {
       return next;
     },
     declinePartyInvite: async (): Promise<void> => undefined,
+    ignorePartyInvite: async (): Promise<void> => undefined,
     leaveParty: async (): Promise<void> => {
       party = null;
       room = null;

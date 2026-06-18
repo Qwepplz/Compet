@@ -1208,7 +1208,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .player-party-invite-body {
   display: grid;
-  grid-template-columns: 44px minmax(0, 1fr);
+  grid-template-columns: 44px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -1256,6 +1256,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
+  justify-self: end;
 }
 
 @keyframes player-party-invite-timeout {

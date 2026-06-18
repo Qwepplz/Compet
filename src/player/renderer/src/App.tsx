@@ -237,7 +237,7 @@ interface PartyInviteToastsProps {
   busyInvitationId: string | null;
   onAccept: (invitationId: string) => Promise<void>;
   onDecline: (invitationId: string) => Promise<void>;
-  onIgnore: (invitationId: string) => void;
+  onIgnore: (invitationId: string) => Promise<void>;
 }
 
 function PartyInviteToasts({
@@ -268,11 +268,11 @@ function PartyInviteToasts({
                 <strong>{inviter.label}</strong>
                 <span>邀请你加入队伍</span>
               </div>
-            </div>
-            <div className="player-party-invite-actions">
-              <Button autoInsertSpace={false} size="small" type="primary" loading={busy} disabled={busy} onClick={() => void onAccept(invitation.id)}>接受</Button>
-              <Button autoInsertSpace={false} size="small" loading={busy} disabled={busy} onClick={() => void onDecline(invitation.id)}>拒绝</Button>
-              <Button autoInsertSpace={false} size="small" disabled={busy} onClick={() => onIgnore(invitation.id)}>忽略</Button>
+              <div className="player-party-invite-actions">
+                <Button autoInsertSpace={false} size="small" type="primary" loading={busy} disabled={busy} onClick={() => void onAccept(invitation.id)}>接受</Button>
+                <Button autoInsertSpace={false} size="small" loading={busy} disabled={busy} onClick={() => void onDecline(invitation.id)}>拒绝</Button>
+                <Button autoInsertSpace={false} size="small" disabled={busy} onClick={() => void onIgnore(invitation.id)}>忽略</Button>
+              </div>
             </div>
           </div>
         );
@@ -353,7 +353,7 @@ export function App() {
     }
     for (const invitation of matchmaking.partyInvitations) {
       if (partyInviteAutoIgnoreTimeouts.current.has(invitation.id)) continue;
-      const timeout = window.setTimeout(() => ignorePartyInvite(invitation.id), partyInviteRemainingMs(invitation));
+      const timeout = window.setTimeout(() => void ignorePartyInvite(invitation.id), partyInviteRemainingMs(invitation));
       partyInviteAutoIgnoreTimeouts.current.set(invitation.id, timeout);
     }
   }, [matchmaking.partyInvitations]);
@@ -687,7 +687,7 @@ export function App() {
           } else if (event.invitation.status === "declined") {
             void message.info(`${invitee}拒绝了你的邀请`);
           } else if (event.invitation.status === "timed_out") {
-            void message.info(`${invitee}超时未回应`);
+            void message.info(`${invitee}超时未响应`);
           }
         }
         if (
@@ -803,13 +803,20 @@ export function App() {
     partyInviteAutoIgnoreTimeouts.current.delete(invitationId);
   }
 
-  function ignorePartyInvite(invitationId: string) {
-    resolvedPartyInvitationIds.current.add(invitationId);
-    clearPartyInviteAutoIgnoreTimeout(invitationId);
-    setMatchmaking((current) => ({
-      ...current,
-      partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
-    }));
+  async function ignorePartyInvite(invitationId: string) {
+    setBusyPartyInvitationId(invitationId);
+    try {
+      await partyApi?.ignorePartyInvite(invitationId);
+    } catch {
+    } finally {
+      resolvedPartyInvitationIds.current.add(invitationId);
+      clearPartyInviteAutoIgnoreTimeout(invitationId);
+      setMatchmaking((current) => ({
+        ...current,
+        partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
+      }));
+      setBusyPartyInvitationId(null);
+    }
   }
 
   function applyPresenceUpdate(currentFriends: PlayerFriendListDto, accountId: string, online: boolean, lastSeenAt?: string): PlayerFriendListDto {

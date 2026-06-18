@@ -46,6 +46,7 @@ export const playerApi = {
   inviteToParty: (accountId: string): Promise<PlayerPartyInvitationDto> => invoke("party:invite", accountId),
   acceptPartyInvite: (invitationId: string): Promise<PlayerPartyDto> => invoke("party:acceptInvite", invitationId),
   declinePartyInvite: (invitationId: string): Promise<void> => invoke("party:declineInvite", invitationId),
+  ignorePartyInvite: (invitationId: string): Promise<void> => invoke("party:ignoreInvite", invitationId),
   leaveParty: (): Promise<void> => invoke("party:leave"),
   startPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerLiveMatchStateDto> => invoke("party:startMatchmaking", options),
   getMatchmakingState: (): Promise<PlayerMatchmakingStateDto> => invoke("matchmaking:getState"),

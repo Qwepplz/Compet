@@ -187,6 +187,14 @@ export class PlayerApiClient {
     );
   }
 
+  ignorePartyInvite(invitationId: string): Promise<void> {
+    return this.commandOrRequest(
+      "party.ignoreInvite",
+      { invitationId },
+      () => this.request("POST", `/party/invitations/${encodeURIComponent(invitationId)}/ignore`, {}),
+    );
+  }
+
   leaveParty(): Promise<void> {
     return this.commandOrRequest("party.leave", {}, () => this.request("POST", "/party/leave", {}));
   }

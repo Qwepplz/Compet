@@ -113,6 +113,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("party:invite", (_event, accountId: string) => withSavedAuth(deps, (client) => client.inviteToParty(accountId)));
   ipcMain.handle("party:acceptInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.acceptPartyInvite(invitationId)));
   ipcMain.handle("party:declineInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.declinePartyInvite(invitationId)));
+  ipcMain.handle("party:ignoreInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.ignorePartyInvite(invitationId)));
   ipcMain.handle("party:leave", () => withSavedAuth(deps, (client) => client.leaveParty()));
   ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth(deps, (client) => client.startPartyMatchmaking(options ?? {})));
 
