@@ -144,7 +144,6 @@ export function MatchRoomPage({
   return (
     <div className="faceit-matchroom">
       <header className="faceit-matchroom-top">
-        <h2>比赛房间</h2>
         <nav>
           <span className="faceit-nav-active">MATCH</span>
         </nav>

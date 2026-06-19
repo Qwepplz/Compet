@@ -741,19 +741,13 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-matchroom-top {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
+  display: flex;
   align-items: center;
+  justify-content: center;
   height: 52px;
   padding: 0 18px;
   background: #070707;
   border-bottom: 1px solid #171717;
-}
-
-.faceit-matchroom-top h2 {
-  margin: 0;
-  color: #fff;
-  font-size: 18px;
 }
 
 .faceit-matchroom-top nav {
@@ -1544,8 +1538,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     padding-inline: 24px;
   }
 
-  .faceit-match-header,
-  .faceit-matchroom-top {
+  .faceit-match-header {
     grid-template-columns: 1fr;
     height: auto;
     gap: 12px;
