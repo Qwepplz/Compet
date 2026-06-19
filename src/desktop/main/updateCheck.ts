@@ -4,19 +4,9 @@ import { access, copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { app } from "electron";
+import type { UpdateCheckResult, UpdateInstallResult } from "../updateTypes.js";
 
-export interface UpdateCheckResult {
-  currentVersion: string;
-  latestVersion: string;
-  updateAvailable: boolean;
-  changedFiles: number;
-  changedBytes: number;
-  manifestUrl: string;
-}
-
-export interface UpdateInstallResult extends UpdateCheckResult {
-  installing: boolean;
-}
+export type { UpdateCheckResult, UpdateInstallResult };
 
 interface LatestPayload {
   version?: unknown;

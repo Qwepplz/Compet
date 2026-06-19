@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
 import { SettingOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
+import type { UpdateCheckResult } from "../../../desktop/updateTypes.js";
 import type {
   PlayerFriendListDto,
   PlayerLiveMatchStateDto,
@@ -15,13 +16,6 @@ import type {
   PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../../shared/types.js";
-import {
-  hasFriendsApi,
-  hasMatchRoomApi,
-  hasPartyApi,
-  hasRealtimeApi,
-  hasSavedLoginApi,
-} from "./api/playerApi.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
 import { SteamAvatar } from "./components/SteamAvatar.js";
 import {
@@ -34,8 +28,12 @@ import {
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
-import { loadMatchSoundEnabled, saveMatchSoundEnabled } from "./matchSoundPreference.js";
-import { loadDevModeEnabled, saveDevModeEnabled } from "./devModePreference.js";
+import {
+  loadDevModeEnabled,
+  loadMatchSoundEnabled,
+  saveDevModeEnabled,
+  saveMatchSoundEnabled,
+} from "./playerPreferences.js";
 import { randomMatchmakingDelayMs } from "./matchTimers.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import { preloadMapImages } from "./mapAssets.js";
@@ -54,14 +52,6 @@ const defaultBaseUrl = "https://127.0.0.1:18443";
 type SavedPlayerLogin = { baseUrl: string; username?: string; password?: string };
 type LoginValues = { baseUrl: string; username: string; password: string };
 type PasswordChangeValues = { currentPassword: string; newPassword: string; confirmPassword: string };
-type UpdateCheckResult = {
-  currentVersion: string;
-  latestVersion: string;
-  updateAvailable: boolean;
-  changedFiles: number;
-  changedBytes: number;
-  manifestUrl: string;
-};
 type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steamPersonaName" | "steamAvatarUrl">;
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
@@ -318,11 +308,7 @@ export function App() {
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
   const matchSoundEnabledRef = useRef(matchSoundEnabled);
 
-  const realtimeApi = hasRealtimeApi(window.playerApi) ? window.playerApi : undefined;
-  const savedLoginApi = hasSavedLoginApi(window.playerApi) ? window.playerApi : undefined;
-  const friendsApi = hasFriendsApi(window.playerApi) ? window.playerApi : undefined;
-  const partyApi = hasPartyApi(window.playerApi) ? window.playerApi : undefined;
-  const matchRoomApi = hasMatchRoomApi(window.playerApi) ? window.playerApi : undefined;
+  const api = window.playerApi;
   const currentRoom = getCurrentRoom(matchmaking);
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
   const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
@@ -401,19 +387,19 @@ export function App() {
   }, [matchSoundEnabled]);
 
   useEffect(() => {
-    if (!account || !realtimeApi) return;
+    if (!account) return;
 
-    const unsubscribeStatus = realtimeApi.onRealtimeStatus((status) => {
+    const unsubscribeStatus = api.onRealtimeStatus((status) => {
       setRealtimeStatus(status);
       setStale(status.stale);
     });
-    const unsubscribeSnapshot = realtimeApi.onRealtimeSnapshot((snapshot) => {
+    const unsubscribeSnapshot = api.onRealtimeSnapshot((snapshot) => {
       applyRealtimeSnapshot(snapshot);
     });
-    const unsubscribeEvent = realtimeApi.onRealtimeEvent((event) => {
+    const unsubscribeEvent = api.onRealtimeEvent((event) => {
       applyRealtimeEvent(event);
     });
-    const unsubscribeAccount = realtimeApi.onAccountUpdated?.((nextAccount) => {
+    const unsubscribeAccount = api.onAccountUpdated((nextAccount) => {
       setAccount((current) => (current ? nextAccount : current));
     });
 
@@ -421,13 +407,13 @@ export function App() {
       unsubscribeStatus();
       unsubscribeSnapshot();
       unsubscribeEvent();
-      unsubscribeAccount?.();
+      unsubscribeAccount();
     };
-  }, [account, realtimeApi]);
+  }, [account]);
 
 
   useEffect(() => {
-    if (!account || !realtimeApi || activeView !== "match-room" || currentRoom?.phase !== "ready") return;
+    if (!account || activeView !== "match-room" || currentRoom?.phase !== "ready") return;
 
     let cancelled = false;
     const refreshReadyRoom = () => {
@@ -440,11 +426,11 @@ export function App() {
       cancelled = true;
       window.clearInterval(refreshTimer);
     };
-  }, [account, activeView, currentRoom?.id, currentRoom?.phase, realtimeApi]);
+  }, [account, activeView, currentRoom?.id, currentRoom?.phase]);
 
   useEffect(() => {
     const readyRoom = currentRoom;
-    if (!matchRoomApi || activeView !== "match-room" || !account?.id || !readyRoom || !isAccountInReadyRoom(readyRoom, account.id)) return;
+    if (activeView !== "match-room" || !account?.id || !readyRoom || !isAccountInReadyRoom(readyRoom, account.id)) return;
 
     const entryKey = `${readyRoom.id}:${account.id}`;
     if (enteredReadyRoomIds.current.has(entryKey)) return;
@@ -454,7 +440,7 @@ export function App() {
     const markReadyRoomEntered = async (attempt = 0) => {
       enteredReadyRoomIds.current.add(entryKey);
       try {
-        const nextRoom = await matchRoomApi.ackMatchRoomEntered(readyRoom.id);
+        const nextRoom = await api.ackMatchRoomEntered(readyRoom.id);
         if (!cancelled) {
           updateCurrentRoom(nextRoom.id, () => nextRoom);
         }
@@ -475,12 +461,11 @@ export function App() {
         window.clearTimeout(retryTimer);
       }
     };
-  }, [account?.id, activeView, currentRoom?.id, currentRoom?.phase, matchRoomApi]);
+  }, [account?.id, activeView, currentRoom?.id, currentRoom?.phase]);
 
   async function hydrateRealtimeState(scope: PlayerRealtimeSnapshotScope = "full") {
-    if (!realtimeApi) return;
     try {
-      const snapshot = await realtimeApi.refreshRealtimeSnapshot(scope);
+      const snapshot = await api.refreshRealtimeSnapshot(scope);
       applyRealtimeSnapshot(snapshot);
     } catch {
       // 保持恢复后的基础状态，不把实时快照失败当成登录失败。
@@ -808,7 +793,7 @@ export function App() {
   async function ignorePartyInvite(invitationId: string) {
     setBusyPartyInvitationId(invitationId);
     try {
-      await partyApi?.ignorePartyInvite(invitationId);
+      await api.ignorePartyInvite(invitationId);
     } catch {
     } finally {
       resolvedPartyInvitationIds.current.add(invitationId);
@@ -845,9 +830,9 @@ export function App() {
   }
 
   async function refreshFriendsList() {
-    if (!friendsApi || !account) return;
+    if (!account) return;
     try {
-      const nextFriends = await friendsApi.listFriends();
+      const nextFriends = await api.listFriends();
       setFriends((current) => mergeFriendListSnapshot(current, nextFriends, resolvedFriendRequestIds.current));
     } catch {
       // 刷新失败时保留当前列表，等待下一次快照或事件。
@@ -885,8 +870,7 @@ export function App() {
   }
 
   async function loadSavedLogin() {
-    if (!savedLoginApi) return;
-    const saved = await savedLoginApi.loadSavedLogin();
+    const saved = await api.loadSavedLogin();
     setSavedLogin(saved);
     if (saved?.baseUrl) {
       setBaseUrl(saved.baseUrl);
@@ -1032,13 +1016,11 @@ export function App() {
   }
 
   async function searchFriends(query: string) {
-    if (!friendsApi) return [];
-    return friendsApi.searchFriends(query);
+    return api.searchFriends(query);
   }
 
   async function sendFriendRequest(accountId: string) {
-    if (!friendsApi) return;
-    const request = await friendsApi.sendFriendRequest(accountId);
+    const request = await api.sendFriendRequest(accountId);
     setFriends((current) => ({
       ...current,
       outgoingRequests: upsertOutgoingRequest(current.outgoingRequests, request),
@@ -1046,9 +1028,8 @@ export function App() {
   }
 
   async function acceptFriendRequest(requestId: string) {
-    if (!friendsApi) return;
     try {
-      const nextFriends = await friendsApi.acceptFriendRequest(requestId);
+      const nextFriends = await api.acceptFriendRequest(requestId);
       resolvedFriendRequestIds.current.add(requestId);
       setFriends(nextFriends);
       void message.success("已接受好友请求");
@@ -1059,8 +1040,7 @@ export function App() {
   }
 
   async function declineFriendRequest(requestId: string) {
-    if (!friendsApi) return;
-    await friendsApi.declineFriendRequest(requestId);
+    await api.declineFriendRequest(requestId);
     resolvedFriendRequestIds.current.add(requestId);
     setFriends((current) => ({
       ...current,
@@ -1069,8 +1049,7 @@ export function App() {
   }
 
   async function createParty() {
-    if (!partyApi) return;
-    const nextParty = await partyApi.createParty();
+    const nextParty = await api.createParty();
     setParty(nextParty);
     setMatchmaking((current) => ({
       ...current,
@@ -1079,21 +1058,20 @@ export function App() {
   }
 
   async function inviteToParty(accountId: string) {
-    if (!partyApi || hasActiveMatch) return;
+    if (hasActiveMatch) return;
     const targetAccountId = accountId.trim();
     if (!targetAccountId) return;
     if (!party) {
       await createParty();
     }
-    await partyApi.inviteToParty(targetAccountId);
+    await api.inviteToParty(targetAccountId);
     void message.success("队伍邀请已发送");
   }
 
   async function acceptPartyInvite(invitationId: string) {
-    if (!partyApi) return;
     setBusyPartyInvitationId(invitationId);
     try {
-      const nextParty = await partyApi.acceptPartyInvite(invitationId);
+      const nextParty = await api.acceptPartyInvite(invitationId);
       resolvedPartyInvitationIds.current.add(invitationId);
       clearPartyInviteAutoIgnoreTimeout(invitationId);
       setParty(nextParty);
@@ -1109,10 +1087,9 @@ export function App() {
   }
 
   async function declinePartyInvite(invitationId: string) {
-    if (!partyApi) return;
     setBusyPartyInvitationId(invitationId);
     try {
-      await partyApi.declinePartyInvite(invitationId);
+      await api.declinePartyInvite(invitationId);
       resolvedPartyInvitationIds.current.add(invitationId);
       clearPartyInviteAutoIgnoreTimeout(invitationId);
       setMatchmaking((current) => ({
@@ -1126,9 +1103,9 @@ export function App() {
   }
 
   async function leaveParty() {
-    if (!partyApi || !party || hasActiveMatch) return;
+    if (!party || hasActiveMatch) return;
     try {
-      await partyApi.leaveParty();
+      await api.leaveParty();
       setParty(null);
       setMatchmaking((current) => ({
         ...current,
@@ -1141,8 +1118,7 @@ export function App() {
   }
 
   async function startPartyMatchmaking(options?: { dev?: boolean }) {
-    if (!partyApi) return;
-    const nextRoom = await partyApi.startPartyMatchmaking(options);
+    const nextRoom = await api.startPartyMatchmaking(options);
     setMatchmaking((current) => ({
       ...current,
       room: nextRoom,
@@ -1154,7 +1130,7 @@ export function App() {
   }
 
   async function startMatchmakingFromHome(options?: { dev?: boolean }) {
-    if (!partyApi || !canUseMatchmaking || hasActiveMatch || matchmakingFeedbackPending) return;
+    if (!canUseMatchmaking || hasActiveMatch || matchmakingFeedbackPending) return;
     if (party && party.ownerAccountId !== account?.id) return;
     primeMatchFoundSound();
     setMatchmakingFeedbackPending(true);
@@ -1163,7 +1139,7 @@ export function App() {
       if (!party) {
         await createParty();
       }
-      const pendingParty = await partyApi.beginPartyMatchmaking();
+      const pendingParty = await api.beginPartyMatchmaking();
       matchmakingPendingSynced = true;
       setParty(pendingParty);
       setMatchmaking((current) => ({
@@ -1174,7 +1150,7 @@ export function App() {
       await startPartyMatchmaking(options);
     } catch (error) {
       if (matchmakingPendingSynced) {
-        const nextParty = await partyApi.cancelPartyMatchmaking().catch(() => undefined);
+        const nextParty = await api.cancelPartyMatchmaking().catch(() => undefined);
         if (nextParty) {
           setParty(nextParty);
           setMatchmaking((current) => ({
@@ -1189,15 +1165,15 @@ export function App() {
   }
 
   async function acceptReady() {
-    if (!matchRoomApi || !currentRoom) return;
-    const nextRoom = await matchRoomApi.acceptReady();
+    if (!currentRoom) return;
+    const nextRoom = await api.acceptReady();
     updateCurrentRoom(nextRoom.id, () => nextRoom);
     await hydrateRealtimeState("matchmaking");
   }
 
   async function declineReady() {
-    if (!matchRoomApi || !currentRoom) return;
-    const nextRoom = await matchRoomApi.declineReady();
+    if (!currentRoom) return;
+    const nextRoom = await api.declineReady();
     updateCurrentRoom(nextRoom.id, () => nextRoom);
     if (isTerminalMatchPhase(nextRoom.phase)) {
       setActiveView("home");
@@ -1206,8 +1182,7 @@ export function App() {
   }
 
   async function copyText(text: string) {
-    if (!matchRoomApi) return;
-    await matchRoomApi.copyText(text);
+    await api.copyText(text);
     message.success("已复制");
   }
 
@@ -1231,10 +1206,10 @@ export function App() {
         matchmakingPending={matchmakingFeedbackPending || Boolean(syncedMatchmakingPendingAt)}
         matchmakingPendingStartedAt={syncedMatchmakingPendingAt}
         devModeEnabled={devModeEnabled}
-        onInviteFriend={partyApi && !hasActiveMatch ? inviteToParty : undefined}
-        onLeaveParty={partyApi && party && !hasActiveMatch ? leaveParty : undefined}
+        onInviteFriend={!hasActiveMatch ? inviteToParty : undefined}
+        onLeaveParty={party && !hasActiveMatch ? leaveParty : undefined}
         onStartMatchmaking={
-          partyApi && canUseMatchmaking && !hasActiveMatch && (!party || party.ownerAccountId === account?.id)
+          canUseMatchmaking && !hasActiveMatch && (!party || party.ownerAccountId === account?.id)
             ? startMatchmakingFromHome
             : undefined
         }
@@ -1384,12 +1359,12 @@ export function App() {
               accountId={account?.id ?? ""}
               account={account}
               friends={friends}
-              onSearchFriends={friendsApi ? searchFriends : undefined}
-              onReenrichFriends={friendsApi?.reenrichFriends ? (results) => friendsApi.reenrichFriends!(results) : undefined}
-              onProfilesUpdated={realtimeApi?.onProfilesUpdated ? (listener) => realtimeApi.onProfilesUpdated!(listener) : undefined}
-              onSendFriendRequest={friendsApi ? sendFriendRequest : undefined}
-              onAcceptFriendRequest={friendsApi ? acceptFriendRequest : undefined}
-              onDeclineFriendRequest={friendsApi ? declineFriendRequest : undefined}
+              onSearchFriends={searchFriends}
+              onReenrichFriends={(results) => api.reenrichFriends(results)}
+              onProfilesUpdated={(listener) => api.onProfilesUpdated(listener)}
+              onSendFriendRequest={sendFriendRequest}
+              onAcceptFriendRequest={acceptFriendRequest}
+              onDeclineFriendRequest={declineFriendRequest}
             />
           </aside>
         </div>

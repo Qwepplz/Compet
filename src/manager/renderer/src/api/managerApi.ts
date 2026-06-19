@@ -1,13 +1,7 @@
 import type { AccountView, BootstrapAdminInput, CreateAccountInput, DiagnosticResult, LogEntry, LoginResult, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
+import type { UpdateCheckResult } from "../../../../desktop/updateTypes.js";
 
-export interface UpdateCheckResult {
-  currentVersion: string;
-  latestVersion: string;
-  updateAvailable: boolean;
-  changedFiles: number;
-  changedBytes: number;
-  manifestUrl: string;
-}
+export type { UpdateCheckResult };
 
 export const managerApi = {
   loadConfig: () => window.managerApi.loadConfig() as Promise<ManagerConfig>,
