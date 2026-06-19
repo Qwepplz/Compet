@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
-import { SettingOutlined } from "@ant-design/icons";
+import { BorderOutlined, CloseOutlined, FullscreenExitOutlined, MinusOutlined, SettingOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type { UpdateCheckResult } from "../../../desktop/updateTypes.js";
 import type {
@@ -292,6 +292,7 @@ export function App() {
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
+  const [windowMaximized, setWindowMaximized] = useState(false);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -324,6 +325,20 @@ export function App() {
     void restoreSession();
     void window.playerApi.getVersion().then(setCurrentVersion);
   }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    void api.isWindowMaximized().then((isMaximized) => {
+      if (mounted) setWindowMaximized(isMaximized);
+    });
+    const unsubscribeMaximized = api.onWindowMaximized(() => setWindowMaximized(true));
+    const unsubscribeUnmaximized = api.onWindowUnmaximized(() => setWindowMaximized(false));
+    return () => {
+      mounted = false;
+      unsubscribeMaximized();
+      unsubscribeUnmaximized();
+    };
+  }, [api]);
 
   useEffect(() => {
     if (activeMatchRoom) {
@@ -1004,6 +1019,14 @@ export function App() {
     }
   }
 
+  function toggleWindowMaximized() {
+    if (windowMaximized) {
+      void api.unmaximizeWindow();
+    } else {
+      void api.maximizeWindow();
+    }
+  }
+
   async function installUpdate() {
     setInstallingUpdate(true);
     try {
@@ -1321,6 +1344,7 @@ export function App() {
   return (
     <div className="player-shell player-shell--app">
       <div className={`player-app-frame${friendsExpanded ? "" : " player-app-frame--collapsed"}`}>
+        <div className="player-window-drag-region" />
         <div className="player-app-profile">
           <div className="player-app-brand">
             <SteamAvatar className="player-app-avatar" avatarUrl={account?.steamAvatarUrl} label={accountLabel} />
@@ -1344,6 +1368,29 @@ export function App() {
               type="text"
               onClick={() => setSettingsModalOpen(true)}
             />
+            <div className="player-window-controls" aria-label="窗口控制">
+              <Button
+                aria-label="最小化窗口"
+                className="player-window-control"
+                icon={<MinusOutlined />}
+                type="text"
+                onClick={() => void api.minimizeWindow()}
+              />
+              <Button
+                aria-label={windowMaximized ? "还原窗口" : "最大化窗口"}
+                className="player-window-control"
+                icon={windowMaximized ? <FullscreenExitOutlined /> : <BorderOutlined />}
+                type="text"
+                onClick={toggleWindowMaximized}
+              />
+              <Button
+                aria-label="关闭窗口"
+                className="player-window-control player-window-control--close"
+                icon={<CloseOutlined />}
+                type="text"
+                onClick={() => void api.closeWindow()}
+              />
+            </div>
           </div>
         </div>
 

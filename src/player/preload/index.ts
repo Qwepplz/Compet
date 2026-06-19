@@ -69,12 +69,31 @@ export const playerApi = {
     subscribe("player:profiles:updated", () => listener()),
   copyText: (text: string): Promise<void> => invoke("player:copyText", text),
   openConnectUrl: (connectUrl: string): Promise<void> => invoke("player:openConnectUrl", connectUrl),
+  minimizeWindow: (): Promise<void> => invoke("player:window:minimize"),
+  maximizeWindow: (): Promise<void> => invoke("player:window:maximize"),
+  unmaximizeWindow: (): Promise<void> => invoke("player:window:unmaximize"),
+  closeWindow: (): Promise<void> => invoke("player:window:close"),
+  isWindowMaximized: (): Promise<boolean> => invoke("player:window:isMaximized"),
+  onWindowMaximized: (listener: () => void): (() => void) =>
+    subscribe("player:window:maximized", () => listener()),
+  onWindowUnmaximized: (listener: () => void): (() => void) =>
+    subscribe("player:window:unmaximized", () => listener()),
   getVersion: (): Promise<string> => invoke("updates:version"),
   checkUpdate: () => invoke("updates:check"),
   installUpdate: () => invoke("updates:install"),
 };
 
-contextBridge.exposeInMainWorld(
-  "playerApi",
-  process.env.COMPET_PLAYER_PREVIEW === "1" ? createPreviewPlayerApi() : playerApi,
-);
+const exposedPlayerApi = process.env.COMPET_PLAYER_PREVIEW === "1"
+  ? {
+      ...createPreviewPlayerApi(),
+      minimizeWindow: playerApi.minimizeWindow,
+      maximizeWindow: playerApi.maximizeWindow,
+      unmaximizeWindow: playerApi.unmaximizeWindow,
+      closeWindow: playerApi.closeWindow,
+      isWindowMaximized: playerApi.isWindowMaximized,
+      onWindowMaximized: playerApi.onWindowMaximized,
+      onWindowUnmaximized: playerApi.onWindowUnmaximized,
+    }
+  : playerApi;
+
+contextBridge.exposeInMainWorld("playerApi", exposedPlayerApi);

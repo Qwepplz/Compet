@@ -75,6 +75,21 @@ input {
   background: #000;
 }
 
+.player-window-drag-region {
+  position: absolute;
+  top: 0;
+  right: 340px;
+  left: 0;
+  z-index: 4;
+  height: 44px;
+  -webkit-app-region: drag;
+  transition: right 0.26s ease;
+}
+
+.player-app-frame--collapsed .player-window-drag-region {
+  right: 68px;
+}
+
 .player-header {
   margin-bottom: 24px;
 }
@@ -128,6 +143,7 @@ input {
   z-index: 6;
   min-width: 0;
   max-width: 224px;
+  -webkit-app-region: drag;
 }
 
 .player-app-chrome {
@@ -202,6 +218,7 @@ input {
   min-width: 0;
   max-width: 100%;
   pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
 .player-app-settings-button {
@@ -217,6 +234,7 @@ input {
   background: transparent;
   color: #d7d7d7;
   box-shadow: none;
+  -webkit-app-region: no-drag;
 }
 
 .player-app-settings-button:not(:disabled):hover,
@@ -234,6 +252,46 @@ input {
   outline: 0 !important;
   outline-width: 0 !important;
   outline-color: transparent !important;
+}
+
+.player-window-controls {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border: 1px solid #242424;
+  border-radius: 8px;
+  background: #0d0d0d;
+  -webkit-app-region: no-drag;
+}
+
+.player-window-control.ant-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #d7d7d7;
+  box-shadow: none;
+}
+
+.player-window-control.ant-btn:not(:disabled):hover,
+.player-window-control.ant-btn:not(:disabled):focus-visible {
+  border: 0;
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  box-shadow: none;
+  outline: 0;
+}
+
+.player-window-control--close.ant-btn:not(:disabled):hover,
+.player-window-control--close.ant-btn:not(:disabled):focus-visible {
+  background: #c42b1c;
+  color: #fff;
 }
 
 .player-status-pill {
@@ -1379,6 +1437,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     right: 18px;
   }
 
+  .player-window-drag-region,
+  .player-app-frame--collapsed .player-window-drag-region {
+    right: 0;
+  }
+
   .player-social-panel {
     width: auto;
   }
@@ -1438,6 +1501,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     right: 12px;
     left: 12px;
     justify-content: flex-start;
+  }
+
+  .player-window-drag-region,
+  .player-app-frame--collapsed .player-window-drag-region {
+    right: 0;
   }
 
   .player-app-meta {

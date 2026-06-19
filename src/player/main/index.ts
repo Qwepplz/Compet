@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog } from "electron";
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import path from "node:path";
 import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
 import { delay } from "../../shared/async.js";
@@ -54,6 +54,27 @@ let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stal
 let realtimeStatusRevision = 0;
 let profilesUpdatedTimer: ReturnType<typeof setTimeout> | undefined;
 
+function currentMainWindow(): BrowserWindow | undefined {
+  if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
+  return BrowserWindow.getAllWindows().find((win) => !win.isDestroyed());
+}
+
+function registerWindowIpc(): void {
+  ipcMain.handle("player:window:minimize", () => {
+    currentMainWindow()?.minimize();
+  });
+  ipcMain.handle("player:window:maximize", () => {
+    currentMainWindow()?.maximize();
+  });
+  ipcMain.handle("player:window:unmaximize", () => {
+    currentMainWindow()?.unmaximize();
+  });
+  ipcMain.handle("player:window:close", () => {
+    currentMainWindow()?.close();
+  });
+  ipcMain.handle("player:window:isMaximized", () => currentMainWindow()?.isMaximized() ?? false);
+}
+
 function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   queuedRealtimeEvents.push(nextEvent);
   if (queuedRealtimeEvents.length > MAX_QUEUED_REALTIME_EVENTS) {
@@ -92,6 +113,7 @@ async function createWindow(): Promise<void> {
     minWidth: 980,
     minHeight: 680,
     backgroundColor: "#101010",
+    frame: false,
     webPreferences: {
       preload: entry.preloadPath,
       contextIsolation: true,
@@ -101,6 +123,12 @@ async function createWindow(): Promise<void> {
   mainWindow = win;
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = undefined;
+  });
+  win.on("maximize", () => {
+    win.webContents.send("player:window:maximized");
+  });
+  win.on("unmaximize", () => {
+    win.webContents.send("player:window:unmaximized");
   });
   win.webContents.on("render-process-gone", (_event, details) => {
     appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`);
@@ -403,6 +431,7 @@ if (!gotSingleInstanceLock) {
   app.on("second-instance", focusMainWindow);
 
   app.whenReady().then(async () => {
+    registerWindowIpc();
     registerPlayerIpc({
       clearSession,
       connectRealtime,

@@ -1,4 +1,5 @@
 import type { AccountView } from "../../manager/shared/types.js";
+import type { UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
 import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { PlayerLoginResult } from "../main/playerApiClient.js";
 import type {
@@ -274,5 +275,23 @@ export function createPreviewPlayerApi() {
     },
     copyText: async (): Promise<void> => undefined,
     openConnectUrl: async (): Promise<void> => undefined,
+    getVersion: async (): Promise<string> => "preview",
+    checkUpdate: async (): Promise<UpdateCheckResult> => ({
+      currentVersion: "preview",
+      latestVersion: "preview",
+      updateAvailable: false,
+      changedFiles: 0,
+      changedBytes: 0,
+      manifestUrl: "",
+    }),
+    installUpdate: async (): Promise<UpdateInstallResult> => ({
+      currentVersion: "preview",
+      latestVersion: "preview",
+      updateAvailable: false,
+      changedFiles: 0,
+      changedBytes: 0,
+      manifestUrl: "",
+      installing: false,
+    }),
   };
 }
