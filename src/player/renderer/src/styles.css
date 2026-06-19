@@ -527,9 +527,9 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   width: 100%;
 }
 
-.faceit-main-cta,
-.faceit-secondary-cta,
-.faceit-connect-button {
+.faceit-main-cta.ant-btn,
+.faceit-secondary-cta.ant-btn,
+.faceit-connect-button.ant-btn {
   height: 56px;
   min-width: 160px;
   padding: 0 32px;
@@ -1047,14 +1047,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-connect-panel .ant-btn {
   width: 100%;
-  min-height: 36px;
-  border-radius: 4px;
-  font-weight: 700;
-}
-
-.faceit-connect-panel .faceit-connect-button {
-  min-height: 44px;
-  border-radius: 4px;
 }
 
 .faceit-empty-room {
