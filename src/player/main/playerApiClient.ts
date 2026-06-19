@@ -199,6 +199,24 @@ export class PlayerApiClient {
     return this.commandOrRequest("party.leave", {}, () => this.request("POST", "/party/leave", {}));
   }
 
+  async beginPartyMatchmaking(): Promise<PlayerPartyDto> {
+    const response = await this.commandOrRequest<{ party: PlayerPartyDto }>(
+      "party.beginMatchmaking",
+      {},
+      () => this.request("POST", "/party/matchmaking/begin", {}),
+    );
+    return response.party;
+  }
+
+  async cancelPartyMatchmaking(): Promise<PlayerPartyDto | undefined> {
+    const response = await this.commandOrRequest<{ party?: PlayerPartyDto }>(
+      "party.cancelMatchmaking",
+      {},
+      () => this.request("POST", "/party/matchmaking/cancel", {}),
+    );
+    return response.party;
+  }
+
   async startPartyMatchmaking(options: { dev?: boolean } = {}): Promise<PlayerLiveMatchStateDto> {
     const payload = options.dev ? { dev: true } : {};
     const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(

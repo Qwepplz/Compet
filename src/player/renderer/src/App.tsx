@@ -326,6 +326,7 @@ export function App() {
   const currentRoom = getCurrentRoom(matchmaking);
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
   const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
+  const syncedMatchmakingPendingAt = party?.status === "open" ? party.matchmakingPendingAt ?? null : null;
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
   const hasActiveMatch = Boolean(activeMatchRoom);
@@ -1157,13 +1158,31 @@ export function App() {
     if (party && party.ownerAccountId !== account?.id) return;
     primeMatchFoundSound();
     setMatchmakingFeedbackPending(true);
+    let matchmakingPendingSynced = false;
     try {
       if (!party) {
         await createParty();
       }
+      const pendingParty = await partyApi.beginPartyMatchmaking();
+      matchmakingPendingSynced = true;
+      setParty(pendingParty);
+      setMatchmaking((current) => ({
+        ...current,
+        party: pendingParty,
+      }));
       await waitForMatchmakingDelay(randomMatchmakingDelayMs());
       await startPartyMatchmaking(options);
     } catch (error) {
+      if (matchmakingPendingSynced) {
+        const nextParty = await partyApi.cancelPartyMatchmaking().catch(() => undefined);
+        if (nextParty) {
+          setParty(nextParty);
+          setMatchmaking((current) => ({
+            ...current,
+            party: nextParty,
+          }));
+        }
+      }
       setMatchmakingFeedbackPending(false);
       message.error(error instanceof Error ? error.message : "开始匹配失败");
     }
@@ -1209,7 +1228,8 @@ export function App() {
         account={account}
         friends={friends}
         party={visibleHomeParty}
-        matchmakingPending={matchmakingFeedbackPending}
+        matchmakingPending={matchmakingFeedbackPending || Boolean(syncedMatchmakingPendingAt)}
+        matchmakingPendingStartedAt={syncedMatchmakingPendingAt}
         devModeEnabled={devModeEnabled}
         onInviteFriend={partyApi && !hasActiveMatch ? inviteToParty : undefined}
         onLeaveParty={partyApi && party && !hasActiveMatch ? leaveParty : undefined}

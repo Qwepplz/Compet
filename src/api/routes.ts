@@ -416,6 +416,28 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     }
   });
 
+  app.post("/party/matchmaking/begin", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const matchmaking = requireMatchmaking(deps);
+    try {
+      return { party: await matchmaking.beginPartyMatchmaking(auth.account.id) };
+    } catch (error) {
+      mapMatchmakingServiceError(error);
+    }
+  });
+
+  app.post("/party/matchmaking/cancel", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const matchmaking = requireMatchmaking(deps);
+    try {
+      return { party: await matchmaking.cancelPartyMatchmaking(auth.account.id) };
+    } catch (error) {
+      mapMatchmakingServiceError(error);
+    }
+  });
+
   app.post("/party/join", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);

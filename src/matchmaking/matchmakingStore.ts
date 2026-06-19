@@ -20,6 +20,7 @@ export interface PartyRecord {
   updatedAt?: string;
   status?: PartyStatus;
   lockedMatchId?: string;
+  matchmakingPendingAt?: string;
 }
 
 export interface PartyInvitationRecord {

@@ -8,6 +8,8 @@ export type RealtimeCommand =
   | { type: "command"; commandId: string; name: "party.declineInvite"; payload: { invitationId: string } }
   | { type: "command"; commandId: string; name: "party.ignoreInvite"; payload: { invitationId: string } }
   | { type: "command"; commandId: string; name: "party.leave"; payload: Record<string, never> }
+  | { type: "command"; commandId: string; name: "party.beginMatchmaking"; payload: Record<string, never> }
+  | { type: "command"; commandId: string; name: "party.cancelMatchmaking"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "party.startMatchmaking"; payload: { dev?: boolean } }
   | { type: "command"; commandId: string; name: "matchmaking.acceptReady"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "matchmaking.declineReady"; payload: Record<string, never> }
@@ -50,6 +52,8 @@ export interface RealtimeCommandMatchmaking {
   declinePartyInvite(accountId: string, invitationId: string): Promise<unknown>;
   ignorePartyInvite(accountId: string, invitationId: string): Promise<unknown>;
   leaveParty(accountId: string): Promise<unknown>;
+  beginPartyMatchmaking(ownerAccountId: string): Promise<unknown>;
+  cancelPartyMatchmaking(ownerAccountId: string): Promise<unknown>;
   startPartyMatchmaking(ownerAccountId: string, options?: { dev?: boolean }): Promise<unknown>;
   acceptReady(accountId: string): Promise<unknown>;
   declineReady(accountId: string): Promise<unknown>;
@@ -85,6 +89,8 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
         : undefined;
     case "party.create":
     case "party.leave":
+    case "party.beginMatchmaking":
+    case "party.cancelMatchmaking":
     case "matchmaking.acceptReady":
     case "matchmaking.declineReady":
       return { type: "command", commandId: record.commandId, name: record.name, payload: {} };
@@ -145,6 +151,12 @@ export async function executeRealtimeCommand(
         if (!matchmaking) return commandUnavailable(command.commandId);
         await matchmaking.leaveParty(accountId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
+      case "party.beginMatchmaking":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { party: await matchmaking.beginPartyMatchmaking(accountId) } };
+      case "party.cancelMatchmaking":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: { party: await matchmaking.cancelPartyMatchmaking(accountId) } };
       case "party.startMatchmaking":
         if (!matchmaking) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.startPartyMatchmaking(accountId, { dev: command.payload.dev }) } };

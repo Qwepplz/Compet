@@ -12,6 +12,7 @@ interface HomePageProps {
   friends: PlayerFriendListDto;
   party: PlayerPartyDto | null;
   matchmakingPending?: boolean;
+  matchmakingPendingStartedAt?: string | null;
   devModeEnabled?: boolean;
   onInviteFriend?: (accountId: string) => Promise<void>;
   onLeaveParty?: () => Promise<void>;
@@ -51,6 +52,7 @@ export function HomePage({
   friends,
   party,
   matchmakingPending = false,
+  matchmakingPendingStartedAt = null,
   devModeEnabled = false,
   onInviteFriend,
   onLeaveParty,
@@ -73,12 +75,13 @@ export function HomePage({
       setMatchingStartedAt(null);
       return;
     }
-    const startedAt = Date.now();
+    const syncedStartedAt = matchmakingPendingStartedAt ? Date.parse(matchmakingPendingStartedAt) : NaN;
+    const startedAt = Number.isFinite(syncedStartedAt) ? syncedStartedAt : Date.now();
     setMatchingStartedAt(startedAt);
     setMatchingNowMs(startedAt);
     const timer = window.setInterval(() => setMatchingNowMs(Date.now()), 250);
     return () => window.clearInterval(timer);
-  }, [isMatchmakingPending]);
+  }, [isMatchmakingPending, matchmakingPendingStartedAt]);
 
   async function inviteFriend(accountId: string) {
     if (!onInviteFriend) return;

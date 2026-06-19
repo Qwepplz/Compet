@@ -320,6 +320,38 @@ export class MatchmakingService {
     });
   }
 
+  beginPartyMatchmaking(ownerAccountId: string): Promise<PartyRecord> {
+    return this.enqueueMutation(async () => {
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
+      if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
+      if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
+      this.requireOpenParty(party);
+      await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
+
+      const now = this.now();
+      const updatedParty: PartyRecord = { ...party, matchmakingPendingAt: now, updatedAt: now };
+      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+      await this.emitPartyUpdated(updatedParty);
+      return updatedParty;
+    });
+  }
+
+  cancelPartyMatchmaking(ownerAccountId: string): Promise<PartyRecord | undefined> {
+    return this.enqueueMutation(async () => {
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
+      if (!party) return undefined;
+      if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
+      if ((party.status ?? "open") !== "open" || !party.matchmakingPendingAt) return party;
+
+      const updatedParty: PartyRecord = { ...party, matchmakingPendingAt: undefined, updatedAt: this.now() };
+      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+      await this.emitPartyUpdated(updatedParty);
+      return updatedParty;
+    });
+  }
+
   startPartyMatchmaking(ownerAccountId: string, options: { dev?: boolean } = {}): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       const ownerAccount = await this.requireMatchmakingAccount(ownerAccountId);
@@ -355,7 +387,7 @@ export class MatchmakingService {
         partyId: party.id,
         createdAt: startedAt,
       };
-      const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, updatedAt: startedAt };
+      const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, matchmakingPendingAt: undefined, updatedAt: startedAt };
       const rooms = [...existingRooms, room];
 
       await this.deps.store.saveRooms(rooms);

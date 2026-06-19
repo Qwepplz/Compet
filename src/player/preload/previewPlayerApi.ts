@@ -211,6 +211,19 @@ export function createPreviewPlayerApi() {
       room = null;
       publishSnapshot();
     },
+    beginPartyMatchmaking: async (): Promise<PlayerPartyDto> => {
+      const now = new Date().toISOString();
+      const nextParty = { ...ensureParty(), matchmakingPendingAt: now, updatedAt: now };
+      party = nextParty;
+      publishSnapshot();
+      return nextParty;
+    },
+    cancelPartyMatchmaking: async (): Promise<PlayerPartyDto | undefined> => {
+      if (!party) return undefined;
+      party = { ...party, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
+      publishSnapshot();
+      return party;
+    },
     startPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerLiveMatchStateDto> => {
       const nextParty = ensureParty();
       room = makeReadyRoom(nextParty);
