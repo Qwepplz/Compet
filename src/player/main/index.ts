@@ -63,16 +63,9 @@ function registerWindowIpc(): void {
   ipcMain.handle("player:window:minimize", () => {
     currentMainWindow()?.minimize();
   });
-  ipcMain.handle("player:window:maximize", () => {
-    currentMainWindow()?.maximize();
-  });
-  ipcMain.handle("player:window:unmaximize", () => {
-    currentMainWindow()?.unmaximize();
-  });
   ipcMain.handle("player:window:close", () => {
     currentMainWindow()?.close();
   });
-  ipcMain.handle("player:window:isMaximized", () => currentMainWindow()?.isMaximized() ?? false);
 }
 
 function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
@@ -110,8 +103,8 @@ async function createWindow(): Promise<void> {
   const win = new BrowserWindow({
     width: 1280,
     height: 820,
-    minWidth: 980,
-    minHeight: 680,
+    resizable: false,
+    maximizable: false,
     backgroundColor: "#101010",
     frame: false,
     webPreferences: {
@@ -123,12 +116,6 @@ async function createWindow(): Promise<void> {
   mainWindow = win;
   win.on("closed", () => {
     if (mainWindow === win) mainWindow = undefined;
-  });
-  win.on("maximize", () => {
-    win.webContents.send("player:window:maximized");
-  });
-  win.on("unmaximize", () => {
-    win.webContents.send("player:window:unmaximized");
   });
   win.webContents.on("render-process-gone", (_event, details) => {
     appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`);

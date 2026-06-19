@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
-import { BorderOutlined, CloseOutlined, FullscreenExitOutlined, MinusOutlined, SettingOutlined } from "@ant-design/icons";
+import { CloseOutlined, MinusOutlined, SettingOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type { UpdateCheckResult } from "../../../desktop/updateTypes.js";
 import type {
@@ -292,7 +292,6 @@ export function App() {
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
-  const [windowMaximized, setWindowMaximized] = useState(false);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
@@ -325,20 +324,6 @@ export function App() {
     void restoreSession();
     void window.playerApi.getVersion().then(setCurrentVersion);
   }, []);
-
-  useEffect(() => {
-    let mounted = true;
-    void api.isWindowMaximized().then((isMaximized) => {
-      if (mounted) setWindowMaximized(isMaximized);
-    });
-    const unsubscribeMaximized = api.onWindowMaximized(() => setWindowMaximized(true));
-    const unsubscribeUnmaximized = api.onWindowUnmaximized(() => setWindowMaximized(false));
-    return () => {
-      mounted = false;
-      unsubscribeMaximized();
-      unsubscribeUnmaximized();
-    };
-  }, [api]);
 
   useEffect(() => {
     if (activeMatchRoom) {
@@ -1019,14 +1004,6 @@ export function App() {
     }
   }
 
-  function toggleWindowMaximized() {
-    if (windowMaximized) {
-      void api.unmaximizeWindow();
-    } else {
-      void api.maximizeWindow();
-    }
-  }
-
   async function installUpdate() {
     setInstallingUpdate(true);
     try {
@@ -1375,13 +1352,6 @@ export function App() {
                 icon={<MinusOutlined />}
                 type="text"
                 onClick={() => void api.minimizeWindow()}
-              />
-              <Button
-                aria-label={windowMaximized ? "还原窗口" : "最大化窗口"}
-                className="player-window-control"
-                icon={windowMaximized ? <FullscreenExitOutlined /> : <BorderOutlined />}
-                type="text"
-                onClick={toggleWindowMaximized}
               />
               <Button
                 aria-label="关闭窗口"

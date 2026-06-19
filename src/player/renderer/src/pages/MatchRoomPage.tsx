@@ -143,12 +143,6 @@ export function MatchRoomPage({
 
   return (
     <div className="faceit-matchroom">
-      <header className="faceit-matchroom-top">
-        <nav>
-          <span className="faceit-nav-active">MATCH</span>
-        </nav>
-      </header>
-
       <section className="faceit-match-header">
         <div className="faceit-team-summary">
           <strong>{room?.teamA?.name ?? "Team A"}</strong>
