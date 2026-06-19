@@ -9,7 +9,7 @@ import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
-import { badRequest, conflict, forbidden, HttpError, notFound, unauthorized } from "./httpErrors.js";
+import { badRequest, conflict, forbidden, HttpError, notFound, tooManyRequests, unauthorized } from "./httpErrors.js";
 
 export interface RouteDeps {
   config?: ServerConfig;
@@ -62,7 +62,7 @@ function mapClientLoginError(error: unknown): never {
     if (error.message === "account already logged in") throw conflict("账号已在另一个客户端登录");
     if (error.message === "account disabled") throw unauthorized("账号已被禁用");
     if (error.message === "admin account cannot use client login") throw unauthorized("管理员账号不能登录客户端，请使用服务端管理器登录");
-    if (error.message === "too many login attempts") throw unauthorized("登录失败次数过多，请稍后再试");
+    if (error.message === "too many login attempts") throw tooManyRequests("登录失败次数过多，请稍后再试");
   }
   throw unauthorized("用户名或密码错误");
 }
@@ -71,7 +71,7 @@ function mapManagerLoginError(error: unknown): never {
   if (error instanceof Error) {
     if (error.message === "account disabled") throw unauthorized("管理员账号已被禁用");
     if (error.message === "admin account required") throw unauthorized("只有管理员账号可以登录服务端管理器");
-    if (error.message === "too many login attempts") throw unauthorized("登录失败次数过多，请稍后再试");
+    if (error.message === "too many login attempts") throw tooManyRequests("登录失败次数过多，请稍后再试");
   }
   throw unauthorized("用户名或密码错误");
 }
