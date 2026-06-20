@@ -1219,13 +1219,8 @@ export function App() {
 
   if (loading) {
     return (
-      <div className="player-shell">
-        <Card className="player-card">
-          <div className="player-loading">
-            <Spin size="large" />
-            <span>正在恢复本地会话...</span>
-          </div>
-        </Card>
+      <div className="player-loading-screen">
+        <Spin size="large" />
       </div>
     );
   }

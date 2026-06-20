@@ -59,6 +59,13 @@ input {
   padding: 0;
 }
 
+.player-loading-screen {
+  min-height: 100vh;
+  background: #000;
+  display: grid;
+  place-items: center;
+}
+
 .player-card {
   width: 100%;
   max-width: 460px;
@@ -117,13 +124,6 @@ input {
 
 .player-copy--small {
   font-size: 14px;
-}
-
-.player-loading {
-  display: grid;
-  gap: 16px;
-  justify-items: center;
-  padding: 12px 0;
 }
 
 .player-sr-only {
