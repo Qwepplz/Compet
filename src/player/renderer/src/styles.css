@@ -747,15 +747,13 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-match-header {
-  display: grid;
-  grid-template-columns: 1fr minmax(180px, 240px) 1fr;
+  display: flex;
   align-items: center;
-  gap: 24px;
+  justify-content: center;
   min-height: 112px;
-  padding: 86px 34px 18px;
+  padding: 132px 34px 18px;
 }
 
-.faceit-team-summary,
 .faceit-match-status {
   display: grid;
   gap: 6px;
@@ -764,7 +762,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   font-size: 14px;
 }
 
-.faceit-team-summary strong,
 .faceit-match-status strong {
   color: #fff;
   font-size: 16px;
@@ -1526,9 +1523,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   }
 
   .faceit-match-header {
-    grid-template-columns: 1fr;
-    height: auto;
-    gap: 12px;
     padding: 14px;
   }
 

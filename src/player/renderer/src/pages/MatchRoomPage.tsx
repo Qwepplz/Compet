@@ -153,18 +153,10 @@ export function MatchRoomPage({
   return (
     <div className="faceit-matchroom">
       <section className="faceit-match-header">
-        <div className="faceit-team-summary">
-          <strong>{room?.teamA?.name ?? "Team A"}</strong>
-          <span>{room?.teamA?.participants.length ?? 0} 名玩家</span>
-        </div>
         <div className="faceit-match-status">
           <strong>5v5 · BO1</strong>
           {roomPhase ? <span>{roomPhase}</span> : null}
           {selectedMap ? <small>{formatMapName(selectedMap)}</small> : null}
-        </div>
-        <div className="faceit-team-summary faceit-team-summary--right">
-          <strong>{room?.teamB?.name ?? "Team B"}</strong>
-          <span>{room?.teamB?.participants.length ?? 0} 名玩家</span>
         </div>
       </section>
 
