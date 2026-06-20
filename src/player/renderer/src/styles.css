@@ -591,7 +591,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   height: 56px;
   min-width: 160px;
   padding: 0 32px;
-  border-radius: 4px;
+  border-radius: 16px;
   box-shadow: none;
   font-size: 16px;
   font-weight: 700;
@@ -635,14 +635,20 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-queue-actions .faceit-secondary-cta {
-  grid-column: 2;
-  justify-self: end;
-  width: 85.4%;
-  min-width: 0;
-  height: auto;
-  min-height: 44px;
-  aspect-ratio: 188 / 59;
+  grid-column: 4;
+  justify-self: start;
+  width: 56px;
+  min-width: 56px;
+  height: 56px;
+  min-height: 0;
+  aspect-ratio: 1;
   padding-inline: 0;
+}
+
+.faceit-secondary-cta svg {
+  display: block;
+  width: 24px;
+  height: 24px;
 }
 
 .faceit-main-cta,

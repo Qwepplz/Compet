@@ -190,11 +190,6 @@ export function HomePage({
       <div className="faceit-queue-bar">
         {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
         <div className="faceit-queue-actions">
-          {party ? (
-            <Button className="faceit-secondary-cta" onClick={() => void leaveParty()} disabled={!onLeaveParty || leavingParty || isMatchmakingPending} loading={leavingParty}>
-              退出队伍
-            </Button>
-          ) : null}
           <Button
             type="primary"
             className="faceit-main-cta"
@@ -211,6 +206,25 @@ export function HomePage({
               ) : null}
             </span>
           </Button>
+          {party ? (
+            <Button
+              className="faceit-secondary-cta"
+              aria-label="退出队伍"
+              title="退出队伍"
+              onClick={() => void leaveParty()}
+              disabled={!onLeaveParty || leavingParty || isMatchmakingPending}
+              loading={leavingParty}
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path
+                  fillRule="evenodd"
+                  clipRule="evenodd"
+                  d="M16.05 7l-1.405 1.405L17.24 11H9v2h8.14l-2.495 2.495L16.05 16.9 21 11.95 16.05 7zM16 21v-2H5V5h11V3H3v18h13z"
+                  fill="currentColor"
+                />
+              </svg>
+            </Button>
+          ) : null}
         </div>
       </div>
     </div>
