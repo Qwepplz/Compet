@@ -541,6 +541,12 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   height: 18px;
 }
 
+.faceit-party-slot-name .faceit-captain-badge {
+  width: 18px;
+  height: 18px;
+  color: #ff5500;
+}
+
 .faceit-party-slot strong {
   max-width: 100%;
   color: #fff;

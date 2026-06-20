@@ -126,12 +126,25 @@ export function HomePage({
           const member = memberId ? memberDisplay(memberId, account, friends) : null;
           const label = member?.label ?? "";
           const isSelf = index === 2;
+          const isCaptain = Boolean(memberId && party?.ownerAccountId === memberId);
           return label ? (
             <div className={`faceit-party-slot ${isSelf ? "faceit-party-slot--self" : ""}`} key={index}>
               <SteamAvatar avatarUrl={member?.avatarUrl} label={label} />
               <div className="faceit-party-slot-name">
                 <strong>{label}</strong>
                 <VerificationBadge variant="gold" title="Player" />
+                {isCaptain ? (
+                  <span className="faceit-captain-badge" aria-label="队长" title="队长">
+                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path
+                        fillRule="evenodd"
+                        clipRule="evenodd"
+                        d="M7.5 9.333L3 4v10.667h18V4l-4.5 5.333L12 4 7.5 9.333zM21 20v-2.667H3V20h18z"
+                        fill="currentColor"
+                      />
+                    </svg>
+                  </span>
+                ) : null}
               </div>
             </div>
           ) : (
