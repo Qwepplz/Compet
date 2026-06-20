@@ -84,7 +84,16 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
                   <strong>{displayName}</strong>
                   {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
                   {!anonymous && participant.isCaptain ? (
-                    <span className="faceit-captain-badge" aria-label="队长" title="队长">C</span>
+                    <span className="faceit-captain-badge" aria-label="队长" title="队长">
+                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                        <path
+                          fillRule="evenodd"
+                          clipRule="evenodd"
+                          d="M7.5 9.333L3 4v10.667h18V4l-4.5 5.333L12 4 7.5 9.333zM21 20v-2.667H3V20h18z"
+                          fill="currentColor"
+                        />
+                      </svg>
+                    </span>
                   ) : null}
                 </div>
               </div>
