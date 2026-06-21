@@ -608,13 +608,21 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-queue-actions .faceit-main-cta {
   grid-column: 3;
   justify-self: center;
-  width: 85.4%;
-  min-width: 0;
-  height: auto;
-  min-height: 44px;
-  aspect-ratio: 188 / 59;
+  align-self: center;
+  position: fixed;
+  top: 641.83px;
+  left: calc((100vw - 68px) / 2 - 94px);
+  width: 188px;
+  min-width: 188px;
+  height: 59px;
+  min-height: 0;
   padding-inline: 0;
   font-size: 20px;
+  transition: left 0.26s ease;
+}
+
+.player-app-layout:not(.player-app-layout--collapsed) .faceit-queue-actions .faceit-main-cta {
+  left: calc((100vw - 340px) / 2 - 94px);
 }
 
 .faceit-matchmaking-content {
@@ -1457,6 +1465,13 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
   .faceit-queue-actions {
     justify-content: stretch;
+  }
+
+  .faceit-queue-actions .faceit-main-cta {
+    position: static;
+    top: auto;
+    left: auto;
+    transition: none;
   }
 
   .faceit-server-pill {
