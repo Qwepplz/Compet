@@ -58,6 +58,7 @@ const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], part
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
+let startupUpdateCheckStarted = false;
 
 function waitForMatchmakingDelay(delayMs: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, delayMs));
@@ -323,6 +324,7 @@ export function App() {
     preloadMapImages();
     void restoreSession();
     void window.playerApi.getVersion().then(setCurrentVersion);
+    void checkStartupUpdate();
   }, []);
 
   useEffect(() => {
@@ -1001,6 +1003,19 @@ export function App() {
       message.error(error instanceof Error ? error.message : "检查更新失败");
     } finally {
       setCheckingUpdate(false);
+    }
+  }
+
+  async function checkStartupUpdate() {
+    if (startupUpdateCheckStarted) return;
+    startupUpdateCheckStarted = true;
+    try {
+      const result = await window.playerApi.checkUpdate() as UpdateCheckResult;
+      if (!result.updateAvailable) return;
+      setUpdateResult(result);
+      message.info("发现可用更新");
+    } catch {
+      return;
     }
   }
 
