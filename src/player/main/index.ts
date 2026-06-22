@@ -403,11 +403,12 @@ function doesRealtimeEventNeedEnrich(event: PlayerRealtimeEvent): boolean {
   return event.type === "friend_request_received"
     || event.type === "friend_request_resolved"
     || event.type === "match_room_created"
-    || event.type === "teams_assigned";
+    || event.type === "teams_assigned"
+    || event.type === "match_completed";
 }
 
 function shouldPublishRealtimeEventBeforeEnrich(event: PlayerRealtimeEvent): boolean {
-  return doesRealtimeEventNeedEnrich(event);
+  return event.type !== "match_completed" && doesRealtimeEventNeedEnrich(event);
 }
 
 const gotSingleInstanceLock = app.requestSingleInstanceLock();

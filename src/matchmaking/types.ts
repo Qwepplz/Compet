@@ -39,6 +39,8 @@ export interface MatchSeriesResult {
 export interface MatchPlayerResult {
   steam64: string;
   name: string;
+  kind?: ParticipantKind;
+  avatarUrl?: string;
   team: TeamSide;
   kills: number;
   deaths: number;

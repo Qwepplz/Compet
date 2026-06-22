@@ -97,9 +97,21 @@ function mergeParticipantResult(
 ): MatchPlayerResult {
   const stats = findCompetStats(participant, competBySteam64, competByName)
     ?? (participant.steam64 ? get5BySteam64.get(participant.steam64) : undefined);
+  const humanName = participant.steamPersonaName?.trim()
+    || stats?.name.trim()
+    || participant.displayName.trim()
+    || participant.steam64
+    || "";
+  const botName = stats?.name.trim()
+    || participant.botProfileName?.trim()
+    || participant.displayName.trim()
+    || "";
+  const avatarUrl = participant.kind === "human" ? participant.steamAvatarUrl?.trim() : undefined;
   return {
     steam64: participant.steam64 ?? stats?.steam64 ?? "",
-    name: participant.displayName || participant.botProfileName || stats?.name || "",
+    name: participant.kind === "human" ? humanName : botName,
+    kind: participant.kind,
+    ...(avatarUrl ? { avatarUrl } : {}),
     team,
     kills: stats?.kills ?? 0,
     deaths: stats?.deaths ?? 0,

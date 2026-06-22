@@ -1,6 +1,7 @@
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { Button } from "antd";
 import type { PlayerMatchPlayerResultDto, PlayerMatchResultDto } from "../../../shared/types.js";
+import { SteamAvatar } from "../components/SteamAvatar.js";
 import { formatMapName } from "../mapAssets.js";
 
 interface MatchResultPageProps {
@@ -8,33 +9,36 @@ interface MatchResultPageProps {
   onBackHome: () => void;
 }
 
-function teamName(team: PlayerMatchPlayerResultDto["team"]): string {
-  return team === "teamA" ? "Team A" : "Team B";
-}
-
 function playerName(player: PlayerMatchPlayerResultDto): string {
-  return player.name || player.steam64;
+  return player.name || "玩家";
 }
 
 function formatAdr(damage: number, totalRounds: number): string {
   return totalRounds > 0 ? (damage / totalRounds).toFixed(1) : "0.0";
 }
 
+function playerAdr(player: PlayerMatchPlayerResultDto, totalRounds: number): number {
+  return totalRounds > 0 ? player.damage / totalRounds : 0;
+}
+
+function sortPlayersByAdr(players: PlayerMatchPlayerResultDto[], totalRounds: number): PlayerMatchPlayerResultDto[] {
+  return [...players].sort((left, right) => playerAdr(right, totalRounds) - playerAdr(left, totalRounds));
+}
+
 export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
-  const winnerName = teamName(result.winner);
   const totalRounds = result.team1Score + result.team2Score;
   const teamSections = [
     {
       team: "teamA" as const,
       name: "Team A",
       score: result.team1Score,
-      players: result.players.filter((player) => player.team === "teamA"),
+      players: sortPlayersByAdr(result.players.filter((player) => player.team === "teamA"), totalRounds),
     },
     {
       team: "teamB" as const,
       name: "Team B",
       score: result.team2Score,
-      players: result.players.filter((player) => player.team === "teamB"),
+      players: sortPlayersByAdr(result.players.filter((player) => player.team === "teamB"), totalRounds),
     },
   ];
 
@@ -52,7 +56,6 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
 
       <section className="match-result-meta" aria-label="比赛结果">
         <span>BO1</span>
-        <strong>{winnerName} 胜出</strong>
         <span>{new Date(result.completedAt).toLocaleString("zh-CN", { hour12: false })}</span>
       </section>
 
@@ -81,19 +84,24 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {section.players.map((player) => (
-                    <tr key={player.steam64 || `${player.team}-${player.name}`}>
-                      <td>
-                        <strong>{playerName(player)}</strong>
-                        <span>{player.steam64}</span>
-                      </td>
-                      <td>{player.kills}</td>
-                      <td>{player.deaths}</td>
-                      <td>{player.assists}</td>
-                      <td>{formatAdr(player.damage, totalRounds)}</td>
-                      <td>{player.mvp}</td>
-                    </tr>
-                  ))}
+                  {section.players.map((player) => {
+                    const name = playerName(player);
+                    return (
+                      <tr key={player.steam64 || `${player.team}-${player.name}`}>
+                        <td>
+                          <div className="match-result-player">
+                            <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
+                            <strong>{name}</strong>
+                          </div>
+                        </td>
+                        <td>{player.kills}</td>
+                        <td>{player.deaths}</td>
+                        <td>{player.assists}</td>
+                        <td>{formatAdr(player.damage, totalRounds)}</td>
+                        <td>{player.mvp}</td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

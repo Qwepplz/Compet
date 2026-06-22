@@ -7,6 +7,7 @@ import type {
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
   PlayerMatchParticipantDto,
+  PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
   PlayerMatchTeamDto,
   PlayerPartyDto,
@@ -313,6 +314,8 @@ export class PlayerApiClient {
         const { teamA, teamB } = await this.enrichTeams(event.teamA, event.teamB);
         return { ...event, teamA, teamB };
       }
+      case "match_completed":
+        return event.result ? { ...event, result: await this.enrichMatchResult(event.result) } : event;
       default:
         return event;
     }
@@ -417,6 +420,29 @@ export class PlayerApiClient {
     return {
       teamA: enrichTeam(teamA, profiles),
       teamB: enrichTeam(teamB, profiles),
+    };
+  }
+
+  private async enrichMatchResult(result: PlayerMatchResultDto): Promise<PlayerMatchResultDto> {
+    const steam64s = result.players.flatMap((player) => {
+      const steam64 = player.kind === "human" ? player.steam64.trim() : "";
+      return steam64 ? [steam64] : [];
+    });
+    if (steam64s.length === 0) return result;
+    const profiles = await this.resolveSteamProfiles(steam64s);
+    if (profiles.size === 0) return result;
+    return {
+      ...result,
+      players: result.players.map((player) => {
+        if (player.kind !== "human") return player;
+        const profile = profiles.get(player.steam64.trim());
+        if (!profile) return player;
+        return {
+          ...player,
+          name: profile.personaName,
+          avatarUrl: profile.avatarUrl,
+        };
+      }),
     };
   }
 
