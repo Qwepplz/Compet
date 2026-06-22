@@ -1,4 +1,5 @@
 import type { MatchParticipant, MatchPlan, MatchTeam } from "../matchmaking/types.js";
+import { GET5_MATCH_STATS_PATH_FORMAT } from "./get5MatchResult.js";
 
 export interface Get5BuildInput {
   matchPlan: MatchPlan;
@@ -40,7 +41,12 @@ export function buildGet5Config(input: Get5BuildInput): Get5MatchConfig {
     cvars: {
       mp_autoteambalance: "0",
       mp_limitteams: "0",
+      mp_match_can_clinch: "1",
+      mp_maxrounds: "24",
+      mp_overtime_enable: "1",
+      mp_overtime_maxrounds: "6",
       tv_enable: "1",
+      get5_stats_path_format: GET5_MATCH_STATS_PATH_FORMAT,
       ...buildTeamDisplayCvars(input.matchPlan),
     },
   };

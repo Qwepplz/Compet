@@ -6,6 +6,7 @@ import type { UpdateCheckResult } from "../../../desktop/updateTypes.js";
 import type {
   PlayerFriendListDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchResultDto,
   PlayerMatchParticipantDto,
   PlayerMatchTeamDto,
   PlayerMatchmakingStateDto,
@@ -28,6 +29,7 @@ import {
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
+import { MatchResultPage } from "./pages/MatchResultPage.js";
 import {
   loadDevModeEnabled,
   loadMatchSoundEnabled,
@@ -45,7 +47,7 @@ import {
 
 const matchFoundSoundUrl = new URL("./assets/sounds/faceit_accept_sound_epic.mp3", import.meta.url).href;
 
-type PlayerView = "login" | "change-password" | "home" | "match-room";
+type PlayerView = "login" | "change-password" | "home" | "match-room" | "match-result";
 
 const defaultBaseUrl = "https://127.0.0.1:18443";
 
@@ -281,6 +283,7 @@ export function App() {
   const [friends, setFriends] = useState<PlayerFriendListDto>(emptyFriends);
   const [party, setParty] = useState<PlayerPartyDto | null>(null);
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
+  const [matchResult, setMatchResult] = useState<PlayerMatchResultDto | null>(null);
   const [matchmakingFeedbackPending, setMatchmakingFeedbackPending] = useState(false);
   const [matchSoundEnabled, setMatchSoundEnabled] = useState(() => loadMatchSoundEnabled());
   const [devModeEnabled, setDevModeEnabled] = useState(() => loadDevModeEnabled());
@@ -703,6 +706,7 @@ export function App() {
         }));
         return;
       case "match_room_created":
+        setMatchResult(null);
         playMatchFoundSound(event.matchId);
         setMatchmaking((current) => {
           const nextRooms = upsertRoom(current.rooms, event.room);
@@ -749,7 +753,14 @@ export function App() {
           ...room,
           phase: "completed",
         }), { activate: false });
-        void message.success("游戏服务器已关闭，本场比赛已结束");
+        if (event.result) {
+          setMatchResult(event.result);
+          void message.success("比赛已结束");
+          setActiveView("match-result");
+          return;
+        }
+        setMatchResult(null);
+        void message.success("比赛已结束");
         setActiveView("home");
         return;
       case "match_failed":
@@ -757,7 +768,8 @@ export function App() {
           ...room,
           phase: "failed",
         }), { activate: false });
-        void message.error(event.error ? `比赛已结束：${event.error}` : "比赛已结束，服务器已关闭");
+        setMatchResult(null);
+        void message.error("比赛异常结束");
         setActiveView("home");
         return;
     }
@@ -846,6 +858,7 @@ export function App() {
       const restored = await window.playerApi.restoreSession();
       if (!restored) {
         await loadSavedLogin();
+        setMatchResult(null);
         setActiveView("login");
         return;
       }
@@ -858,6 +871,7 @@ export function App() {
       setFriends(emptyFriends);
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
+      setMatchResult(null);
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
@@ -865,6 +879,7 @@ export function App() {
     } catch (error) {
       message.error(error instanceof Error ? error.message : "恢复会话失败");
       await loadSavedLogin();
+      setMatchResult(null);
       setActiveView("login");
     } finally {
       setLoading(false);
@@ -902,6 +917,7 @@ export function App() {
         setFriends(emptyFriends);
         setParty(null);
         setMatchmaking(emptyMatchmaking);
+        setMatchResult(null);
         setRealtimeStatus(emptyRealtimeStatus);
         setStale(false);
         setActiveView("change-password");
@@ -909,6 +925,7 @@ export function App() {
       }
       const restored = await window.playerApi.restoreSession();
       if (!restored) {
+        setMatchResult(null);
         setActiveView("login");
         return;
       }
@@ -920,6 +937,7 @@ export function App() {
       setFriends(emptyFriends);
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
+      setMatchResult(null);
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
@@ -945,6 +963,7 @@ export function App() {
       if (options.refreshSession) {
         const restored = await window.playerApi.restoreSession();
         if (!restored) {
+          setMatchResult(null);
           setActiveView("login");
           return;
         }
@@ -956,6 +975,7 @@ export function App() {
         setFriends(emptyFriends);
         setParty(restored.matchmaking.party ?? null);
         setMatchmaking(restored.matchmaking);
+        setMatchResult(null);
         setRealtimeStatus(emptyRealtimeStatus);
         setStale(false);
         setActiveView(viewFromSession(restored.account, restored.matchmaking));
@@ -983,6 +1003,7 @@ export function App() {
       setFriends(emptyFriends);
       setParty(null);
       setMatchmaking(emptyMatchmaking);
+      setMatchResult(null);
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setCurrentPassword("");
@@ -1216,6 +1237,9 @@ export function App() {
   }
 
   function renderAuthenticatedView() {
+    if (activeView === "match-result" && matchResult) {
+      return <MatchResultPage result={matchResult} onBackHome={() => setActiveView("home")} />;
+    }
     if (activeView === "match-room") {
       return (
         <MatchRoomPage

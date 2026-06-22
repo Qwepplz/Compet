@@ -7,7 +7,9 @@ import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { writeJsonFileAtomic } from "../storage/jsonFile.js";
 import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
+import { competMatchStatsPath, readCompetMatchStats, type CompetMatchPlayerStats } from "./competMatchStats.js";
 import { buildGet5Config } from "./get5ConfigBuilder.js";
+import { get5MatchStatsPath, readGet5MatchResult, type Get5MatchResultClassification } from "./get5MatchResult.js";
 import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
 import { installRunCsgoAssets } from "./runCsgoAssets.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
@@ -29,8 +31,14 @@ export interface MatchExecutorOptions {
   events?: Pick<RealtimeEventBus, "publish">;
   config: GameServerConfig;
   mapPool?: string[];
-  onServerExit?: (matchId: string, exitInfo: GameServerExitInfo) => Promise<void> | void;
+  onServerExit?: (matchId: string, report: MatchServerExitReport) => Promise<void> | void;
   emptyServerWatchdog?: EmptyServerWatchdogConfig;
+}
+
+export interface MatchServerExitReport {
+  exitInfo: GameServerExitInfo;
+  get5Result: Get5MatchResultClassification;
+  competStats: CompetMatchPlayerStats[];
 }
 
 const ACTIVE_MATCH_CFG_PATH = "compet/active_match.cfg";
@@ -88,6 +96,8 @@ export class MatchExecutor {
   private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {
     await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
     await installRunCsgoAssets(this.options.config.serverRoot);
+    await unlinkIfExists(get5MatchStatsPath(this.options.config.serverRoot, safeMatchId));
+    await unlinkIfExists(competMatchStatsPath(this.options.config.serverRoot, safeMatchId));
     const get5Config = buildGet5Config({
       matchPlan,
       mapPool: this.options.mapPool ?? [matchPlan.map],
@@ -162,7 +172,12 @@ export class MatchExecutor {
 
   private publishServerExit(matchId: string, exitInfo: GameServerExitInfo): void {
     setTimeout(() => {
-      void Promise.resolve(this.options.onServerExit?.(matchId, exitInfo)).catch(() => undefined);
+      void Promise.all([
+        readGet5MatchResult(this.options.config.serverRoot, matchId, new Date().toISOString()),
+        readCompetMatchStats(this.options.config.serverRoot, matchId),
+      ])
+        .then(([get5Result, competStats]) => this.options.onServerExit?.(matchId, { exitInfo, get5Result, competStats }))
+        .catch(() => undefined);
     }, 0);
   }
 

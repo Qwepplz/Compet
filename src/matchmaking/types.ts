@@ -29,7 +29,22 @@ export interface MatchSeriesResult {
   winner: TeamSide;
   team1SeriesScore: number;
   team2SeriesScore: number;
+  mapName: string;
+  team1Score: number;
+  team2Score: number;
+  players: MatchPlayerResult[];
   completedAt: string;
+}
+
+export interface MatchPlayerResult {
+  steam64: string;
+  name: string;
+  team: TeamSide;
+  kills: number;
+  deaths: number;
+  assists: number;
+  damage: number;
+  mvp: number;
 }
 export interface MatchPlan {
   id: string;

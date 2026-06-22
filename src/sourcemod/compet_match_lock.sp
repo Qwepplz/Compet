@@ -6,6 +6,8 @@
 
 #define COMPET_STATUS_BUFFER_SIZE 8192
 #define COMPET_STATUS_INTERVAL 30.0
+#define COMPET_AUTH_SIZE 32
+#define COMPET_PLAYER_NAME_SIZE 128
 
 public Plugin myinfo = {
   name = "Compet Match Lock",
@@ -18,9 +20,17 @@ public Plugin myinfo = {
 StringMap g_PlayerTeams;
 bool g_LockEnabled = false;
 bool g_Get5Started = false;
+bool g_StatsActive = false;
 char g_MatchId[128] = "";
 Handle g_EnforceTimer = null;
 Handle g_StatusTimer = null;
+int g_PlayerKills[MAXPLAYERS + 1];
+int g_PlayerDeaths[MAXPLAYERS + 1];
+int g_PlayerAssists[MAXPLAYERS + 1];
+int g_PlayerDamage[MAXPLAYERS + 1];
+int g_PlayerMvp[MAXPLAYERS + 1];
+char g_PlayerNames[MAXPLAYERS + 1][COMPET_PLAYER_NAME_SIZE];
+char g_PlayerSteam64[MAXPLAYERS + 1][COMPET_AUTH_SIZE];
 
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
@@ -29,16 +39,25 @@ public void OnPluginStart() {
   RegServerCmd("compet_lock_enable", Command_EnableLock);
   AddCommandListener(Command_JoinTeam, "jointeam");
   AddCommandListener(Command_JoinTeam, "joingame");
+  HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
+  HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
+  HookEvent("round_mvp", Event_RoundMvp, EventHookMode_Post);
   PrintToServer("[Compet] Match lock plugin loaded; waiting for compet_lock_reset.");
 }
 
 public void OnPluginEnd() {
+  WriteMatchStats();
   StopEnforceTimer();
   StopStatusTimer();
 }
 
 public void OnMapEnd() {
+  WriteMatchStats();
   g_EnforceTimer = null;
+}
+
+public void OnClientPutInServer(int client) {
+  CaptureClientIdentity(client);
 }
 
 public void OnClientPostAdminCheck(int client) {
@@ -52,12 +71,14 @@ public Action Command_ResetLock(int args) {
   g_PlayerTeams.Clear();
   g_LockEnabled = false;
   g_Get5Started = false;
+  g_StatsActive = false;
   StopEnforceTimer();
   StopStatusTimer();
   g_MatchId[0] = '\0';
   if (args >= 1) {
     GetCmdArg(1, g_MatchId, sizeof(g_MatchId));
   }
+  ResetMatchStats();
   ClearShutdownFlag();
   StartStatusTimer();
   return Plugin_Handled;
@@ -109,6 +130,8 @@ public void Get5_OnKnifeRoundStarted(Handle event) {
 
 public void Get5_OnGoingLive(Handle event) {
   MarkGet5Started("get5 going live");
+  g_StatsActive = g_MatchId[0] != '\0';
+  WriteMatchStats();
 }
 
 public Action Command_JoinTeam(int client, const char[] command, int argc) {
@@ -151,6 +174,72 @@ public Action Timer_ApplyClientLock(Handle timer, int userId) {
     ApplyClientLock(client, false, CS_TEAM_NONE);
   }
   return Plugin_Stop;
+}
+
+public void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast) {
+  if (!ShouldRecordStats()) {
+    return;
+  }
+
+  int attacker = GetClientOfUserId(event.GetInt("attacker"));
+  int victim = GetClientOfUserId(event.GetInt("userid"));
+  if (!IsStatsClient(attacker) || !IsStatsClient(victim) || attacker == victim || !AreOpposingPlayers(attacker, victim)) {
+    return;
+  }
+
+  int damage = event.GetInt("dmg_health");
+  if (damage <= 0) {
+    return;
+  }
+
+  CaptureClientIdentity(attacker);
+  g_PlayerDamage[attacker] += damage;
+  WriteMatchStats();
+}
+
+public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast) {
+  if (!ShouldRecordStats()) {
+    return;
+  }
+
+  int victim = GetClientOfUserId(event.GetInt("userid"));
+  int attacker = GetClientOfUserId(event.GetInt("attacker"));
+  int assister = GetClientOfUserId(event.GetInt("assister"));
+  bool changed = false;
+
+  if (IsStatsClient(victim)) {
+    CaptureClientIdentity(victim);
+    g_PlayerDeaths[victim]++;
+    changed = true;
+  }
+  if (IsStatsClient(attacker) && IsStatsClient(victim) && attacker != victim && AreOpposingPlayers(attacker, victim)) {
+    CaptureClientIdentity(attacker);
+    g_PlayerKills[attacker]++;
+    changed = true;
+  }
+  if (IsStatsClient(assister) && IsStatsClient(victim) && assister != victim && assister != attacker && AreOpposingPlayers(assister, victim)) {
+    CaptureClientIdentity(assister);
+    g_PlayerAssists[assister]++;
+    changed = true;
+  }
+  if (changed) {
+    WriteMatchStats();
+  }
+}
+
+public void Event_RoundMvp(Event event, const char[] name, bool dontBroadcast) {
+  if (!ShouldRecordStats()) {
+    return;
+  }
+
+  int client = GetClientOfUserId(event.GetInt("userid"));
+  if (!IsStatsClient(client)) {
+    return;
+  }
+
+  CaptureClientIdentity(client);
+  g_PlayerMvp[client]++;
+  WriteMatchStats();
 }
 
 bool ApplyClientLock(int client, bool fromCommand, int requestedTeam) {
@@ -225,6 +314,166 @@ void StopStatusTimer() {
   }
   delete g_StatusTimer;
   g_StatusTimer = null;
+}
+
+bool ShouldRecordStats() {
+  return g_StatsActive && g_MatchId[0] != '\0';
+}
+
+void ResetMatchStats() {
+  g_StatsActive = false;
+  for (int client = 1; client <= MaxClients; client++) {
+    g_PlayerKills[client] = 0;
+    g_PlayerDeaths[client] = 0;
+    g_PlayerAssists[client] = 0;
+    g_PlayerDamage[client] = 0;
+    g_PlayerMvp[client] = 0;
+    g_PlayerNames[client][0] = '\0';
+    g_PlayerSteam64[client][0] = '\0';
+  }
+  DeleteMatchStatsFile();
+}
+
+void CaptureClientIdentity(int client) {
+  if (!IsStatsClient(client)) {
+    return;
+  }
+
+  GetClientName(client, g_PlayerNames[client], sizeof(g_PlayerNames[]));
+  g_PlayerSteam64[client][0] = '\0';
+
+  char auth[COMPET_AUTH_SIZE];
+  auth[0] = '\0';
+  if (GetClientAuthId(client, AuthId_SteamID64, auth, sizeof(auth), false) && !StrEqual(auth, "BOT", false)) {
+    strcopy(g_PlayerSteam64[client], sizeof(g_PlayerSteam64[]), auth);
+  }
+}
+
+bool IsStatsClient(int client) {
+  return client > 0
+    && client <= MaxClients
+    && IsClientInGame(client)
+    && !IsClientSourceTV(client)
+    && !IsClientReplay(client);
+}
+
+bool AreOpposingPlayers(int first, int second) {
+  int firstTeam = GetClientTeam(first);
+  int secondTeam = GetClientTeam(second);
+  return IsPlayingTeam(firstTeam) && IsPlayingTeam(secondTeam) && firstTeam != secondTeam;
+}
+
+bool HasStoredMatchStats(int client) {
+  return g_PlayerNames[client][0] != '\0'
+    || g_PlayerSteam64[client][0] != '\0'
+    || g_PlayerKills[client] != 0
+    || g_PlayerDeaths[client] != 0
+    || g_PlayerAssists[client] != 0
+    || g_PlayerDamage[client] != 0
+    || g_PlayerMvp[client] != 0;
+}
+
+void BuildMatchStatsPath(char[] path, int maxlen) {
+  char relative[PLATFORM_MAX_PATH];
+  Format(relative, sizeof(relative), "data/compet/compet_matchstats_%s.json", g_MatchId);
+  BuildPath(Path_SM, path, maxlen, relative);
+}
+
+void DeleteMatchStatsFile() {
+  if (g_MatchId[0] == '\0') {
+    return;
+  }
+
+  char path[PLATFORM_MAX_PATH];
+  BuildMatchStatsPath(path, sizeof(path));
+  if (FileExists(path)) {
+    DeleteFile(path);
+  }
+}
+
+void WriteMatchStats() {
+  if (g_MatchId[0] == '\0' || !EnsureCompetDataDir()) {
+    return;
+  }
+
+  char path[PLATFORM_MAX_PATH];
+  BuildMatchStatsPath(path, sizeof(path));
+
+  File file = OpenFile(path, "w");
+  if (file == null) {
+    PrintToServer("[Compet] Failed to open match stats file: %s", path);
+    return;
+  }
+
+  char escapedMatchId[256];
+  JsonEscape(g_MatchId, escapedMatchId, sizeof(escapedMatchId));
+
+  WriteFileLine(file, "{");
+  WriteFileLine(file, "  \"matchId\": \"%s\",", escapedMatchId);
+  WriteFileLine(file, "  \"generatedAtUnix\": %d,", GetTime());
+  WriteFileLine(file, "  \"players\": [");
+
+  bool wroteAny = false;
+  for (int client = 1; client <= MaxClients; client++) {
+    if (!HasStoredMatchStats(client)) {
+      continue;
+    }
+
+    char escapedName[256];
+    char escapedSteam64[64];
+    JsonEscape(g_PlayerNames[client], escapedName, sizeof(escapedName));
+    JsonEscape(g_PlayerSteam64[client], escapedSteam64, sizeof(escapedSteam64));
+
+    if (wroteAny) {
+      WriteFileLine(
+        file,
+        "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d}",
+        escapedName,
+        escapedSteam64,
+        g_PlayerKills[client],
+        g_PlayerDeaths[client],
+        g_PlayerAssists[client],
+        g_PlayerDamage[client],
+        g_PlayerMvp[client]
+      );
+    } else {
+      WriteFileLine(
+        file,
+        "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d}",
+        escapedName,
+        escapedSteam64,
+        g_PlayerKills[client],
+        g_PlayerDeaths[client],
+        g_PlayerAssists[client],
+        g_PlayerDamage[client],
+        g_PlayerMvp[client]
+      );
+      wroteAny = true;
+    }
+  }
+
+  WriteFileLine(file, "  ]");
+  WriteFileLine(file, "}");
+  FlushFile(file);
+  delete file;
+}
+
+void JsonEscape(const char[] input, char[] output, int maxlen) {
+  int written = 0;
+  for (int index = 0; input[index] != '\0' && written < maxlen - 1; index++) {
+    if (input[index] == '"' || input[index] == '\\') {
+      if (written >= maxlen - 2) {
+        break;
+      }
+      output[written++] = '\\';
+      output[written++] = input[index];
+    } else if (input[index] == '\n' || input[index] == '\r' || input[index] == '\t') {
+      output[written++] = ' ';
+    } else {
+      output[written++] = input[index];
+    }
+  }
+  output[written] = '\0';
 }
 
 void WriteStatusFiles() {

@@ -3,12 +3,13 @@ import type { AccountService } from "../accounts/accountService.js";
 import type { AccountRecord } from "../accounts/accountTypes.js";
 import type { BotCatalog } from "../bots/botCatalog.js";
 import type { FriendListDto } from "../friends/friendService.js";
+import type { CompetMatchPlayerStats } from "../game/competMatchStats.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
-import type { MatchConnectInfo } from "../game/matchExecutor.js";
+import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
-import type { MatchParticipant, MatchPlan } from "./types.js";
+import type { MatchParticipant, MatchPlan, MatchPlayerResult, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
   type MatchMapSelectionState,
@@ -29,6 +30,66 @@ const READY_TIMEOUT_MS = 45_000;
 
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 
+function mergeMatchResultPlayers(
+  room: MatchRoomRecord,
+  get5Players: MatchPlayerResult[],
+  competStats: CompetMatchPlayerStats[],
+): MatchPlayerResult[] {
+  const competBySteam64 = new Map(competStats.filter((stats) => stats.steam64).map((stats) => [stats.steam64, stats]));
+  const competByName = new Map<string, CompetMatchPlayerStats>();
+  for (const stats of competStats) {
+    const name = normalizePlayerName(stats.name);
+    if (name && !competByName.has(name)) {
+      competByName.set(name, stats);
+    }
+  }
+  const get5BySteam64 = new Map(get5Players.filter((player) => player.steam64).map((player) => [player.steam64, player]));
+
+  return [
+    ...room.teamA.participants.map((participant) => mergeParticipantResult(participant, "teamA", competBySteam64, competByName, get5BySteam64)),
+    ...room.teamB.participants.map((participant) => mergeParticipantResult(participant, "teamB", competBySteam64, competByName, get5BySteam64)),
+  ];
+}
+
+function mergeParticipantResult(
+  participant: MatchParticipant,
+  team: TeamSide,
+  competBySteam64: Map<string, CompetMatchPlayerStats>,
+  competByName: Map<string, CompetMatchPlayerStats>,
+  get5BySteam64: Map<string, MatchPlayerResult>,
+): MatchPlayerResult {
+  const stats = findCompetStats(participant, competBySteam64, competByName)
+    ?? (participant.steam64 ? get5BySteam64.get(participant.steam64) : undefined);
+  return {
+    steam64: participant.steam64 ?? stats?.steam64 ?? "",
+    name: participant.displayName || participant.botProfileName || stats?.name || "",
+    team,
+    kills: stats?.kills ?? 0,
+    deaths: stats?.deaths ?? 0,
+    assists: stats?.assists ?? 0,
+    damage: stats?.damage ?? 0,
+    mvp: stats?.mvp ?? 0,
+  };
+}
+
+function findCompetStats(
+  participant: MatchParticipant,
+  competBySteam64: Map<string, CompetMatchPlayerStats>,
+  competByName: Map<string, CompetMatchPlayerStats>,
+): CompetMatchPlayerStats | undefined {
+  if (participant.steam64) {
+    const bySteam64 = competBySteam64.get(participant.steam64);
+    if (bySteam64) return bySteam64;
+  }
+  if (participant.kind !== "bot") return undefined;
+  return competByName.get(normalizePlayerName(participant.botProfileName))
+    ?? competByName.get(normalizePlayerName(participant.displayName));
+}
+
+function normalizePlayerName(value: string | undefined): string {
+  return value?.trim().toLowerCase() ?? "";
+}
+
 function isSoloOpenParty(party: PartyRecord): boolean {
   return (party.status ?? "open") === "open" && party.memberAccountIds.length === 1;
 }
@@ -48,7 +109,7 @@ export interface MatchmakingServiceDeps {
   friends?: { listFriends(accountId: string): Promise<FriendListDto> };
   botCatalog: BotCatalog;
   executor?: MatchExecutorPort;
-  records?: Pick<MatchRecordStore, "appendEvent" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveStatus">;
+  records?: Pick<MatchRecordStore, "appendEvent" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveResult" | "saveStatus">;
   events?: { publish(event: RealtimeEvent): void };
   mapPool?: string[];
   now?: () => string;
@@ -567,19 +628,39 @@ export class MatchmakingService {
     return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms) };
   }
 
-  completeMatchFromServerExit(matchId: string, exitInfo: GameServerExitInfo): Promise<PublicMatchRoomRecord | undefined> {
+  completeMatchFromServerExit(matchId: string, report: MatchServerExitReport): Promise<PublicMatchRoomRecord | undefined> {
     return this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === matchId);
       if (!room) return undefined;
       if (!isServerManagedPhase(room.phase)) return this.toPublicRoom(room);
 
-      const completedAt = this.now();
-      const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: completedAt };
+      if (report.get5Result.status !== "normal") {
+        const failedAt = this.now();
+        const failed: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
+        await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? failed : candidate)));
+        await this.deps.records?.saveStatus(matchId, {
+          phase: "failed",
+          failedAt,
+          error: "abnormal_match_end",
+          get5Reason: report.get5Result.reason,
+          serverExit: report.exitInfo,
+        });
+        await this.unlockPartyForRoom(failed, failedAt);
+        await this.emit({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: "比赛异常结束" }, matchId);
+        return this.toPublicRoom(failed);
+      }
+
+      const result = {
+        ...report.get5Result.result,
+        players: mergeMatchResultPlayers(room, report.get5Result.result.players, report.competStats),
+      };
+      const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: result.completedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));
-      await this.deps.records?.saveStatus(matchId, { phase: "completed", completedAt, serverExit: exitInfo });
-      await this.unlockPartyForRoom(completed, completedAt);
-      await this.emit({ type: "match_completed", matchId, accountIds: this.roomAudience(completed) }, matchId);
+      await this.deps.records?.saveResult(matchId, result);
+      await this.deps.records?.saveStatus(matchId, { phase: "completed", completedAt: result.completedAt, result, serverExit: report.exitInfo });
+      await this.unlockPartyForRoom(completed, result.completedAt);
+      await this.emit({ type: "match_completed", matchId, accountIds: this.roomAudience(completed), result }, matchId);
       return this.toPublicRoom(completed);
     });
   }
@@ -590,19 +671,19 @@ export class MatchmakingService {
       const targets = rooms.filter((room) => isServerManagedPhase(room.phase));
       if (targets.length === 0) return [];
 
-      const completedAt = this.now();
-      const completedById = new Map(
-        targets.map((room) => [room.id, { ...room, phase: "completed" as const, terminalStateAt: completedAt }]),
+      const failedAt = this.now();
+      const failedById = new Map(
+        targets.map((room) => [room.id, { ...room, phase: "failed" as const, terminalStateAt: failedAt }]),
       );
-      await this.deps.store.saveRooms(rooms.map((room) => completedById.get(room.id) ?? room));
+      await this.deps.store.saveRooms(rooms.map((room) => failedById.get(room.id) ?? room));
 
-      for (const completed of completedById.values()) {
-        await this.deps.records?.saveStatus(completed.id, { phase: "completed", completedAt, serverExit: exitInfo });
-        await this.unlockPartyForRoom(completed, completedAt);
-        await this.emit({ type: "match_completed", matchId: completed.id, accountIds: this.roomAudience(completed) }, completed.id);
+      for (const failed of failedById.values()) {
+        await this.deps.records?.saveStatus(failed.id, { phase: "failed", failedAt, error: "source_server_unavailable", serverExit: exitInfo });
+        await this.unlockPartyForRoom(failed, failedAt);
+        await this.emit({ type: "match_failed", matchId: failed.id, accountIds: this.roomAudience(failed), error: "比赛异常结束" }, failed.id);
       }
 
-      return [...completedById.values()].map((room) => this.toPublicRoom(room));
+      return [...failedById.values()].map((room) => this.toPublicRoom(room));
     });
   }
 

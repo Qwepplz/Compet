@@ -7,7 +7,7 @@ import type {
 import type { MatchConnectInfo } from "../../game/matchExecutor.js";
 import type { PublicMatchRoomRecord, PartyInvitationDto } from "../../matchmaking/matchmakingService.js";
 import type { MatchMapSelectionState, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
-import type { MatchParticipant, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
+import type { MatchParticipant, MatchPlayerResult, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
 
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
 export type PlayerRealtimeSnapshotReason = "manual" | "reconnected";
@@ -26,6 +26,8 @@ export type PlayerMatchTeamDto = MatchTeam;
 export type PlayerConnectDto = MatchConnectInfo;
 export type PlayerMapSelectionStateDto = MatchMapSelectionState;
 export type PlayerLiveMatchStateDto = PublicMatchRoomRecord;
+export type PlayerMatchResultDto = MatchSeriesResult;
+export type PlayerMatchPlayerResultDto = MatchPlayerResult;
 
 export interface PlayerRealtimeStatusDto {
   connection: PlayerRealtimeConnection;

@@ -72,8 +72,8 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     }),
     records,
     config: config.gameServer,
-    onServerExit: (matchId, exitInfo) => {
-      void matchmaking?.completeMatchFromServerExit(matchId, exitInfo).catch((error) => {
+    onServerExit: (matchId, report) => {
+      void matchmaking?.completeMatchFromServerExit(matchId, report).catch((error) => {
         process.stderr.write(`Failed to complete match after srcds exit: ${error instanceof Error ? error.message : String(error)}\n`);
       });
     },
