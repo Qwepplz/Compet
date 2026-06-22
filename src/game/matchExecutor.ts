@@ -96,6 +96,7 @@ export class MatchExecutor {
   private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {
     await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
     await installRunCsgoAssets(this.options.config.serverRoot);
+    await cleanupGet5MatchStatsFiles(this.options.config.serverRoot);
     await unlinkIfExists(get5MatchStatsPath(this.options.config.serverRoot, safeMatchId));
     await unlinkIfExists(competMatchStatsPath(this.options.config.serverRoot, safeMatchId));
     const get5Config = buildGet5Config({
@@ -283,6 +284,21 @@ async function cleanupLegacyManagedMatchFiles(serverRoot: string): Promise<void>
     cleanupLegacyGet5Configs(path.join(serverRoot, "csgo", "cfg", "get5")),
     cleanupLegacyCompetCfgs(path.join(serverRoot, "csgo", "cfg", "compet")),
   ]);
+}
+
+async function cleanupGet5MatchStatsFiles(serverRoot: string): Promise<void> {
+  const csgoRoot = path.join(serverRoot, "csgo");
+  let entries: Dirent[];
+  try {
+    entries = await readdir(csgoRoot, { withFileTypes: true });
+  } catch (error) {
+    if (isNotFound(error)) return;
+    throw error;
+  }
+
+  await Promise.all(entries
+    .filter((entry) => entry.isFile() && /^get5_matchstats_.*\.cfg$/i.test(entry.name))
+    .map((entry) => unlinkIfExists(path.join(csgoRoot, entry.name))));
 }
 
 async function cleanupLegacyGet5Configs(get5Dir: string): Promise<void> {

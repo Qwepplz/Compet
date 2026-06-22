@@ -9,7 +9,7 @@ import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecu
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
-import type { MatchParticipant, MatchPlan, MatchPlayerResult, TeamSide } from "./types.js";
+import type { MatchParticipant, MatchPlan, MatchPlayerResult, MatchSeriesResult, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
   type MatchMapSelectionState,
@@ -49,6 +49,43 @@ function mergeMatchResultPlayers(
     ...room.teamA.participants.map((participant) => mergeParticipantResult(participant, "teamA", competBySteam64, competByName, get5BySteam64)),
     ...room.teamB.participants.map((participant) => mergeParticipantResult(participant, "teamB", competBySteam64, competByName, get5BySteam64)),
   ];
+}
+
+function alignGet5ResultToRoom(room: MatchRoomRecord, result: MatchSeriesResult): MatchSeriesResult {
+  if (!shouldSwapGet5Teams(room, result.players)) return result;
+  return {
+    ...result,
+    winner: oppositeTeam(result.winner),
+    team1SeriesScore: result.team2SeriesScore,
+    team2SeriesScore: result.team1SeriesScore,
+    team1Score: result.team2Score,
+    team2Score: result.team1Score,
+    players: result.players.map((player) => ({ ...player, team: oppositeTeam(player.team) })),
+  };
+}
+
+function shouldSwapGet5Teams(room: MatchRoomRecord, players: MatchPlayerResult[]): boolean {
+  const roomTeamA = new Set(room.teamA.participants.map((participant) => participant.steam64).filter(Boolean));
+  const roomTeamB = new Set(room.teamB.participants.map((participant) => participant.steam64).filter(Boolean));
+  let direct = 0;
+  let swapped = 0;
+
+  for (const player of players) {
+    if (!player.steam64) continue;
+    if (player.team === "teamA") {
+      if (roomTeamA.has(player.steam64)) direct++;
+      if (roomTeamB.has(player.steam64)) swapped++;
+    } else {
+      if (roomTeamB.has(player.steam64)) direct++;
+      if (roomTeamA.has(player.steam64)) swapped++;
+    }
+  }
+
+  return swapped > direct;
+}
+
+function oppositeTeam(team: TeamSide): TeamSide {
+  return team === "teamA" ? "teamB" : "teamA";
 }
 
 function mergeParticipantResult(
@@ -651,9 +688,10 @@ export class MatchmakingService {
         return this.toPublicRoom(failed);
       }
 
+      const alignedGet5Result = alignGet5ResultToRoom(room, report.get5Result.result);
       const result = {
-        ...report.get5Result.result,
-        players: mergeMatchResultPlayers(room, report.get5Result.result.players, report.competStats),
+        ...alignedGet5Result,
+        players: mergeMatchResultPlayers(room, alignedGet5Result.players, report.competStats),
       };
       const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: result.completedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));

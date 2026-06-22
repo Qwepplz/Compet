@@ -22,12 +22,43 @@ export async function readGet5MatchResult(
   matchId: string,
   completedAt: string,
 ): Promise<Get5MatchResultClassification> {
-  try {
-    const raw = await readFile(get5MatchStatsPath(serverRoot, matchId), "utf8");
-    return classifyGet5MatchStats(JSON.parse(raw) as unknown, completedAt);
-  } catch {
-    return { status: "abnormal", reason: "missing_get5_stats" };
+  const candidates = [
+    get5MatchStatsPath(serverRoot, matchId),
+    path.join(serverRoot, "csgo", `get5_matchstats_${matchId}.cfg`),
+    path.join(serverRoot, "csgo", "get5_matchstats_manual.cfg"),
+  ];
+  let sawStatsFile = false;
+
+  for (const candidate of candidates) {
+    const raw = await readStatsFile(candidate);
+    if (raw === null) continue;
+    sawStatsFile = true;
+    const parsed = parseStatsFile(candidate, raw);
+    if (parsed !== null) {
+      return classifyGet5MatchStats(parsed, completedAt);
+    }
   }
+
+  return { status: "abnormal", reason: sawStatsFile ? "invalid_get5_stats" : "missing_get5_stats" };
+}
+
+async function readStatsFile(filePath: string): Promise<string | null> {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return null;
+  }
+}
+
+function parseStatsFile(filePath: string, raw: string): unknown | null {
+  if (filePath.endsWith(".json")) {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return null;
+    }
+  }
+  return parseKeyValuesStats(raw);
 }
 
 export function classifyGet5MatchStats(stats: unknown, completedAt: string): Get5MatchResultClassification {
@@ -78,6 +109,74 @@ function findFinalMap(stats: Record<string, unknown>): Record<string, unknown> |
   return finalMap;
 }
 
+function parseKeyValuesStats(raw: string): unknown | null {
+  const tokens = tokenizeKeyValues(raw);
+  if (tokens.length < 3) return null;
+  let index = 0;
+  const rootKey = tokens[index++];
+  if (typeof rootKey !== "string" || tokens[index++] !== "{") return null;
+  const root = parseKeyValuesObject(tokens, index);
+  if (!root || tokens[root.nextIndex] !== undefined) return null;
+  return rootKey === "Stats" ? root.value : { [rootKey]: root.value };
+}
+
+function parseKeyValuesObject(tokens: string[], startIndex: number): { value: Record<string, unknown>; nextIndex: number } | null {
+  const value: Record<string, unknown> = {};
+  let index = startIndex;
+  while (index < tokens.length) {
+    const key = tokens[index++];
+    if (key === "}") {
+      return { value, nextIndex: index };
+    }
+    if (!key || key === "{") return null;
+    if (tokens[index] === "{") {
+      index++;
+      const child = parseKeyValuesObject(tokens, index);
+      if (!child) return null;
+      value[key] = child.value;
+      index = child.nextIndex;
+    } else {
+      const scalar = tokens[index++];
+      if (scalar === undefined || scalar === "}") return null;
+      value[key] = scalar;
+    }
+  }
+  return null;
+}
+
+function tokenizeKeyValues(raw: string): string[] {
+  const tokens: string[] = [];
+  for (let index = 0; index < raw.length;) {
+    const char = raw[index];
+    if (char === undefined || /\s/.test(char)) {
+      index++;
+      continue;
+    }
+    if (char === "{" || char === "}") {
+      tokens.push(char);
+      index++;
+      continue;
+    }
+    if (char !== "\"") return [];
+    let token = "";
+    index++;
+    while (index < raw.length) {
+      const current = raw[index++];
+      if (current === undefined) return [];
+      if (current === "\\") {
+        const escaped = raw[index++];
+        if (escaped === undefined) return [];
+        token += escaped;
+        continue;
+      }
+      if (current === "\"") break;
+      token += current;
+    }
+    tokens.push(token);
+  }
+  return tokens;
+}
+
 function isValidMr12FinalScore(team1Score: number, team2Score: number, winner: TeamSide): boolean {
   if (!Number.isInteger(team1Score) || !Number.isInteger(team2Score) || team1Score === team2Score) return false;
   const winnerScore = winner === "teamA" ? team1Score : team2Score;
@@ -120,5 +219,10 @@ function stringValue(value: unknown): string {
 }
 
 function numberValue(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) ? value : 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
