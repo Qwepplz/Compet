@@ -83,6 +83,22 @@ export class FriendService {
     });
   }
 
+  removeFriend(accountId: string, friendshipId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      await this.requireEnabledAccount(accountId);
+      const friendships = await this.deps.store.listFriendships();
+      const friendship = friendships.find((record) => record.id === friendshipId);
+      if (!friendship) throw new Error(`friendship not found: ${friendshipId}`);
+      if (friendship.accountAId !== accountId && friendship.accountBId !== accountId) {
+        throw new Error("friendship does not belong to account");
+      }
+
+      await this.deps.store.saveFriendships(friendships.filter((record) => record.id !== friendshipId));
+      this.publish({ type: "friend_list_refresh", accountId: friendship.accountAId });
+      this.publish({ type: "friend_list_refresh", accountId: friendship.accountBId });
+    });
+  }
+
   sendRequest(fromAccountId: string, toAccountId: string): Promise<FriendRequestDto> {
     return this.enqueueMutation(async () => {
       const fromAccount = await this.requireEnabledAccount(fromAccountId);

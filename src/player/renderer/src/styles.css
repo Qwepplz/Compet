@@ -1275,6 +1275,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   font-size: 18px;
 }
 
+.player-social-avatar--online {
+  box-shadow: 0 0 0 2px #20c76a, 0 0 10px rgba(32, 199, 106, 0.42);
+}
+
 .player-social-row-main {
   display: flex;
   flex-wrap: wrap;

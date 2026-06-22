@@ -41,6 +41,7 @@ export const playerApi = {
   sendFriendRequest: (accountId: string): Promise<PlayerFriendRequestDto> => invoke("friends:request", accountId),
   acceptFriendRequest: (requestId: string): Promise<PlayerFriendListDto> => invoke("friends:acceptRequest", requestId),
   declineFriendRequest: (requestId: string): Promise<void> => invoke("friends:declineRequest", requestId),
+  removeFriend: (friendshipId: string): Promise<void> => invoke("friends:remove", friendshipId),
   getParty: (): Promise<PlayerPartyDto | null> => invoke("party:get"),
   createParty: (): Promise<PlayerPartyDto> => invoke("party:create"),
   inviteToParty: (accountId: string): Promise<PlayerPartyInvitationDto> => invoke("party:invite", accountId),

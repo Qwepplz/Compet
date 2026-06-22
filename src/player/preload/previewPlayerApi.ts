@@ -186,6 +186,7 @@ export function createPreviewPlayerApi() {
     }),
     acceptFriendRequest: async (): Promise<PlayerFriendListDto> => previewFriends,
     declineFriendRequest: async (): Promise<void> => undefined,
+    removeFriend: async (): Promise<void> => undefined,
     getParty: async (): Promise<PlayerPartyDto | null> => party,
     createParty: async (): Promise<PlayerPartyDto> => {
       const next = ensureParty();

@@ -2,6 +2,7 @@ export type RealtimeCommand =
   | { type: "command"; commandId: string; name: "friends.sendRequest"; payload: { accountId: string } }
   | { type: "command"; commandId: string; name: "friends.acceptRequest"; payload: { requestId: string } }
   | { type: "command"; commandId: string; name: "friends.declineRequest"; payload: { requestId: string } }
+  | { type: "command"; commandId: string; name: "friends.removeFriend"; payload: { friendshipId: string } }
   | { type: "command"; commandId: string; name: "party.create"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "party.invite"; payload: { accountId: string } }
   | { type: "command"; commandId: string; name: "party.acceptInvite"; payload: { invitationId: string } }
@@ -43,6 +44,7 @@ export interface RealtimeCommandFriends {
   sendRequest(fromAccountId: string, toAccountId: string): Promise<unknown>;
   acceptRequest(accountId: string, requestId: string): Promise<unknown>;
   declineRequest(accountId: string, requestId: string): Promise<unknown>;
+  removeFriend(accountId: string, friendshipId: string): Promise<unknown>;
 }
 
 export interface RealtimeCommandMatchmaking {
@@ -80,6 +82,10 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
     case "friends.declineRequest":
       return typeof payload.requestId === "string"
         ? { type: "command", commandId: record.commandId, name: record.name, payload: { requestId: payload.requestId } }
+        : undefined;
+    case "friends.removeFriend":
+      return typeof payload.friendshipId === "string"
+        ? { type: "command", commandId: record.commandId, name: record.name, payload: { friendshipId: payload.friendshipId } }
         : undefined;
     case "party.acceptInvite":
     case "party.declineInvite":
@@ -129,6 +135,10 @@ export async function executeRealtimeCommand(
       case "friends.declineRequest":
         if (!friends) return commandUnavailable(command.commandId);
         await friends.declineRequest(accountId, command.payload.requestId);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
+      case "friends.removeFriend":
+        if (!friends) return commandUnavailable(command.commandId);
+        await friends.removeFriend(accountId, command.payload.friendshipId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
       case "party.create":
         if (!matchmaking) return commandUnavailable(command.commandId);

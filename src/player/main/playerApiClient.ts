@@ -148,6 +148,14 @@ export class PlayerApiClient {
     );
   }
 
+  removeFriend(friendshipId: string): Promise<void> {
+    return this.commandOrRequest(
+      "friends.removeFriend",
+      { friendshipId },
+      () => this.request("DELETE", `/friends/${encodeURIComponent(friendshipId)}`),
+    );
+  }
+
   getParty(): Promise<PlayerPartyDto | null> {
     return this.request<{ party: PlayerPartyDto | null }>("GET", "/party").then((response) => response.party);
   }

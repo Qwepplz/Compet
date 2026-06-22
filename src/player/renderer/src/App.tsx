@@ -1063,6 +1063,20 @@ export function App() {
     }));
   }
 
+  async function removeFriend(friendshipId: string) {
+    try {
+      await api.removeFriend(friendshipId);
+      setFriends((current) => ({
+        ...current,
+        friends: current.friends.filter((friend) => friend.friendshipId !== friendshipId),
+      }));
+      void message.success("已删除好友");
+      void refreshFriendsList();
+    } catch (error) {
+      void message.error(error instanceof Error ? error.message : "删除好友失败");
+    }
+  }
+
   async function createParty() {
     const nextParty = await api.createParty();
     setParty(nextParty);
@@ -1392,6 +1406,7 @@ export function App() {
               onSendFriendRequest={sendFriendRequest}
               onAcceptFriendRequest={acceptFriendRequest}
               onDeclineFriendRequest={declineFriendRequest}
+              onRemoveFriend={removeFriend}
             />
           </aside>
         </div>

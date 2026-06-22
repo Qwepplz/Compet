@@ -130,7 +130,7 @@ function mapMatchmakingServiceError(error: unknown): never {
 
 function mapFriendServiceError(error: unknown): never {
   if (error instanceof Error) {
-    if (error.message.includes("friend request not found")) throw notFound();
+    if (error.message.includes("friend request not found") || error.message.includes("friendship not found")) throw notFound();
     if (error.message.includes("friendship already exists") || error.message.includes("pending friend request already exists")) throw conflict(error.message);
     if (
       error.message.includes("account not found") ||
@@ -290,6 +290,19 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const friends = requireFriends(deps);
     try {
       return await friends.listFriends(auth.account.id);
+    } catch (error) {
+      mapFriendServiceError(error);
+    }
+  });
+
+  app.delete("/friends/:id", async (request, reply) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const friends = requireFriends(deps);
+    const { id } = accountIdParamsSchema.parse(request.params);
+    try {
+      await friends.removeFriend(auth.account.id, id);
+      return reply.status(204).send();
     } catch (error) {
       mapFriendServiceError(error);
     }

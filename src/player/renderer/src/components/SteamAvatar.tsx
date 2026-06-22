@@ -25,8 +25,10 @@ export function SteamAvatar({ avatarUrl, label, className = "faceit-avatar" }: S
   }, [avatarUrl]);
 
   const src = avatarUrl && !failed ? avatarUrl : PLACEHOLDER_AVATAR;
+  const rootClassName = className.trim() || "faceit-avatar";
+  const imageClassName = rootClassName.split(/\s+/)[0] ?? "faceit-avatar";
   return (
-    <div className={`${className} ${className}--image`}>
+    <div className={`${rootClassName} ${imageClassName}--image`}>
       <img alt={label ? `${label} Steam 头像` : "Steam 头像"} src={src} onError={() => setFailed(true)} />
     </div>
   );

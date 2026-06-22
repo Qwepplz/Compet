@@ -1,4 +1,4 @@
-import { Badge, Button, Input, Modal } from "antd";
+import { Badge, Button, Dropdown, Input, Modal } from "antd";
 import { TeamOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
@@ -17,6 +17,7 @@ interface FriendsPanelProps {
   onSendFriendRequest?: (accountId: string) => Promise<void>;
   onAcceptFriendRequest?: (requestId: string) => Promise<void>;
   onDeclineFriendRequest?: (requestId: string) => Promise<void>;
+  onRemoveFriend?: (friendshipId: string) => Promise<void>;
 }
 
 function formatLastSeen(lastSeenAt?: string): string {
@@ -46,6 +47,7 @@ export function FriendsPanel({
   onSendFriendRequest,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
+  onRemoveFriend,
 }: FriendsPanelProps) {
   const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
@@ -121,6 +123,16 @@ export function FriendsPanel({
     }
   }
 
+  async function handleRemoveFriend(friendshipId: string) {
+    if (!onRemoveFriend) return;
+    setPendingRequestId(friendshipId);
+    try {
+      await onRemoveFriend(friendshipId);
+    } finally {
+      setPendingRequestId(null);
+    }
+  }
+
   const pendingCount = friends.incomingRequests.length;
   const open = expanded || addOpen;
 
@@ -189,16 +201,38 @@ export function FriendsPanel({
           <div className="player-social-group">
             <div className="player-social-list">
               {friends.friends.map((friend) => (
-                <div className="player-social-row" key={friend.friendshipId}>
-                  <SteamAvatar avatarUrl={friend.steamAvatarUrl} label={friend.displayName} />
-                  <div className="player-social-row-main">
-                    <strong>{friend.displayName}</strong>
-                    <span className={friend.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
-                      {friend.online ? "在线" : "离线"}
-                    </span>
-                    {!friend.online && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt)}</span> : null}
+                <Dropdown
+                  key={friend.friendshipId}
+                  trigger={["contextMenu"]}
+                  menu={{
+                    items: [
+                      {
+                        key: "remove",
+                        label: "删除好友",
+                        danger: true,
+                        disabled: !onRemoveFriend || pendingRequestId === friend.friendshipId,
+                      },
+                    ],
+                    onClick: ({ key }) => {
+                      if (key === "remove") void handleRemoveFriend(friend.friendshipId);
+                    },
+                  }}
+                >
+                  <div className="player-social-row">
+                    <SteamAvatar
+                      className={friend.online ? "faceit-avatar player-social-avatar--online" : "faceit-avatar"}
+                      avatarUrl={friend.steamAvatarUrl}
+                      label={friend.displayName}
+                    />
+                    <div className="player-social-row-main">
+                      <strong>{friend.displayName}</strong>
+                      <span className={friend.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
+                        {friend.online ? "在线" : "离线"}
+                      </span>
+                      {!friend.online && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt)}</span> : null}
+                    </div>
                   </div>
-                </div>
+                </Dropdown>
               ))}
             </div>
           </div>

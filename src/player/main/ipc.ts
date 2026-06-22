@@ -107,6 +107,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("friends:request", (_event, accountId: string) => withSavedAuth(deps, (client) => client.sendFriendRequest(accountId)));
   ipcMain.handle("friends:acceptRequest", (_event, requestId: string) => withSavedAuth(deps, (client) => client.acceptFriendRequest(requestId)));
   ipcMain.handle("friends:declineRequest", (_event, requestId: string) => withSavedAuth(deps, (client) => client.declineFriendRequest(requestId)));
+  ipcMain.handle("friends:remove", (_event, friendshipId: string) => withSavedAuth(deps, (client) => client.removeFriend(friendshipId)));
 
   ipcMain.handle("party:get", () => withSavedAuth(deps, (client) => client.getParty()));
   ipcMain.handle("party:create", () => withSavedAuth(deps, (client) => client.createParty()));
