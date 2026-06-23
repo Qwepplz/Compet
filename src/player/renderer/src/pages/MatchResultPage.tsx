@@ -2,7 +2,6 @@ import { ArrowLeftOutlined } from "@ant-design/icons";
 import { Button } from "antd";
 import type { PlayerMatchPlayerResultDto, PlayerMatchResultDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
-import { formatMapName } from "../mapAssets.js";
 
 interface MatchResultPageProps {
   result: PlayerMatchResultDto;
@@ -11,6 +10,10 @@ interface MatchResultPageProps {
 
 function playerName(player: PlayerMatchPlayerResultDto): string {
   return player.name || "玩家";
+}
+
+function formatResultMapName(map: string): string {
+  return map.replace(/^de_/, "").replace(/_/g, " ").toLowerCase();
 }
 
 function formatAdr(damage: number, totalRounds: number): string {
@@ -45,10 +48,6 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
   return (
     <div className="match-result-page">
       <header className="match-result-header">
-        <div>
-          <span>Match Result</span>
-          <h1>{formatMapName(result.mapName)}</h1>
-        </div>
         <Button icon={<ArrowLeftOutlined />} onClick={onBackHome}>
           返回大厅
         </Button>
@@ -57,6 +56,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
       <section className="match-result-meta" aria-label="比赛结果">
         <span>BO1</span>
         <span>{new Date(result.completedAt).toLocaleString("zh-CN", { hour12: false })}</span>
+        <span>{formatResultMapName(result.mapName)}</span>
       </section>
 
       <section className="match-result-team-panels" aria-label="玩家战绩">
