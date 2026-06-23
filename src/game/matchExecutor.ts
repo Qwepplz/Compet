@@ -5,11 +5,9 @@ import path from "node:path";
 import type { GameServerConfig } from "../config/config.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
-import { writeJsonFileAtomic } from "../storage/jsonFile.js";
 import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
 import { competMatchStatsPath, readCompetMatchStats, type CompetMatchPlayerStats } from "./competMatchStats.js";
-import { buildGet5Config } from "./get5ConfigBuilder.js";
-import { get5MatchStatsPath, readGet5MatchResult, type Get5MatchResultClassification } from "./get5MatchResult.js";
+import { readGet5MatchResult, type Get5MatchResultClassification } from "./get5MatchResult.js";
 import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
 import { installRunCsgoAssets } from "./runCsgoAssets.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
@@ -30,7 +28,6 @@ export interface MatchExecutorOptions {
   records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent">;
   events?: Pick<RealtimeEventBus, "publish">;
   config: GameServerConfig;
-  mapPool?: string[];
   onServerExit?: (matchId: string, report: MatchServerExitReport) => Promise<void> | void;
   emptyServerWatchdog?: EmptyServerWatchdogConfig;
 }
@@ -44,7 +41,7 @@ export interface MatchServerExitReport {
 const ACTIVE_MATCH_CFG_PATH = "compet/active_match.cfg";
 const ACTIVE_MATCH_RUNTIME_CFG_PATH = "compet/active_match_runtime.cfg";
 const NO_RANDOM_BOTS_CFG_PATH = "compet/no_random_bots.cfg";
-const ACTIVE_GET5_CONFIG_FILE = "compet_active.json";
+const LEGACY_GET5_CONFIG_FILE = "compet_active.json";
 const COMPET_LOCK_PLUGIN_FILE = "compet_match_lock.smx";
 const GET5_AUTOLOAD_COMMENT = "// Compet managed get5 autoload";
 const WARMUP_CFG_COMMENT = "// Compet managed warmup hook";
@@ -97,16 +94,7 @@ export class MatchExecutor {
     await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
     await installRunCsgoAssets(this.options.config.serverRoot);
     await cleanupGet5MatchStatsFiles(this.options.config.serverRoot);
-    await unlinkIfExists(get5MatchStatsPath(this.options.config.serverRoot, safeMatchId));
     await unlinkIfExists(competMatchStatsPath(this.options.config.serverRoot, safeMatchId));
-    const get5Config = buildGet5Config({
-      matchPlan,
-      mapPool: this.options.mapPool ?? [matchPlan.map],
-    });
-    await writeJsonFileAtomic(
-      path.join(this.options.config.serverRoot, "csgo", "cfg", "get5", ACTIVE_GET5_CONFIG_FILE),
-      get5Config,
-    );
     await removeGet5AutoloadCfg(this.options.config.serverRoot);
     await installCompetLockPlugin(this.options.config.serverRoot);
     const noRandomBotsCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", NO_RANDOM_BOTS_CFG_PATH);
@@ -310,8 +298,9 @@ async function cleanupLegacyGet5Configs(get5Dir: string): Promise<void> {
     throw error;
   }
 
+  await unlinkIfExists(path.join(get5Dir, LEGACY_GET5_CONFIG_FILE));
   await Promise.all(entries.map(async (entry) => {
-    if (!entry.isFile() || !entry.name.endsWith(".json") || entry.name === ACTIVE_GET5_CONFIG_FILE) return;
+    if (!entry.isFile() || !entry.name.endsWith(".json")) return;
     const matchId = entry.name.slice(0, -".json".length);
     if (!isValidMatchFileStem(matchId)) return;
     const filePath = path.join(get5Dir, entry.name);

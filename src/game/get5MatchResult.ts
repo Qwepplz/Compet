@@ -2,28 +2,21 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import type { MatchPlayerResult, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
 
-export const GET5_MATCH_STATS_PATH_FORMAT = "addons/sourcemod/data/compet/get5_matchstats_{MATCHID}.json";
-
 export type Get5MatchResultClassification =
   | { status: "normal"; result: MatchSeriesResult }
   | { status: "abnormal"; reason: string };
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
-export function get5MatchStatsPath(serverRoot: string, matchId: string): string {
-  if (!SAFE_MATCH_ID_PATTERN.test(matchId)) {
-    throw new Error(`Unsafe match id: ${matchId}`);
-  }
-  return path.join(serverRoot, "csgo", "addons", "sourcemod", "data", "compet", `get5_matchstats_${matchId}.json`);
-}
-
 export async function readGet5MatchResult(
   serverRoot: string,
   matchId: string,
   completedAt: string,
 ): Promise<Get5MatchResultClassification> {
+  if (!SAFE_MATCH_ID_PATTERN.test(matchId)) {
+    throw new Error(`Unsafe match id: ${matchId}`);
+  }
   const candidates = [
-    get5MatchStatsPath(serverRoot, matchId),
     path.join(serverRoot, "csgo", `get5_matchstats_${matchId}.cfg`),
     path.join(serverRoot, "csgo", "get5_matchstats_manual.cfg"),
   ];
@@ -33,7 +26,7 @@ export async function readGet5MatchResult(
     const raw = await readStatsFile(candidate);
     if (raw === null) continue;
     sawStatsFile = true;
-    const parsed = parseStatsFile(candidate, raw);
+    const parsed = parseStatsFile(raw);
     if (parsed !== null) {
       return classifyGet5MatchStats(parsed, completedAt);
     }
@@ -50,14 +43,7 @@ async function readStatsFile(filePath: string): Promise<string | null> {
   }
 }
 
-function parseStatsFile(filePath: string, raw: string): unknown | null {
-  if (filePath.endsWith(".json")) {
-    try {
-      return JSON.parse(raw) as unknown;
-    } catch {
-      return null;
-    }
-  }
+function parseStatsFile(raw: string): unknown | null {
   return parseKeyValuesStats(raw);
 }
 
