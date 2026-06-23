@@ -8,15 +8,28 @@ export type Get5MatchResultClassification =
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
+export function get5MatchStatsRelativePath(matchId: string): string {
+  if (!SAFE_MATCH_ID_PATTERN.test(matchId)) {
+    throw new Error(`Unsafe match id: ${matchId}`);
+  }
+  return `addons/sourcemod/data/compet/matches/${matchId}/get5_matchstats.cfg`;
+}
+
+export function get5MatchStatsPath(serverRoot: string, matchId: string): string {
+  return path.join(
+    serverRoot,
+    "csgo",
+    ...get5MatchStatsRelativePath(matchId).split("/"),
+  );
+}
+
 export async function readGet5MatchResult(
   serverRoot: string,
   matchId: string,
   completedAt: string,
 ): Promise<Get5MatchResultClassification> {
-  if (!SAFE_MATCH_ID_PATTERN.test(matchId)) {
-    throw new Error(`Unsafe match id: ${matchId}`);
-  }
   const candidates = [
+    get5MatchStatsPath(serverRoot, matchId),
     path.join(serverRoot, "csgo", `get5_matchstats_${matchId}.cfg`),
     path.join(serverRoot, "csgo", "get5_matchstats_manual.cfg"),
   ];

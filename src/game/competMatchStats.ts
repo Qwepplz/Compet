@@ -11,7 +11,7 @@ export interface CompetMatchPlayerStats {
   mvp: number;
 }
 
-export const COMPET_MATCH_STATS_PATH_FORMAT = "addons/sourcemod/data/compet/compet_matchstats_{MATCHID}.json";
+export const COMPET_MATCH_STATS_PATH_FORMAT = "addons/sourcemod/data/compet/matches/{MATCHID}/compet_matchstats.json";
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -19,7 +19,17 @@ export function competMatchStatsPath(serverRoot: string, matchId: string): strin
   if (!SAFE_MATCH_ID_PATTERN.test(matchId)) {
     throw new Error(`Unsafe match id: ${matchId}`);
   }
-  return path.join(serverRoot, "csgo", "addons", "sourcemod", "data", "compet", `compet_matchstats_${matchId}.json`);
+  return path.join(
+    serverRoot,
+    "csgo",
+    "addons",
+    "sourcemod",
+    "data",
+    "compet",
+    "matches",
+    matchId,
+    "compet_matchstats.json",
+  );
 }
 
 export async function readCompetMatchStats(serverRoot: string, matchId: string): Promise<CompetMatchPlayerStats[]> {

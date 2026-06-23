@@ -375,7 +375,7 @@ bool HasStoredMatchStats(int client) {
 
 void BuildMatchStatsPath(char[] path, int maxlen) {
   char relative[PLATFORM_MAX_PATH];
-  Format(relative, sizeof(relative), "data/compet/compet_matchstats_%s.json", g_MatchId);
+  Format(relative, sizeof(relative), "data/compet/matches/%s/compet_matchstats.json", g_MatchId);
   BuildPath(Path_SM, path, maxlen, relative);
 }
 
@@ -392,7 +392,7 @@ void DeleteMatchStatsFile() {
 }
 
 void WriteMatchStats() {
-  if (g_MatchId[0] == '\0' || !EnsureCompetDataDir()) {
+  if (g_MatchId[0] == '\0' || !EnsureCompetMatchDataDir()) {
     return;
   }
 
@@ -602,6 +602,23 @@ void ClearShutdownFlag() {
 bool EnsureCompetDataDir() {
   char path[PLATFORM_MAX_PATH];
   BuildPath(Path_SM, path, sizeof(path), "data/compet");
+  return DirExists(path) || CreateDirectory(path);
+}
+
+bool EnsureCompetMatchDataDir() {
+  if (!EnsureCompetDataDir()) {
+    return false;
+  }
+
+  char path[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet/matches");
+  if (!DirExists(path) && !CreateDirectory(path)) {
+    return false;
+  }
+
+  char relative[PLATFORM_MAX_PATH];
+  Format(relative, sizeof(relative), "data/compet/matches/%s", g_MatchId);
+  BuildPath(Path_SM, path, sizeof(path), relative);
   return DirExists(path) || CreateDirectory(path);
 }
 

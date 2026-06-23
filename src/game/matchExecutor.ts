@@ -7,7 +7,12 @@ import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
 import { competMatchStatsPath, readCompetMatchStats, type CompetMatchPlayerStats } from "./competMatchStats.js";
-import { readGet5MatchResult, type Get5MatchResultClassification } from "./get5MatchResult.js";
+import {
+  get5MatchStatsRelativePath,
+  get5MatchStatsPath,
+  readGet5MatchResult,
+  type Get5MatchResultClassification,
+} from "./get5MatchResult.js";
 import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
 import { installRunCsgoAssets } from "./runCsgoAssets.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
@@ -94,6 +99,9 @@ export class MatchExecutor {
     await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
     await installRunCsgoAssets(this.options.config.serverRoot);
     await cleanupGet5MatchStatsFiles(this.options.config.serverRoot);
+    const get5StatsPath = get5MatchStatsPath(this.options.config.serverRoot, safeMatchId);
+    await mkdir(path.dirname(get5StatsPath), { recursive: true });
+    await unlinkIfExists(get5StatsPath);
     await unlinkIfExists(competMatchStatsPath(this.options.config.serverRoot, safeMatchId));
     await removeGet5AutoloadCfg(this.options.config.serverRoot);
     await installCompetLockPlugin(this.options.config.serverRoot);
@@ -193,6 +201,7 @@ function formatServerExitMonitorOutput(
 function buildMatchStartupCfg(matchPlan: MatchPlan, safeMatchId: string): string {
   return [
     `sv_password ${quoteConsoleString(matchPlan.connectPassword)}`,
+    `get5_stats_path_format ${quoteConsoleString(get5MatchStatsRelativePath(safeMatchId))}`,
     ...TEAMLOGO_CFG_LINES.slice(1),
     ...buildTeamNameCommands(matchPlan),
     ...buildTeamLogoCommands(matchPlan),
