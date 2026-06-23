@@ -757,7 +757,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .match-result-page {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto;
+  align-content: start;
   gap: 10px;
   height: 100vh;
   min-height: 0;
@@ -805,17 +806,17 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .match-result-team-panels {
   display: grid;
-  grid-template-rows: repeat(2, minmax(0, 1fr));
+  grid-template-rows: repeat(2, auto);
+  align-content: start;
   gap: 8px;
   width: min(100%, 960px);
-  height: 100%;
   min-height: 0;
   margin: 0 auto;
 }
 
 .match-result-team-panel {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
   min-height: 0;
   overflow: hidden;
   border: 1px solid #222;
@@ -833,19 +834,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   border-bottom: 1px solid #222;
 }
 
-.match-result-team-panel-header div {
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  min-width: 0;
-}
-
-.match-result-team-panel-header span {
-  color: #8f8f8f;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .match-result-team-panel-header strong {
   overflow: hidden;
   color: #fff;
@@ -854,7 +842,12 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   white-space: nowrap;
 }
 
+.match-result-team-panel-header > strong:first-child {
+  min-width: 0;
+}
+
 .match-result-team-score {
+  flex: 0 0 auto;
   color: #cfcfcf;
   font-size: 26px;
   line-height: 1;

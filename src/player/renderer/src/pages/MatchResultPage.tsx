@@ -63,10 +63,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
         {teamSections.map((section) => (
           <section className="match-result-team-panel" key={section.team}>
             <header className="match-result-team-panel-header">
-              <div>
-                <span>{section.team === result.winner ? "胜利" : "失败"}</span>
-                <strong>{section.name}</strong>
-              </div>
+              <strong>{section.name}</strong>
               <strong className={`match-result-team-score${section.team === result.winner ? " match-result-team-score--winner" : ""}`}>
                 {section.score}
               </strong>
