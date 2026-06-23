@@ -425,7 +425,7 @@ export class PlayerApiClient {
 
   private async enrichMatchResult(result: PlayerMatchResultDto): Promise<PlayerMatchResultDto> {
     const steam64s = result.players.flatMap((player) => {
-      const steam64 = player.kind === "human" ? player.steam64.trim() : "";
+      const steam64 = player.steam64.trim();
       return steam64 ? [steam64] : [];
     });
     if (steam64s.length === 0) return result;
@@ -434,14 +434,16 @@ export class PlayerApiClient {
     return {
       ...result,
       players: result.players.map((player) => {
-        if (player.kind !== "human") return player;
         const profile = profiles.get(player.steam64.trim());
         if (!profile) return player;
-        return {
-          ...player,
-          name: profile.personaName,
-          avatarUrl: profile.avatarUrl,
-        };
+        if (player.kind === "human") {
+          return {
+            ...player,
+            name: profile.personaName,
+            avatarUrl: profile.avatarUrl || player.avatarUrl,
+          };
+        }
+        return profile.avatarUrl ? { ...player, avatarUrl: profile.avatarUrl } : player;
       }),
     };
   }
