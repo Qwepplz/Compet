@@ -611,7 +611,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   align-self: center;
   position: fixed;
   top: 641.83px;
-  left: calc((100vw - 68px) / 2 - 94px);
   width: 188px;
   min-width: 188px;
   height: 59px;
@@ -621,8 +620,12 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   transition: left 0.26s ease;
 }
 
-.player-app-layout:not(.player-app-layout--collapsed) .faceit-queue-actions .faceit-main-cta {
-  left: calc((100vw - 340px) / 2 - 94px);
+.player-app-layout .faceit-queue-actions .faceit-main-cta {
+  left: calc(50vw - 264px);
+}
+
+.player-app-layout--collapsed .faceit-queue-actions .faceit-main-cta {
+  left: calc(50vw - 128px);
 }
 
 .faceit-matchmaking-content {
@@ -651,12 +654,23 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 .faceit-queue-actions .faceit-secondary-cta {
   grid-column: 4;
   justify-self: start;
+  position: fixed;
+  top: 643.33px;
   width: 56px;
   min-width: 56px;
   height: 56px;
   min-height: 0;
   aspect-ratio: 1;
   padding-inline: 0;
+  transition: left 0.26s ease;
+}
+
+.player-app-layout .faceit-queue-actions .faceit-secondary-cta {
+  left: calc(50vw - 64px);
+}
+
+.player-app-layout--collapsed .faceit-queue-actions .faceit-secondary-cta {
+  left: calc(50vw + 72px);
 }
 
 .faceit-secondary-cta svg {
@@ -1657,7 +1671,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     justify-content: stretch;
   }
 
-  .faceit-queue-actions .faceit-main-cta {
+  .faceit-queue-actions .faceit-main-cta,
+  .faceit-queue-actions .faceit-secondary-cta {
     position: static;
     top: auto;
     left: auto;
