@@ -2,6 +2,7 @@ import { ArrowLeftOutlined } from "@ant-design/icons";
 import { Button } from "antd";
 import type { PlayerMatchPlayerResultDto, PlayerMatchResultDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
+import { VerificationBadge } from "../components/VerificationBadge.js";
 
 interface MatchResultPageProps {
   result: PlayerMatchResultDto;
@@ -22,6 +23,12 @@ function formatAdr(damage: number, totalRounds: number): string {
 
 function playerAdr(player: PlayerMatchPlayerResultDto, totalRounds: number): number {
   return totalRounds > 0 ? player.damage / totalRounds : 0;
+}
+
+function playerBadge(player: PlayerMatchPlayerResultDto): { variant: "gold" | "white"; title: string } | null {
+  if (player.kind === "human") return { variant: "gold", title: "Player" };
+  if (player.botCategory === "pro") return { variant: "white", title: "Pro-Bot" };
+  return null;
 }
 
 function sortPlayersByAdr(players: PlayerMatchPlayerResultDto[], totalRounds: number): PlayerMatchPlayerResultDto[] {
@@ -79,12 +86,16 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                   <tbody>
                     {section.players.map((player) => {
                       const name = playerName(player);
+                      const badge = playerBadge(player);
                       return (
                         <tr key={player.steam64 || `${player.team}-${player.name}`}>
                           <td>
                             <div className="match-result-player">
                               <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
-                              <strong>{name}</strong>
+                              <div className="match-result-player-name-line">
+                                <strong>{name}</strong>
+                                {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
+                              </div>
                             </div>
                           </td>
                           <td>{player.kills}</td>

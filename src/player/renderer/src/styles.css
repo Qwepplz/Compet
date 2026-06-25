@@ -957,6 +957,13 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   object-fit: cover;
 }
 
+.match-result-player-name-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
 .match-result-player strong {
   display: block;
   min-width: 0;

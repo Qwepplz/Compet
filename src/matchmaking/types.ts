@@ -40,6 +40,7 @@ export interface MatchPlayerResult {
   steam64: string;
   name: string;
   kind?: ParticipantKind;
+  botCategory?: "pro";
   avatarUrl?: string;
   team: TeamSide;
   kills: number;

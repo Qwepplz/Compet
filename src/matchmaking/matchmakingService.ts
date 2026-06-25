@@ -111,6 +111,7 @@ function mergeParticipantResult(
     steam64: participant.steam64 ?? stats?.steam64 ?? "",
     name: participant.kind === "human" ? humanName : botName,
     kind: participant.kind,
+    ...(participant.botCategory ? { botCategory: participant.botCategory } : {}),
     ...(avatarUrl ? { avatarUrl } : {}),
     team,
     kills: stats?.kills ?? 0,
