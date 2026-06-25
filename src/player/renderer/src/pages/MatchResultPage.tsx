@@ -47,63 +47,60 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
 
   return (
     <div className="match-result-page">
-      <header className="match-result-header">
-        <Button icon={<ArrowLeftOutlined />} onClick={onBackHome}>
-          返回大厅
-        </Button>
-      </header>
-
       <section className="match-result-meta" aria-label="比赛结果">
         <span>BO1</span>
         <span>{new Date(result.completedAt).toLocaleString("zh-CN", { hour12: false })}</span>
         <span>{formatResultMapName(result.mapName)}</span>
       </section>
 
-      <section className="match-result-team-panels" aria-label="玩家战绩">
-        {teamSections.map((section) => (
-          <section className="match-result-team-panel" key={section.team}>
-            <header className="match-result-team-panel-header">
-              <strong>{section.name}</strong>
-              <strong className={`match-result-team-score${section.team === result.winner ? " match-result-team-score--winner" : ""}`}>
-                {section.score}
-              </strong>
-            </header>
-            <div className="match-result-table-wrap">
-              <table className="match-result-table">
-                <thead>
-                  <tr>
-                    <th>玩家</th>
-                    <th>K</th>
-                    <th>D</th>
-                    <th>A</th>
-                    <th>ADR</th>
-                    <th>MVP</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {section.players.map((player) => {
-                    const name = playerName(player);
-                    return (
-                      <tr key={player.steam64 || `${player.team}-${player.name}`}>
-                        <td>
-                          <div className="match-result-player">
-                            <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
-                            <strong>{name}</strong>
-                          </div>
-                        </td>
-                        <td>{player.kills}</td>
-                        <td>{player.deaths}</td>
-                        <td>{player.assists}</td>
-                        <td>{formatAdr(player.damage, totalRounds)}</td>
-                        <td>{player.mvp}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </section>
-        ))}
+      <section className="match-result-content">
+        <Button className="match-result-back-button" aria-label="返回大厅" icon={<ArrowLeftOutlined />} onClick={onBackHome} />
+        <section className="match-result-team-panels" aria-label="玩家战绩">
+          {teamSections.map((section) => (
+            <section className="match-result-team-panel" key={section.team}>
+              <header className="match-result-team-panel-header">
+                <strong>{section.name}</strong>
+                <strong className={`match-result-team-score${section.team === result.winner ? " match-result-team-score--winner" : ""}`}>
+                  {section.score}
+                </strong>
+              </header>
+              <div className="match-result-table-wrap">
+                <table className="match-result-table">
+                  <thead>
+                    <tr>
+                      <th>玩家</th>
+                      <th>K</th>
+                      <th>D</th>
+                      <th>A</th>
+                      <th>ADR</th>
+                      <th>MVP</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {section.players.map((player) => {
+                      const name = playerName(player);
+                      return (
+                        <tr key={player.steam64 || `${player.team}-${player.name}`}>
+                          <td>
+                            <div className="match-result-player">
+                              <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
+                              <strong>{name}</strong>
+                            </div>
+                          </td>
+                          <td>{player.kills}</td>
+                          <td>{player.deaths}</td>
+                          <td>{player.assists}</td>
+                          <td>{formatAdr(player.damage, totalRounds)}</td>
+                          <td>{player.mvp}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+          ))}
+        </section>
       </section>
     </div>
   );
