@@ -9,6 +9,8 @@ export interface CompetMatchPlayerStats {
   assists: number;
   damage: number;
   mvp: number;
+  kastRounds?: number;
+  roundsPlayed?: number;
 }
 
 export const COMPET_MATCH_STATS_PATH_FORMAT = "addons/sourcemod/data/compet/matches/{MATCHID}/compet_matchstats.json";
@@ -45,6 +47,8 @@ export function classifyCompetMatchStats(stats: unknown): CompetMatchPlayerStats
   if (!isRecord(stats) || !Array.isArray(stats.players)) return [];
   return stats.players.flatMap((player) => {
     if (!isRecord(player)) return [];
+    const kastRounds = optionalNumberValue(player.kastRounds);
+    const roundsPlayed = optionalNumberValue(player.roundsPlayed);
     return [{
       name: stringValue(player.name),
       steam64: stringValue(player.steam64),
@@ -53,6 +57,8 @@ export function classifyCompetMatchStats(stats: unknown): CompetMatchPlayerStats
       assists: numberValue(player.assists),
       damage: numberValue(player.damage),
       mvp: numberValue(player.mvp),
+      ...(kastRounds !== undefined ? { kastRounds } : {}),
+      ...(roundsPlayed !== undefined ? { roundsPlayed } : {}),
     }];
   });
 }
@@ -67,4 +73,8 @@ function stringValue(value: unknown): string {
 
 function numberValue(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
+}
+
+function optionalNumberValue(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }

@@ -5,7 +5,6 @@ import type { BotCatalog } from "../bots/botCatalog.js";
 import type { FriendListDto } from "../friends/friendService.js";
 import type { CompetMatchPlayerStats } from "../game/competMatchStats.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
-import type { Get5MatchPlayerResult, Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
 import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
@@ -34,7 +33,6 @@ const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 
 function mergeMatchResultPlayers(
   room: MatchRoomRecord,
-  get5Players: Get5MatchPlayerResult[],
   competStats: CompetMatchPlayerStats[],
 ): MatchPlayerResult[] {
   const competBySteam64 = new Map(competStats.filter((stats) => stats.steam64).map((stats) => [stats.steam64, stats]));
@@ -45,15 +43,13 @@ function mergeMatchResultPlayers(
       competByName.set(name, stats);
     }
   }
-  const get5BySteam64 = new Map(get5Players.filter((player) => player.steam64).map((player) => [player.steam64, player]));
-
   return [
-    ...room.teamA.participants.map((participant) => mergeParticipantResult(participant, "teamA", competBySteam64, competByName, get5BySteam64)),
-    ...room.teamB.participants.map((participant) => mergeParticipantResult(participant, "teamB", competBySteam64, competByName, get5BySteam64)),
+    ...room.teamA.participants.map((participant) => mergeParticipantResult(participant, "teamA", competBySteam64, competByName)),
+    ...room.teamB.participants.map((participant) => mergeParticipantResult(participant, "teamB", competBySteam64, competByName)),
   ];
 }
 
-function alignGet5ResultToRoom(room: MatchRoomRecord, result: Get5MatchSeriesResult): Get5MatchSeriesResult {
+function alignGet5ResultToRoom(room: MatchRoomRecord, result: MatchSeriesResult): MatchSeriesResult {
   if (!shouldSwapGet5Teams(room, result.players)) return result;
   return {
     ...result,
@@ -62,7 +58,6 @@ function alignGet5ResultToRoom(room: MatchRoomRecord, result: Get5MatchSeriesRes
     team2SeriesScore: result.team1SeriesScore,
     team1Score: result.team2Score,
     team2Score: result.team1Score,
-    players: result.players.map((player) => ({ ...player, team: oppositeTeam(player.team) })),
   };
 }
 
@@ -95,10 +90,8 @@ function mergeParticipantResult(
   team: TeamSide,
   competBySteam64: Map<string, CompetMatchPlayerStats>,
   competByName: Map<string, CompetMatchPlayerStats>,
-  get5BySteam64: Map<string, Get5MatchPlayerResult>,
 ): MatchPlayerResult {
-  const get5Stats = participant.steam64 ? get5BySteam64.get(participant.steam64) : undefined;
-  const stats = findCompetStats(participant, competBySteam64, competByName) ?? get5Stats;
+  const stats = findCompetStats(participant, competBySteam64, competByName);
   const humanName = participant.steamPersonaName?.trim()
     || stats?.name.trim()
     || participant.displayName.trim()
@@ -115,9 +108,9 @@ function mergeParticipantResult(
   const damage = stats?.damage ?? 0;
   const rating2 = calculateHltvRating2(
     { kills, deaths, assists, damage },
-    get5Stats?.kastRounds,
-    get5Stats?.roundsPlayed,
-  ) ?? get5Stats?.rating2;
+    stats?.kastRounds,
+    stats?.roundsPlayed,
+  );
   return {
     steam64: participant.steam64 ?? stats?.steam64 ?? "",
     name: participant.kind === "human" ? humanName : botName,
@@ -716,7 +709,7 @@ export class MatchmakingService {
       const alignedGet5Result = alignGet5ResultToRoom(room, report.get5Result.result);
       const result = {
         ...alignedGet5Result,
-        players: mergeMatchResultPlayers(room, alignedGet5Result.players, report.competStats),
+        players: mergeMatchResultPlayers(room, report.competStats),
       };
       const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: result.completedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));

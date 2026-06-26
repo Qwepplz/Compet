@@ -8,6 +8,7 @@
 #define COMPET_STATUS_INTERVAL 30.0
 #define COMPET_AUTH_SIZE 32
 #define COMPET_PLAYER_NAME_SIZE 128
+#define COMPET_TRADE_WINDOW_SECONDS 5.0
 
 public Plugin myinfo = {
   name = "Compet Match Lock",
@@ -29,8 +30,17 @@ int g_PlayerDeaths[MAXPLAYERS + 1];
 int g_PlayerAssists[MAXPLAYERS + 1];
 int g_PlayerDamage[MAXPLAYERS + 1];
 int g_PlayerMvp[MAXPLAYERS + 1];
+int g_PlayerRoundsPlayed[MAXPLAYERS + 1];
+int g_PlayerKastRounds[MAXPLAYERS + 1];
 char g_PlayerNames[MAXPLAYERS + 1][COMPET_PLAYER_NAME_SIZE];
 char g_PlayerSteam64[MAXPLAYERS + 1][COMPET_AUTH_SIZE];
+bool g_RoundStatsActive = false;
+bool g_RoundParticipant[MAXPLAYERS + 1];
+bool g_RoundKillOrAssist[MAXPLAYERS + 1];
+bool g_RoundDied[MAXPLAYERS + 1];
+bool g_RoundTraded[MAXPLAYERS + 1];
+int g_RoundKiller[MAXPLAYERS + 1];
+float g_RoundDeathTime[MAXPLAYERS + 1];
 
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
@@ -39,6 +49,8 @@ public void OnPluginStart() {
   RegServerCmd("compet_lock_enable", Command_EnableLock);
   AddCommandListener(Command_JoinTeam, "jointeam");
   AddCommandListener(Command_JoinTeam, "joingame");
+  HookEvent("round_start", Event_RoundStart, EventHookMode_Post);
+  HookEvent("round_end", Event_RoundEnd, EventHookMode_Post);
   HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
   HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
   HookEvent("round_mvp", Event_RoundMvp, EventHookMode_Post);
@@ -192,8 +204,42 @@ public void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast)
     return;
   }
 
-  CaptureClientIdentity(attacker);
+  MarkRoundParticipant(attacker);
   g_PlayerDamage[attacker] += damage;
+  WriteMatchStats();
+}
+
+public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
+  if (!ShouldRecordStats()) {
+    return;
+  }
+
+  ResetRoundStats();
+  g_RoundStatsActive = true;
+  CaptureRoundParticipants();
+}
+
+public void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
+  if (!ShouldRecordStats()) {
+    return;
+  }
+
+  if (!g_RoundStatsActive) {
+    CaptureRoundParticipants();
+  }
+
+  for (int client = 1; client <= MaxClients; client++) {
+    if (!g_RoundParticipant[client]) {
+      continue;
+    }
+
+    g_PlayerRoundsPlayed[client]++;
+    if (g_RoundKillOrAssist[client] || !g_RoundDied[client] || g_RoundTraded[client]) {
+      g_PlayerKastRounds[client]++;
+    }
+  }
+
+  ResetRoundStats();
   WriteMatchStats();
 }
 
@@ -208,18 +254,24 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
   bool changed = false;
 
   if (IsStatsClient(victim)) {
-    CaptureClientIdentity(victim);
+    MarkRoundParticipant(victim);
     g_PlayerDeaths[victim]++;
+    g_RoundDied[victim] = true;
     changed = true;
   }
   if (IsStatsClient(attacker) && IsStatsClient(victim) && attacker != victim && AreOpposingPlayers(attacker, victim)) {
-    CaptureClientIdentity(attacker);
+    MarkRoundParticipant(attacker);
     g_PlayerKills[attacker]++;
+    g_RoundKillOrAssist[attacker] = true;
+    g_RoundKiller[victim] = attacker;
+    g_RoundDeathTime[victim] = GetGameTime();
+    MarkTradedDeaths(attacker, victim);
     changed = true;
   }
   if (IsStatsClient(assister) && IsStatsClient(victim) && assister != victim && assister != attacker && AreOpposingPlayers(assister, victim)) {
-    CaptureClientIdentity(assister);
+    MarkRoundParticipant(assister);
     g_PlayerAssists[assister]++;
+    g_RoundKillOrAssist[assister] = true;
     changed = true;
   }
   if (changed) {
@@ -237,7 +289,7 @@ public void Event_RoundMvp(Event event, const char[] name, bool dontBroadcast) {
     return;
   }
 
-  CaptureClientIdentity(client);
+  MarkRoundParticipant(client);
   g_PlayerMvp[client]++;
   WriteMatchStats();
 }
@@ -328,10 +380,59 @@ void ResetMatchStats() {
     g_PlayerAssists[client] = 0;
     g_PlayerDamage[client] = 0;
     g_PlayerMvp[client] = 0;
+    g_PlayerRoundsPlayed[client] = 0;
+    g_PlayerKastRounds[client] = 0;
     g_PlayerNames[client][0] = '\0';
     g_PlayerSteam64[client][0] = '\0';
   }
+  ResetRoundStats();
   DeleteMatchStatsFile();
+}
+
+void ResetRoundStats() {
+  g_RoundStatsActive = false;
+  for (int client = 1; client <= MaxClients; client++) {
+    g_RoundParticipant[client] = false;
+    g_RoundKillOrAssist[client] = false;
+    g_RoundDied[client] = false;
+    g_RoundTraded[client] = false;
+    g_RoundKiller[client] = 0;
+    g_RoundDeathTime[client] = 0.0;
+  }
+}
+
+void CaptureRoundParticipants() {
+  for (int client = 1; client <= MaxClients; client++) {
+    if (IsRoundParticipant(client)) {
+      MarkRoundParticipant(client);
+    }
+  }
+}
+
+void MarkRoundParticipant(int client) {
+  if (!IsRoundParticipant(client)) {
+    return;
+  }
+
+  CaptureClientIdentity(client);
+  g_RoundParticipant[client] = true;
+  g_RoundStatsActive = true;
+}
+
+void MarkTradedDeaths(int attacker, int victim) {
+  float now = GetGameTime();
+  int attackerTeam = GetClientTeam(attacker);
+  for (int client = 1; client <= MaxClients; client++) {
+    if (!g_RoundDied[client] || g_RoundTraded[client] || g_RoundKiller[client] != victim) {
+      continue;
+    }
+    if (GetClientTeam(client) != attackerTeam) {
+      continue;
+    }
+    if (now - g_RoundDeathTime[client] <= COMPET_TRADE_WINDOW_SECONDS) {
+      g_RoundTraded[client] = true;
+    }
+  }
 }
 
 void CaptureClientIdentity(int client) {
@@ -357,6 +458,10 @@ bool IsStatsClient(int client) {
     && !IsClientReplay(client);
 }
 
+bool IsRoundParticipant(int client) {
+  return IsStatsClient(client) && IsPlayingTeam(GetClientTeam(client));
+}
+
 bool AreOpposingPlayers(int first, int second) {
   int firstTeam = GetClientTeam(first);
   int secondTeam = GetClientTeam(second);
@@ -370,7 +475,9 @@ bool HasStoredMatchStats(int client) {
     || g_PlayerDeaths[client] != 0
     || g_PlayerAssists[client] != 0
     || g_PlayerDamage[client] != 0
-    || g_PlayerMvp[client] != 0;
+    || g_PlayerMvp[client] != 0
+    || g_PlayerRoundsPlayed[client] != 0
+    || g_PlayerKastRounds[client] != 0;
 }
 
 void BuildMatchStatsPath(char[] path, int maxlen) {
@@ -427,26 +534,30 @@ void WriteMatchStats() {
     if (wroteAny) {
       WriteFileLine(
         file,
-        "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d}",
+        "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
         g_PlayerKills[client],
         g_PlayerDeaths[client],
         g_PlayerAssists[client],
         g_PlayerDamage[client],
-        g_PlayerMvp[client]
+        g_PlayerMvp[client],
+        g_PlayerKastRounds[client],
+        g_PlayerRoundsPlayed[client]
       );
     } else {
       WriteFileLine(
         file,
-        "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d}",
+        "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
         g_PlayerKills[client],
         g_PlayerDeaths[client],
         g_PlayerAssists[client],
         g_PlayerDamage[client],
-        g_PlayerMvp[client]
+        g_PlayerMvp[client],
+        g_PlayerKastRounds[client],
+        g_PlayerRoundsPlayed[client]
       );
       wroteAny = true;
     }
