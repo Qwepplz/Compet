@@ -1,9 +1,19 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { calculateHltvRating2 } from "./matchRating.js";
 import type { MatchPlayerResult, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
 
+export interface Get5MatchPlayerResult extends MatchPlayerResult {
+  kastRounds?: number;
+  roundsPlayed?: number;
+}
+
+export interface Get5MatchSeriesResult extends Omit<MatchSeriesResult, "players"> {
+  players: Get5MatchPlayerResult[];
+}
+
 export type Get5MatchResultClassification =
-  | { status: "normal"; result: MatchSeriesResult }
+  | { status: "normal"; result: Get5MatchSeriesResult }
   | { status: "abnormal"; reason: string };
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -186,19 +196,29 @@ function isValidMr12FinalScore(team1Score: number, team2Score: number, winner: T
   return loserScore >= winnerScore - 4 && loserScore <= winnerScore - 2;
 }
 
-function readPlayers(players: unknown, team: TeamSide): MatchPlayerResult[] {
+function readPlayers(players: unknown, team: TeamSide): Get5MatchPlayerResult[] {
   if (!isRecord(players)) return [];
   return Object.entries(players).flatMap(([steam64, value]) => {
     if (!isRecord(value)) return [];
+    const kills = numberValue(value.kills);
+    const deaths = numberValue(value.deaths);
+    const assists = numberValue(value.assists);
+    const damage = numberValue(value.damage);
+    const kastRounds = optionalNumberValue(value.kast);
+    const roundsPlayed = optionalNumberValue(value.roundsplayed);
+    const rating2 = calculateHltvRating2({ kills, deaths, assists, damage }, kastRounds, roundsPlayed);
     return [{
       steam64,
       name: stringValue(value.name),
       team,
-      kills: numberValue(value.kills),
-      deaths: numberValue(value.deaths),
-      assists: numberValue(value.assists),
-      damage: numberValue(value.damage),
+      kills,
+      deaths,
+      assists,
+      damage,
       mvp: numberValue(value.mvp),
+      ...(kastRounds !== undefined ? { kastRounds } : {}),
+      ...(roundsPlayed !== undefined ? { roundsPlayed } : {}),
+      ...(rating2 !== undefined ? { rating2 } : {}),
     }];
   });
 }
@@ -224,4 +244,13 @@ function numberValue(value: unknown): number {
     return Number.isFinite(parsed) ? parsed : 0;
   }
   return 0;
+}
+
+function optionalNumberValue(value: unknown): number | undefined {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+  }
+  return undefined;
 }

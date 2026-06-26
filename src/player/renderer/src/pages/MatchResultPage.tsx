@@ -21,6 +21,10 @@ function formatAdr(damage: number, totalRounds: number): string {
   return totalRounds > 0 ? (damage / totalRounds).toFixed(1) : "0.0";
 }
 
+function formatRating2(rating2: number | undefined): string {
+  return typeof rating2 === "number" && Number.isFinite(rating2) ? rating2.toFixed(2) : "-";
+}
+
 function playerAdr(player: PlayerMatchPlayerResultDto, totalRounds: number): number {
   return totalRounds > 0 ? player.damage / totalRounds : 0;
 }
@@ -80,6 +84,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                       <th>D</th>
                       <th>A</th>
                       <th>ADR</th>
+                      <th>Rating 2.0</th>
                       <th>MVP</th>
                     </tr>
                   </thead>
@@ -102,6 +107,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                           <td>{player.deaths}</td>
                           <td>{player.assists}</td>
                           <td>{formatAdr(player.damage, totalRounds)}</td>
+                          <td>{formatRating2(player.rating2)}</td>
                           <td>{player.mvp}</td>
                         </tr>
                       );

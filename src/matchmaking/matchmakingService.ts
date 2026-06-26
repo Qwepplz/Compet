@@ -5,6 +5,8 @@ import type { BotCatalog } from "../bots/botCatalog.js";
 import type { FriendListDto } from "../friends/friendService.js";
 import type { CompetMatchPlayerStats } from "../game/competMatchStats.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
+import type { Get5MatchPlayerResult, Get5MatchSeriesResult } from "../game/get5MatchResult.js";
+import { calculateHltvRating2 } from "../game/matchRating.js";
 import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
@@ -32,7 +34,7 @@ const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 
 function mergeMatchResultPlayers(
   room: MatchRoomRecord,
-  get5Players: MatchPlayerResult[],
+  get5Players: Get5MatchPlayerResult[],
   competStats: CompetMatchPlayerStats[],
 ): MatchPlayerResult[] {
   const competBySteam64 = new Map(competStats.filter((stats) => stats.steam64).map((stats) => [stats.steam64, stats]));
@@ -51,7 +53,7 @@ function mergeMatchResultPlayers(
   ];
 }
 
-function alignGet5ResultToRoom(room: MatchRoomRecord, result: MatchSeriesResult): MatchSeriesResult {
+function alignGet5ResultToRoom(room: MatchRoomRecord, result: Get5MatchSeriesResult): Get5MatchSeriesResult {
   if (!shouldSwapGet5Teams(room, result.players)) return result;
   return {
     ...result,
@@ -93,10 +95,10 @@ function mergeParticipantResult(
   team: TeamSide,
   competBySteam64: Map<string, CompetMatchPlayerStats>,
   competByName: Map<string, CompetMatchPlayerStats>,
-  get5BySteam64: Map<string, MatchPlayerResult>,
+  get5BySteam64: Map<string, Get5MatchPlayerResult>,
 ): MatchPlayerResult {
-  const stats = findCompetStats(participant, competBySteam64, competByName)
-    ?? (participant.steam64 ? get5BySteam64.get(participant.steam64) : undefined);
+  const get5Stats = participant.steam64 ? get5BySteam64.get(participant.steam64) : undefined;
+  const stats = findCompetStats(participant, competBySteam64, competByName) ?? get5Stats;
   const humanName = participant.steamPersonaName?.trim()
     || stats?.name.trim()
     || participant.displayName.trim()
@@ -107,6 +109,15 @@ function mergeParticipantResult(
     || participant.displayName.trim()
     || "";
   const avatarUrl = participant.kind === "human" ? participant.steamAvatarUrl?.trim() : undefined;
+  const kills = stats?.kills ?? 0;
+  const deaths = stats?.deaths ?? 0;
+  const assists = stats?.assists ?? 0;
+  const damage = stats?.damage ?? 0;
+  const rating2 = calculateHltvRating2(
+    { kills, deaths, assists, damage },
+    get5Stats?.kastRounds,
+    get5Stats?.roundsPlayed,
+  ) ?? get5Stats?.rating2;
   return {
     steam64: participant.steam64 ?? stats?.steam64 ?? "",
     name: participant.kind === "human" ? humanName : botName,
@@ -114,11 +125,12 @@ function mergeParticipantResult(
     ...(participant.botCategory ? { botCategory: participant.botCategory } : {}),
     ...(avatarUrl ? { avatarUrl } : {}),
     team,
-    kills: stats?.kills ?? 0,
-    deaths: stats?.deaths ?? 0,
-    assists: stats?.assists ?? 0,
-    damage: stats?.damage ?? 0,
+    kills,
+    deaths,
+    assists,
+    damage,
     mvp: stats?.mvp ?? 0,
+    ...(rating2 !== undefined ? { rating2 } : {}),
   };
 }
 
