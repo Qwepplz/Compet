@@ -106,61 +106,63 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
         <Button className="match-result-back-button" aria-label="返回大厅" icon={<ArrowLeftOutlined />} onClick={onBackHome} />
         <section className="match-result-team-panels" aria-label="玩家战绩">
           {teamSections.map((section) => (
-            <section className="match-result-team-panel" key={section.team}>
-              <header className="match-result-team-panel-header">
+            <section className="match-result-team-section" key={section.team}>
+              <header className="match-result-team-header">
                 <strong>{section.name}</strong>
                 <strong className={`match-result-team-score${section.team === result.winner ? " match-result-team-score--winner" : ""}`}>
                   {section.score}
                 </strong>
               </header>
-              <div className="match-result-table-wrap">
-                <table className="match-result-table">
-                  <thead>
-                    <tr>
-                      <th>玩家</th>
-                      <th>K</th>
-                      <th>D</th>
-                      <th>A</th>
-                      <th>ADR</th>
-                      <th>K/D</th>
-                      <th>K/R</th>
-                      <th>爆头</th>
-                      <th>HS%</th>
-                      <th>Rating 2.0</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {section.players.map((player) => {
-                      const name = playerName(player);
-                      const badge = playerBadge(player);
-                      const ratingTone = rating2Tone(player.rating2, rating2Cutoffs);
-                      return (
-                        <tr key={player.steam64 || `${player.team}-${player.name}`}>
-                          <td>
-                            <div className="match-result-player">
-                              <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
-                              <div className="match-result-player-name-line">
-                                <strong>{name}</strong>
-                                {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
+              <div className="match-result-team-panel">
+                <div className="match-result-table-wrap">
+                  <table className="match-result-table">
+                    <thead>
+                      <tr>
+                        <th>玩家</th>
+                        <th>K</th>
+                        <th>D</th>
+                        <th>A</th>
+                        <th>ADR</th>
+                        <th>K/D</th>
+                        <th>K/R</th>
+                        <th>爆头</th>
+                        <th>HS%</th>
+                        <th>Rating 2.0</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {section.players.map((player) => {
+                        const name = playerName(player);
+                        const badge = playerBadge(player);
+                        const ratingTone = rating2Tone(player.rating2, rating2Cutoffs);
+                        return (
+                          <tr key={player.steam64 || `${player.team}-${player.name}`}>
+                            <td>
+                              <div className="match-result-player">
+                                <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
+                                <div className="match-result-player-name-line">
+                                  <strong>{name}</strong>
+                                  {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
+                                </div>
                               </div>
-                            </div>
-                          </td>
-                          <td>{player.kills}</td>
-                          <td>{player.deaths}</td>
-                          <td>{player.assists}</td>
-                          <td>{formatAdr(player.damage, totalRounds)}</td>
-                          <td>{formatKillDeathRatio(player.kills, player.deaths)}</td>
-                          <td>{formatKillsPerRound(player.kills, totalRounds)}</td>
-                          <td>{player.headshots}</td>
-                          <td>{formatHeadshotPercent(player.headshots, player.kills)}</td>
-                          <td className={ratingTone ? `match-result-rating match-result-rating--${ratingTone}` : "match-result-rating"}>
-                            {formatRating2(player.rating2)}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                            </td>
+                            <td>{player.kills}</td>
+                            <td>{player.deaths}</td>
+                            <td>{player.assists}</td>
+                            <td>{formatAdr(player.damage, totalRounds)}</td>
+                            <td>{formatKillDeathRatio(player.kills, player.deaths)}</td>
+                            <td>{formatKillsPerRound(player.kills, totalRounds)}</td>
+                            <td>{player.headshots}</td>
+                            <td>{formatHeadshotPercent(player.headshots, player.kills)}</td>
+                            <td className={ratingTone ? `match-result-rating match-result-rating--${ratingTone}` : "match-result-rating"}>
+                              {formatRating2(player.rating2)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </div>
             </section>
           ))}
