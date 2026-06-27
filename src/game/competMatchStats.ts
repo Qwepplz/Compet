@@ -9,6 +9,7 @@ export interface CompetMatchPlayerStats {
   assists: number;
   damage: number;
   mvp: number;
+  headshots: number;
   kastRounds?: number;
   roundsPlayed?: number;
 }
@@ -57,6 +58,7 @@ export function classifyCompetMatchStats(stats: unknown): CompetMatchPlayerStats
       assists: numberValue(player.assists),
       damage: numberValue(player.damage),
       mvp: numberValue(player.mvp),
+      headshots: numberValue(player.headshots),
       ...(kastRounds !== undefined ? { kastRounds } : {}),
       ...(roundsPlayed !== undefined ? { roundsPlayed } : {}),
     }];

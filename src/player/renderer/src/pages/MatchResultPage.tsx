@@ -9,6 +9,11 @@ interface MatchResultPageProps {
   onBackHome: () => void;
 }
 
+interface Rating2Cutoffs {
+  low: number;
+  high: number;
+}
+
 function playerName(player: PlayerMatchPlayerResultDto): string {
   return player.name || "玩家";
 }
@@ -19,6 +24,18 @@ function formatResultMapName(map: string): string {
 
 function formatAdr(damage: number, totalRounds: number): string {
   return totalRounds > 0 ? (damage / totalRounds).toFixed(1) : "0.0";
+}
+
+function formatKillDeathRatio(kills: number, deaths: number): string {
+  return deaths > 0 ? (kills / deaths).toFixed(2) : kills.toFixed(2);
+}
+
+function formatKillsPerRound(kills: number, totalRounds: number): string {
+  return totalRounds > 0 ? (kills / totalRounds).toFixed(2) : "0.00";
+}
+
+function formatHeadshotPercent(headshots: number, kills: number): string {
+  return kills > 0 ? `${Math.round((headshots / kills) * 100)}%` : "0%";
 }
 
 function formatRating2(rating2: number | undefined): string {
@@ -39,8 +56,29 @@ function sortPlayersByAdr(players: PlayerMatchPlayerResultDto[], totalRounds: nu
   return [...players].sort((left, right) => playerAdr(right, totalRounds) - playerAdr(left, totalRounds));
 }
 
+function matchRating2Cutoffs(players: PlayerMatchPlayerResultDto[]): Rating2Cutoffs | null {
+  const ratings = players
+    .map((player) => player.rating2)
+    .filter((rating2): rating2 is number => typeof rating2 === "number" && Number.isFinite(rating2))
+    .sort((left, right) => left - right);
+  if (ratings.length === 0) return null;
+  return {
+    low: ratings[Math.floor((ratings.length - 1) / 3)]!,
+    high: ratings[Math.ceil(((ratings.length - 1) * 2) / 3)]!,
+  };
+}
+
+function rating2Tone(rating2: number | undefined, cutoffs: Rating2Cutoffs | null): "low" | "mid" | "high" | null {
+  if (typeof rating2 !== "number" || !Number.isFinite(rating2) || !cutoffs) return null;
+  if (cutoffs.low === cutoffs.high) return "mid";
+  if (rating2 <= cutoffs.low) return "low";
+  if (rating2 >= cutoffs.high) return "high";
+  return "mid";
+}
+
 export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
   const totalRounds = result.team1Score + result.team2Score;
+  const rating2Cutoffs = matchRating2Cutoffs(result.players);
   const teamSections = [
     {
       team: "teamA" as const,
@@ -84,14 +122,18 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                       <th>D</th>
                       <th>A</th>
                       <th>ADR</th>
+                      <th>K/D</th>
+                      <th>K/R</th>
+                      <th>爆头</th>
+                      <th>HS%</th>
                       <th>Rating 2.0</th>
-                      <th>MVP</th>
                     </tr>
                   </thead>
                   <tbody>
                     {section.players.map((player) => {
                       const name = playerName(player);
                       const badge = playerBadge(player);
+                      const ratingTone = rating2Tone(player.rating2, rating2Cutoffs);
                       return (
                         <tr key={player.steam64 || `${player.team}-${player.name}`}>
                           <td>
@@ -107,8 +149,13 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                           <td>{player.deaths}</td>
                           <td>{player.assists}</td>
                           <td>{formatAdr(player.damage, totalRounds)}</td>
-                          <td>{formatRating2(player.rating2)}</td>
-                          <td>{player.mvp}</td>
+                          <td>{formatKillDeathRatio(player.kills, player.deaths)}</td>
+                          <td>{formatKillsPerRound(player.kills, totalRounds)}</td>
+                          <td>{player.headshots}</td>
+                          <td>{formatHeadshotPercent(player.headshots, player.kills)}</td>
+                          <td className={ratingTone ? `match-result-rating match-result-rating--${ratingTone}` : "match-result-rating"}>
+                            {formatRating2(player.rating2)}
+                          </td>
                         </tr>
                       );
                     })}

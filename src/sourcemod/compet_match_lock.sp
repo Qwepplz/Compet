@@ -30,6 +30,7 @@ int g_PlayerDeaths[MAXPLAYERS + 1];
 int g_PlayerAssists[MAXPLAYERS + 1];
 int g_PlayerDamage[MAXPLAYERS + 1];
 int g_PlayerMvp[MAXPLAYERS + 1];
+int g_PlayerHeadshots[MAXPLAYERS + 1];
 int g_PlayerRoundsPlayed[MAXPLAYERS + 1];
 int g_PlayerKastRounds[MAXPLAYERS + 1];
 char g_PlayerNames[MAXPLAYERS + 1][COMPET_PLAYER_NAME_SIZE];
@@ -262,6 +263,9 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
   if (IsStatsClient(attacker) && IsStatsClient(victim) && attacker != victim && AreOpposingPlayers(attacker, victim)) {
     MarkRoundParticipant(attacker);
     g_PlayerKills[attacker]++;
+    if (event.GetBool("headshot")) {
+      g_PlayerHeadshots[attacker]++;
+    }
     g_RoundKillOrAssist[attacker] = true;
     g_RoundKiller[victim] = attacker;
     g_RoundDeathTime[victim] = GetGameTime();
@@ -380,6 +384,7 @@ void ResetMatchStats() {
     g_PlayerAssists[client] = 0;
     g_PlayerDamage[client] = 0;
     g_PlayerMvp[client] = 0;
+    g_PlayerHeadshots[client] = 0;
     g_PlayerRoundsPlayed[client] = 0;
     g_PlayerKastRounds[client] = 0;
     g_PlayerNames[client][0] = '\0';
@@ -476,6 +481,7 @@ bool HasStoredMatchStats(int client) {
     || g_PlayerAssists[client] != 0
     || g_PlayerDamage[client] != 0
     || g_PlayerMvp[client] != 0
+    || g_PlayerHeadshots[client] != 0
     || g_PlayerRoundsPlayed[client] != 0
     || g_PlayerKastRounds[client] != 0;
 }
@@ -534,7 +540,7 @@ void WriteMatchStats() {
     if (wroteAny) {
       WriteFileLine(
         file,
-        "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
+        "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
         g_PlayerKills[client],
@@ -542,13 +548,14 @@ void WriteMatchStats() {
         g_PlayerAssists[client],
         g_PlayerDamage[client],
         g_PlayerMvp[client],
+        g_PlayerHeadshots[client],
         g_PlayerKastRounds[client],
         g_PlayerRoundsPlayed[client]
       );
     } else {
       WriteFileLine(
         file,
-        "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
+        "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
         g_PlayerKills[client],
@@ -556,6 +563,7 @@ void WriteMatchStats() {
         g_PlayerAssists[client],
         g_PlayerDamage[client],
         g_PlayerMvp[client],
+        g_PlayerHeadshots[client],
         g_PlayerKastRounds[client],
         g_PlayerRoundsPlayed[client]
       );

@@ -123,6 +123,7 @@ function mergeParticipantResult(
     assists,
     damage,
     mvp: stats?.mvp ?? 0,
+    headshots: stats?.headshots ?? 0,
     ...(rating2 !== undefined ? { rating2 } : {}),
   };
 }

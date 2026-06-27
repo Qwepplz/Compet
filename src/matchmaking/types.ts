@@ -48,6 +48,7 @@ export interface MatchPlayerResult {
   assists: number;
   damage: number;
   mvp: number;
+  headshots: number;
   rating2?: number;
 }
 export interface MatchPlan {

@@ -203,6 +203,7 @@ function readPlayers(players: unknown, team: TeamSide): MatchPlayerResult[] {
       assists,
       damage,
       mvp: numberValue(value.mvp),
+      headshots: 0,
     }];
   });
 }

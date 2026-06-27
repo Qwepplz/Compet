@@ -914,7 +914,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .match-result-table th:first-child,
 .match-result-table td:first-child {
-  width: 46%;
+  width: 34%;
 }
 
 .match-result-table tr:last-child td {
@@ -931,6 +931,18 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   font-size: 14px;
   font-weight: 700;
   white-space: nowrap;
+}
+
+.match-result-table td.match-result-rating--low {
+  color: #ff5a5f;
+}
+
+.match-result-table td.match-result-rating--mid {
+  color: #fff;
+}
+
+.match-result-table td.match-result-rating--high {
+  color: #28d17c;
 }
 
 .match-result-player {
