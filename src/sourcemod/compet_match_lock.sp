@@ -29,7 +29,6 @@ int g_PlayerKills[MAXPLAYERS + 1];
 int g_PlayerDeaths[MAXPLAYERS + 1];
 int g_PlayerAssists[MAXPLAYERS + 1];
 int g_PlayerDamage[MAXPLAYERS + 1];
-int g_PlayerMvp[MAXPLAYERS + 1];
 int g_PlayerHeadshots[MAXPLAYERS + 1];
 int g_PlayerRoundsPlayed[MAXPLAYERS + 1];
 int g_PlayerKastRounds[MAXPLAYERS + 1];
@@ -54,7 +53,6 @@ public void OnPluginStart() {
   HookEvent("round_end", Event_RoundEnd, EventHookMode_Post);
   HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
   HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
-  HookEvent("round_mvp", Event_RoundMvp, EventHookMode_Post);
   PrintToServer("[Compet] Match lock plugin loaded; waiting for compet_lock_reset.");
 }
 
@@ -283,21 +281,6 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
   }
 }
 
-public void Event_RoundMvp(Event event, const char[] name, bool dontBroadcast) {
-  if (!ShouldRecordStats()) {
-    return;
-  }
-
-  int client = GetClientOfUserId(event.GetInt("userid"));
-  if (!IsStatsClient(client)) {
-    return;
-  }
-
-  MarkRoundParticipant(client);
-  g_PlayerMvp[client]++;
-  WriteMatchStats();
-}
-
 bool ApplyClientLock(int client, bool fromCommand, int requestedTeam) {
   char auth[32];
   if (!GetClientAuthId(client, AuthId_SteamID64, auth, sizeof(auth), true)) {
@@ -383,7 +366,6 @@ void ResetMatchStats() {
     g_PlayerDeaths[client] = 0;
     g_PlayerAssists[client] = 0;
     g_PlayerDamage[client] = 0;
-    g_PlayerMvp[client] = 0;
     g_PlayerHeadshots[client] = 0;
     g_PlayerRoundsPlayed[client] = 0;
     g_PlayerKastRounds[client] = 0;
@@ -480,7 +462,6 @@ bool HasStoredMatchStats(int client) {
     || g_PlayerDeaths[client] != 0
     || g_PlayerAssists[client] != 0
     || g_PlayerDamage[client] != 0
-    || g_PlayerMvp[client] != 0
     || g_PlayerHeadshots[client] != 0
     || g_PlayerRoundsPlayed[client] != 0
     || g_PlayerKastRounds[client] != 0;
@@ -540,14 +521,13 @@ void WriteMatchStats() {
     if (wroteAny) {
       WriteFileLine(
         file,
-        "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
+        "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
         g_PlayerKills[client],
         g_PlayerDeaths[client],
         g_PlayerAssists[client],
         g_PlayerDamage[client],
-        g_PlayerMvp[client],
         g_PlayerHeadshots[client],
         g_PlayerKastRounds[client],
         g_PlayerRoundsPlayed[client]
@@ -555,14 +535,13 @@ void WriteMatchStats() {
     } else {
       WriteFileLine(
         file,
-        "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"mvp\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
+        "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
         g_PlayerKills[client],
         g_PlayerDeaths[client],
         g_PlayerAssists[client],
         g_PlayerDamage[client],
-        g_PlayerMvp[client],
         g_PlayerHeadshots[client],
         g_PlayerKastRounds[client],
         g_PlayerRoundsPlayed[client]

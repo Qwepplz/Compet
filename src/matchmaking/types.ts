@@ -47,7 +47,6 @@ export interface MatchPlayerResult {
   deaths: number;
   assists: number;
   damage: number;
-  mvp: number;
   headshots: number;
   rating2?: number;
 }

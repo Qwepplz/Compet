@@ -1,9 +1,18 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { MatchPlayerResult, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
+import type { MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
+
+export interface Get5PlayerAlignment {
+  steam64: string;
+  team: TeamSide;
+}
+
+export type Get5MatchSeriesResult = Omit<MatchSeriesResult, "players"> & {
+  players: Get5PlayerAlignment[];
+};
 
 export type Get5MatchResultClassification =
-  | { status: "normal"; result: MatchSeriesResult }
+  | { status: "normal"; result: Get5MatchSeriesResult }
   | { status: "abnormal"; reason: string };
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -186,24 +195,13 @@ function isValidMr12FinalScore(team1Score: number, team2Score: number, winner: T
   return loserScore >= winnerScore - 4 && loserScore <= winnerScore - 2;
 }
 
-function readPlayers(players: unknown, team: TeamSide): MatchPlayerResult[] {
+function readPlayers(players: unknown, team: TeamSide): Get5PlayerAlignment[] {
   if (!isRecord(players)) return [];
   return Object.entries(players).flatMap(([steam64, value]) => {
     if (!isRecord(value)) return [];
-    const kills = numberValue(value.kills);
-    const deaths = numberValue(value.deaths);
-    const assists = numberValue(value.assists);
-    const damage = numberValue(value.damage);
     return [{
       steam64,
-      name: stringValue(value.name),
       team,
-      kills,
-      deaths,
-      assists,
-      damage,
-      mvp: numberValue(value.mvp),
-      headshots: 0,
     }];
   });
 }

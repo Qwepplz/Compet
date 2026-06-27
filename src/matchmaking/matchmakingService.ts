@@ -4,13 +4,14 @@ import type { AccountRecord } from "../accounts/accountTypes.js";
 import type { BotCatalog } from "../bots/botCatalog.js";
 import type { FriendListDto } from "../friends/friendService.js";
 import type { CompetMatchPlayerStats } from "../game/competMatchStats.js";
+import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
 import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
-import type { MatchParticipant, MatchPlan, MatchPlayerResult, MatchSeriesResult, TeamSide } from "./types.js";
+import type { MatchParticipant, MatchPlan, MatchPlayerResult, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
   type MatchMapSelectionState,
@@ -49,7 +50,7 @@ function mergeMatchResultPlayers(
   ];
 }
 
-function alignGet5ResultToRoom(room: MatchRoomRecord, result: MatchSeriesResult): MatchSeriesResult {
+function alignGet5ResultToRoom(room: MatchRoomRecord, result: Get5MatchSeriesResult): Get5MatchSeriesResult {
   if (!shouldSwapGet5Teams(room, result.players)) return result;
   return {
     ...result,
@@ -61,7 +62,7 @@ function alignGet5ResultToRoom(room: MatchRoomRecord, result: MatchSeriesResult)
   };
 }
 
-function shouldSwapGet5Teams(room: MatchRoomRecord, players: MatchPlayerResult[]): boolean {
+function shouldSwapGet5Teams(room: MatchRoomRecord, players: Get5MatchSeriesResult["players"]): boolean {
   const roomTeamA = new Set(room.teamA.participants.map((participant) => participant.steam64).filter(Boolean));
   const roomTeamB = new Set(room.teamB.participants.map((participant) => participant.steam64).filter(Boolean));
   let direct = 0;
@@ -122,7 +123,6 @@ function mergeParticipantResult(
     deaths,
     assists,
     damage,
-    mvp: stats?.mvp ?? 0,
     headshots: stats?.headshots ?? 0,
     ...(rating2 !== undefined ? { rating2 } : {}),
   };
