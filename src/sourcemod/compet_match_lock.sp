@@ -1,4 +1,5 @@
 #include <sourcemod>
+#include <sdktools>
 #include <cstrike>
 
 #pragma semicolon 1
@@ -25,10 +26,6 @@ bool g_StatsActive = false;
 char g_MatchId[128] = "";
 Handle g_EnforceTimer = null;
 Handle g_StatusTimer = null;
-int g_PlayerKills[MAXPLAYERS + 1];
-int g_PlayerDeaths[MAXPLAYERS + 1];
-int g_PlayerAssists[MAXPLAYERS + 1];
-int g_PlayerDamage[MAXPLAYERS + 1];
 int g_PlayerHeadshots[MAXPLAYERS + 1];
 int g_PlayerRoundsPlayed[MAXPLAYERS + 1];
 int g_PlayerKastRounds[MAXPLAYERS + 1];
@@ -51,7 +48,6 @@ public void OnPluginStart() {
   AddCommandListener(Command_JoinTeam, "joingame");
   HookEvent("round_start", Event_RoundStart, EventHookMode_Post);
   HookEvent("round_end", Event_RoundEnd, EventHookMode_Post);
-  HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
   HookEvent("player_death", Event_PlayerDeath, EventHookMode_Post);
   PrintToServer("[Compet] Match lock plugin loaded; waiting for compet_lock_reset.");
 }
@@ -187,27 +183,6 @@ public Action Timer_ApplyClientLock(Handle timer, int userId) {
   return Plugin_Stop;
 }
 
-public void Event_PlayerHurt(Event event, const char[] name, bool dontBroadcast) {
-  if (!ShouldRecordStats()) {
-    return;
-  }
-
-  int attacker = GetClientOfUserId(event.GetInt("attacker"));
-  int victim = GetClientOfUserId(event.GetInt("userid"));
-  if (!IsStatsClient(attacker) || !IsStatsClient(victim) || attacker == victim || !AreOpposingPlayers(attacker, victim)) {
-    return;
-  }
-
-  int damage = event.GetInt("dmg_health");
-  if (damage <= 0) {
-    return;
-  }
-
-  MarkRoundParticipant(attacker);
-  g_PlayerDamage[attacker] += damage;
-  WriteMatchStats();
-}
-
 public void Event_RoundStart(Event event, const char[] name, bool dontBroadcast) {
   if (!ShouldRecordStats()) {
     return;
@@ -254,13 +229,11 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
 
   if (IsStatsClient(victim)) {
     MarkRoundParticipant(victim);
-    g_PlayerDeaths[victim]++;
     g_RoundDied[victim] = true;
     changed = true;
   }
   if (IsStatsClient(attacker) && IsStatsClient(victim) && attacker != victim && AreOpposingPlayers(attacker, victim)) {
     MarkRoundParticipant(attacker);
-    g_PlayerKills[attacker]++;
     if (event.GetBool("headshot")) {
       g_PlayerHeadshots[attacker]++;
     }
@@ -272,7 +245,6 @@ public void Event_PlayerDeath(Event event, const char[] name, bool dontBroadcast
   }
   if (IsStatsClient(assister) && IsStatsClient(victim) && assister != victim && assister != attacker && AreOpposingPlayers(assister, victim)) {
     MarkRoundParticipant(assister);
-    g_PlayerAssists[assister]++;
     g_RoundKillOrAssist[assister] = true;
     changed = true;
   }
@@ -362,10 +334,6 @@ bool ShouldRecordStats() {
 void ResetMatchStats() {
   g_StatsActive = false;
   for (int client = 1; client <= MaxClients; client++) {
-    g_PlayerKills[client] = 0;
-    g_PlayerDeaths[client] = 0;
-    g_PlayerAssists[client] = 0;
-    g_PlayerDamage[client] = 0;
     g_PlayerHeadshots[client] = 0;
     g_PlayerRoundsPlayed[client] = 0;
     g_PlayerKastRounds[client] = 0;
@@ -458,10 +426,6 @@ bool AreOpposingPlayers(int first, int second) {
 bool HasStoredMatchStats(int client) {
   return g_PlayerNames[client][0] != '\0'
     || g_PlayerSteam64[client][0] != '\0'
-    || g_PlayerKills[client] != 0
-    || g_PlayerDeaths[client] != 0
-    || g_PlayerAssists[client] != 0
-    || g_PlayerDamage[client] != 0
     || g_PlayerHeadshots[client] != 0
     || g_PlayerRoundsPlayed[client] != 0
     || g_PlayerKastRounds[client] != 0;
@@ -490,6 +454,12 @@ void WriteMatchStats() {
     return;
   }
 
+  int playerManager = FindEntityByClassname(-1, "cs_player_manager");
+  if (playerManager == -1) {
+    LogError("[Compet] Could not find cs_player_manager entity. Match stats were not written.");
+    return;
+  }
+
   char path[PLATFORM_MAX_PATH];
   BuildMatchStatsPath(path, sizeof(path));
 
@@ -509,9 +479,17 @@ void WriteMatchStats() {
 
   bool wroteAny = false;
   for (int client = 1; client <= MaxClients; client++) {
+    if (IsStatsClient(client)) {
+      CaptureClientIdentity(client);
+    }
     if (!HasStoredMatchStats(client)) {
       continue;
     }
+
+    int kills = GetEntProp(playerManager, Prop_Send, "m_iKills", _, client);
+    int deaths = GetEntProp(playerManager, Prop_Send, "m_iDeaths", _, client);
+    int assists = GetEntProp(playerManager, Prop_Send, "m_iAssists", _, client);
+    int damage = GetEntProp(playerManager, Prop_Send, "m_iMatchStats_Damage_Total", _, client);
 
     char escapedName[256];
     char escapedSteam64[64];
@@ -524,10 +502,10 @@ void WriteMatchStats() {
         "    ,{\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
-        g_PlayerKills[client],
-        g_PlayerDeaths[client],
-        g_PlayerAssists[client],
-        g_PlayerDamage[client],
+        kills,
+        deaths,
+        assists,
+        damage,
         g_PlayerHeadshots[client],
         g_PlayerKastRounds[client],
         g_PlayerRoundsPlayed[client]
@@ -538,10 +516,10 @@ void WriteMatchStats() {
         "    {\"name\":\"%s\",\"steam64\":\"%s\",\"kills\":%d,\"deaths\":%d,\"assists\":%d,\"damage\":%d,\"headshots\":%d,\"kastRounds\":%d,\"roundsPlayed\":%d}",
         escapedName,
         escapedSteam64,
-        g_PlayerKills[client],
-        g_PlayerDeaths[client],
-        g_PlayerAssists[client],
-        g_PlayerDamage[client],
+        kills,
+        deaths,
+        assists,
+        damage,
         g_PlayerHeadshots[client],
         g_PlayerKastRounds[client],
         g_PlayerRoundsPlayed[client]

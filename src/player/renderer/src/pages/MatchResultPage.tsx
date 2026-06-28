@@ -42,18 +42,18 @@ function formatRating2(rating2: number | undefined): string {
   return typeof rating2 === "number" && Number.isFinite(rating2) ? rating2.toFixed(2) : "-";
 }
 
-function playerAdr(player: PlayerMatchPlayerResultDto, totalRounds: number): number {
-  return totalRounds > 0 ? player.damage / totalRounds : 0;
-}
-
 function playerBadge(player: PlayerMatchPlayerResultDto): { variant: "gold" | "white"; title: string } | null {
   if (player.kind === "human") return { variant: "gold", title: "Player" };
   if (player.botCategory === "pro") return { variant: "white", title: "Pro-Bot" };
   return null;
 }
 
-function sortPlayersByAdr(players: PlayerMatchPlayerResultDto[], totalRounds: number): PlayerMatchPlayerResultDto[] {
-  return [...players].sort((left, right) => playerAdr(right, totalRounds) - playerAdr(left, totalRounds));
+function rating2SortValue(player: PlayerMatchPlayerResultDto): number {
+  return typeof player.rating2 === "number" && Number.isFinite(player.rating2) ? player.rating2 : Number.NEGATIVE_INFINITY;
+}
+
+function sortPlayersByRating2(players: PlayerMatchPlayerResultDto[]): PlayerMatchPlayerResultDto[] {
+  return [...players].sort((left, right) => rating2SortValue(right) - rating2SortValue(left));
 }
 
 function matchRating2Cutoffs(players: PlayerMatchPlayerResultDto[]): Rating2Cutoffs | null {
@@ -84,13 +84,13 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
       team: "teamA" as const,
       name: "Team A",
       score: result.team1Score,
-      players: sortPlayersByAdr(result.players.filter((player) => player.team === "teamA"), totalRounds),
+      players: sortPlayersByRating2(result.players.filter((player) => player.team === "teamA")),
     },
     {
       team: "teamB" as const,
       name: "Team B",
       score: result.team2Score,
-      players: sortPlayersByAdr(result.players.filter((player) => player.team === "teamB"), totalRounds),
+      players: sortPlayersByRating2(result.players.filter((player) => player.team === "teamB")),
     },
   ];
 
