@@ -954,6 +954,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #28d17c;
 }
 
+.match-result-table td.match-result-rating--elite {
+  color: #f5c542;
+}
+
 .match-result-player {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);

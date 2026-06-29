@@ -9,11 +9,6 @@ interface MatchResultPageProps {
   onBackHome: () => void;
 }
 
-interface Rating2Cutoffs {
-  low: number;
-  high: number;
-}
-
 function playerName(player: PlayerMatchPlayerResultDto): string {
   return player.name || "玩家";
 }
@@ -38,8 +33,13 @@ function formatHeadshotPercent(headshots: number, kills: number): string {
   return kills > 0 ? `${Math.round((headshots / kills) * 100)}%` : "0%";
 }
 
+function displayedRating2Value(rating2: number | undefined): number | null {
+  return typeof rating2 === "number" && Number.isFinite(rating2) ? Number(rating2.toFixed(2)) : null;
+}
+
 function formatRating2(rating2: number | undefined): string {
-  return typeof rating2 === "number" && Number.isFinite(rating2) ? rating2.toFixed(2) : "-";
+  const displayed = displayedRating2Value(rating2);
+  return displayed === null ? "-" : displayed.toFixed(2);
 }
 
 function playerBadge(player: PlayerMatchPlayerResultDto): { variant: "gold" | "white"; title: string } | null {
@@ -56,29 +56,17 @@ function sortPlayersByRating2(players: PlayerMatchPlayerResultDto[]): PlayerMatc
   return [...players].sort((left, right) => rating2SortValue(right) - rating2SortValue(left));
 }
 
-function matchRating2Cutoffs(players: PlayerMatchPlayerResultDto[]): Rating2Cutoffs | null {
-  const ratings = players
-    .map((player) => player.rating2)
-    .filter((rating2): rating2 is number => typeof rating2 === "number" && Number.isFinite(rating2))
-    .sort((left, right) => left - right);
-  if (ratings.length === 0) return null;
-  return {
-    low: ratings[Math.floor((ratings.length - 1) / 3)]!,
-    high: ratings[Math.ceil(((ratings.length - 1) * 2) / 3)]!,
-  };
-}
-
-function rating2Tone(rating2: number | undefined, cutoffs: Rating2Cutoffs | null): "low" | "mid" | "high" | null {
-  if (typeof rating2 !== "number" || !Number.isFinite(rating2) || !cutoffs) return null;
-  if (cutoffs.low === cutoffs.high) return "mid";
-  if (rating2 <= cutoffs.low) return "low";
-  if (rating2 >= cutoffs.high) return "high";
-  return "mid";
+function rating2Tone(rating2: number | undefined): "low" | "mid" | "high" | "elite" | null {
+  const displayed = displayedRating2Value(rating2);
+  if (displayed === null) return null;
+  if (displayed < 0.9) return "low";
+  if (displayed < 1.3) return "mid";
+  if (displayed < 1.8) return "high";
+  return "elite";
 }
 
 export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
   const totalRounds = result.team1Score + result.team2Score;
-  const rating2Cutoffs = matchRating2Cutoffs(result.players);
   const teamSections = [
     {
       team: "teamA" as const,
@@ -134,7 +122,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                       {section.players.map((player) => {
                         const name = playerName(player);
                         const badge = playerBadge(player);
-                        const ratingTone = rating2Tone(player.rating2, rating2Cutoffs);
+                        const ratingTone = rating2Tone(player.rating2);
                         return (
                           <tr key={player.steam64 || `${player.team}-${player.name}`}>
                             <td>
