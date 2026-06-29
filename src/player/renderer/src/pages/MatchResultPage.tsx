@@ -10,6 +10,8 @@ interface MatchResultPageProps {
   onBackHome: () => void;
 }
 
+const MIN_RATING2_PROGRESS = 8;
+
 function playerName(player: PlayerMatchPlayerResultDto): string {
   return player.name || "玩家";
 }
@@ -69,7 +71,8 @@ function rating2Tone(rating2: number | undefined): "low" | "mid" | "high" | "eli
 function rating2Progress(rating2: number | undefined): number | null {
   const displayed = displayedRating2Value(rating2);
   if (displayed === null) return null;
-  return Math.min(100, Math.max(0, ((displayed - 0.55) / 1.25) * 100));
+  const progress = Math.min(100, Math.max(0, ((displayed - 0.55) / 1.25) * 100));
+  return Math.max(MIN_RATING2_PROGRESS, progress);
 }
 
 export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
