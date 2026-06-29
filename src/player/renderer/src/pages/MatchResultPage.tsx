@@ -1,5 +1,6 @@
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { Button } from "antd";
+import type { CSSProperties } from "react";
 import type { PlayerMatchPlayerResultDto, PlayerMatchResultDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
@@ -65,6 +66,12 @@ function rating2Tone(rating2: number | undefined): "low" | "mid" | "high" | "eli
   return "elite";
 }
 
+function rating2Progress(rating2: number | undefined): number | null {
+  const displayed = displayedRating2Value(rating2);
+  if (displayed === null) return null;
+  return Math.min(100, Math.max(0, ((displayed - 0.55) / 1.25) * 100));
+}
+
 export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
   const totalRounds = result.team1Score + result.team2Score;
   const teamSections = [
@@ -123,6 +130,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                         const name = playerName(player);
                         const badge = playerBadge(player);
                         const ratingTone = rating2Tone(player.rating2);
+                        const ratingProgress = rating2Progress(player.rating2);
                         return (
                           <tr key={player.steam64 || `${player.team}-${player.name}`}>
                             <td>
@@ -142,8 +150,17 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                             <td>{formatKillsPerRound(player.kills, totalRounds)}</td>
                             <td>{player.headshots}</td>
                             <td>{formatHeadshotPercent(player.headshots, player.kills)}</td>
-                            <td className={ratingTone ? `match-result-rating match-result-rating--${ratingTone}` : "match-result-rating"}>
-                              {formatRating2(player.rating2)}
+                            <td className="match-result-rating">
+                              <span
+                                className={ratingTone ? `match-result-rating-pill match-result-rating-pill--${ratingTone}` : "match-result-rating-pill"}
+                                style={
+                                  ratingProgress === null
+                                    ? undefined
+                                    : ({ "--match-result-rating-progress": `${ratingProgress}%` } as CSSProperties)
+                                }
+                              >
+                                {formatRating2(player.rating2)}
+                              </span>
                             </td>
                           </tr>
                         );
