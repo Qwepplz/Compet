@@ -22,7 +22,13 @@ export interface MatchTeam {
   gameSide: GameSide;
   name: string;
   logo?: string;
+  logoImage?: string;
   participants: MatchParticipant[];
+}
+
+export interface MatchHalfScore {
+  team1Score: number;
+  team2Score: number;
 }
 
 export interface MatchSeriesResult {
@@ -30,8 +36,14 @@ export interface MatchSeriesResult {
   team1SeriesScore: number;
   team2SeriesScore: number;
   mapName: string;
+  team1Name: string;
+  team1LogoImage?: string;
+  team2Name: string;
+  team2LogoImage?: string;
   team1Score: number;
   team2Score: number;
+  firstHalfScore?: MatchHalfScore;
+  secondHalfScore?: MatchHalfScore;
   players: MatchPlayerResult[];
   completedAt: string;
 }

@@ -85,6 +85,7 @@ function isFairBotCandidate(candidate: BotCandidate): boolean {
 interface PickedTeamRoster {
   name: string;
   logo?: string;
+  logoImage?: string;
 }
 
 export function assignTeams(input: AssignTeamsInput): AssignTeamsResult {
@@ -132,7 +133,11 @@ function pickTeamRosters(botRosters: readonly BotRosterTeam[] | undefined, rando
   for (const roster of botRosters ?? []) {
     const name = roster.name.trim();
     if (name && !rosterByName.has(name)) {
-      rosterByName.set(name, { name, ...(roster.logo ? { logo: roster.logo } : {}) });
+      rosterByName.set(name, {
+        name,
+        ...(roster.logo ? { logo: roster.logo } : {}),
+        ...(roster.logoImage ? { logoImage: roster.logoImage } : {}),
+      });
     }
   }
 
@@ -283,6 +288,7 @@ function createTeam(id: "teamA" | "teamB", gameSide: "t" | "ct", roster: PickedT
     gameSide,
     name: roster.name,
     ...(roster.logo ? { logo: roster.logo } : {}),
+    ...(roster.logoImage ? { logoImage: roster.logoImage } : {}),
     participants: markCaptain(participants, random),
   };
 }

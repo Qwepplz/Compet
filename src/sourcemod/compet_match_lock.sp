@@ -29,6 +29,11 @@ Handle g_StatusTimer = null;
 int g_PlayerHeadshots[MAXPLAYERS + 1];
 int g_PlayerRoundsPlayed[MAXPLAYERS + 1];
 int g_PlayerKastRounds[MAXPLAYERS + 1];
+int g_FirstHalfScoreT = 0;
+int g_FirstHalfScoreCT = 0;
+int g_SecondHalfScoreT = 0;
+int g_SecondHalfScoreCT = 0;
+int g_RegulationRoundsScored = 0;
 char g_PlayerNames[MAXPLAYERS + 1][COMPET_PLAYER_NAME_SIZE];
 char g_PlayerSteam64[MAXPLAYERS + 1][COMPET_AUTH_SIZE];
 bool g_RoundStatsActive = false;
@@ -198,6 +203,8 @@ public void Event_RoundEnd(Event event, const char[] name, bool dontBroadcast) {
     return;
   }
 
+  RecordHalfScore(event.GetInt("winner"));
+
   if (!g_RoundStatsActive) {
     CaptureRoundParticipants();
   }
@@ -333,6 +340,11 @@ bool ShouldRecordStats() {
 
 void ResetMatchStats() {
   g_StatsActive = false;
+  g_FirstHalfScoreT = 0;
+  g_FirstHalfScoreCT = 0;
+  g_SecondHalfScoreT = 0;
+  g_SecondHalfScoreCT = 0;
+  g_RegulationRoundsScored = 0;
   for (int client = 1; client <= MaxClients; client++) {
     g_PlayerHeadshots[client] = 0;
     g_PlayerRoundsPlayed[client] = 0;
@@ -353,6 +365,28 @@ void ResetRoundStats() {
     g_RoundTraded[client] = false;
     g_RoundKiller[client] = 0;
     g_RoundDeathTime[client] = 0.0;
+  }
+}
+
+void RecordHalfScore(int winner) {
+  if (winner != CS_TEAM_T && winner != CS_TEAM_CT) {
+    return;
+  }
+  if (g_RegulationRoundsScored >= 24) {
+    return;
+  }
+
+  g_RegulationRoundsScored++;
+  if (g_RegulationRoundsScored <= 12) {
+    if (winner == CS_TEAM_T) {
+      g_FirstHalfScoreT++;
+    } else {
+      g_FirstHalfScoreCT++;
+    }
+  } else if (winner == CS_TEAM_T) {
+    g_SecondHalfScoreT++;
+  } else {
+    g_SecondHalfScoreCT++;
   }
 }
 
@@ -475,6 +509,8 @@ void WriteMatchStats() {
   WriteFileLine(file, "{");
   WriteFileLine(file, "  \"matchId\": \"%s\",", escapedMatchId);
   WriteFileLine(file, "  \"generatedAtUnix\": %d,", GetTime());
+  WriteFileLine(file, "  \"firstHalfScore\":{\"t\":%d,\"ct\":%d},", g_FirstHalfScoreT, g_FirstHalfScoreCT);
+  WriteFileLine(file, "  \"secondHalfScore\":{\"t\":%d,\"ct\":%d},", g_SecondHalfScoreT, g_SecondHalfScoreCT);
   WriteFileLine(file, "  \"players\": [");
 
   bool wroteAny = false;

@@ -3,7 +3,7 @@ import type { AccountService } from "../accounts/accountService.js";
 import type { AccountRecord } from "../accounts/accountTypes.js";
 import type { BotCatalog } from "../bots/botCatalog.js";
 import type { FriendListDto } from "../friends/friendService.js";
-import type { CompetMatchPlayerStats } from "../game/competMatchStats.js";
+import type { CompetMatchHalfScores, CompetMatchPlayerStats, CompetSideHalfScore } from "../game/competMatchStats.js";
 import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
@@ -11,7 +11,7 @@ import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecu
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
-import type { MatchParticipant, MatchPlan, MatchPlayerResult, TeamSide } from "./types.js";
+import type { GameSide, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayerResult, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
   type MatchMapSelectionState,
@@ -84,6 +84,30 @@ function shouldSwapGet5Teams(room: MatchRoomRecord, players: Get5MatchSeriesResu
 
 function oppositeTeam(team: TeamSide): TeamSide {
   return team === "teamA" ? "teamB" : "teamA";
+}
+
+function matchHalfScoresForRoom(
+  room: MatchRoomRecord,
+  halfScores: CompetMatchHalfScores | undefined,
+): { firstHalfScore?: MatchHalfScore; secondHalfScore?: MatchHalfScore } {
+  if (!halfScores) return {};
+  return {
+    ...(halfScores.firstHalfScore ? { firstHalfScore: matchHalfScoreForRoom(room, halfScores.firstHalfScore, false) } : {}),
+    ...(halfScores.secondHalfScore ? { secondHalfScore: matchHalfScoreForRoom(room, halfScores.secondHalfScore, true) } : {}),
+  };
+}
+
+function matchHalfScoreForRoom(room: MatchRoomRecord, halfScore: CompetSideHalfScore, sidesSwapped: boolean): MatchHalfScore {
+  const team1Side = sidesSwapped ? oppositeGameSide(room.teamA.gameSide) : room.teamA.gameSide;
+  const team2Side = sidesSwapped ? oppositeGameSide(room.teamB.gameSide) : room.teamB.gameSide;
+  return {
+    team1Score: halfScore[team1Side],
+    team2Score: halfScore[team2Side],
+  };
+}
+
+function oppositeGameSide(side: GameSide): GameSide {
+  return side === "t" ? "ct" : "t";
 }
 
 function mergeParticipantResult(
@@ -710,6 +734,11 @@ export class MatchmakingService {
       const alignedGet5Result = alignGet5ResultToRoom(room, report.get5Result.result);
       const result = {
         ...alignedGet5Result,
+        team1Name: room.teamA.name,
+        ...(room.teamA.logoImage ? { team1LogoImage: room.teamA.logoImage } : {}),
+        team2Name: room.teamB.name,
+        ...(room.teamB.logoImage ? { team2LogoImage: room.teamB.logoImage } : {}),
+        ...matchHalfScoresForRoom(room, report.competHalfScores),
         players: mergeMatchResultPlayers(room, report.competStats),
       };
       const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: result.completedAt };

@@ -13,6 +13,20 @@ export interface CompetMatchPlayerStats {
   roundsPlayed?: number;
 }
 
+export interface CompetSideHalfScore {
+  t: number;
+  ct: number;
+}
+
+export interface CompetMatchHalfScores {
+  firstHalfScore?: CompetSideHalfScore;
+  secondHalfScore?: CompetSideHalfScore;
+}
+
+export interface CompetMatchStatsReport extends CompetMatchHalfScores {
+  players: CompetMatchPlayerStats[];
+}
+
 export const COMPET_MATCH_STATS_PATH_FORMAT = "addons/sourcemod/data/compet/matches/{MATCHID}/compet_matchstats.json";
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -35,17 +49,28 @@ export function competMatchStatsPath(serverRoot: string, matchId: string): strin
 }
 
 export async function readCompetMatchStats(serverRoot: string, matchId: string): Promise<CompetMatchPlayerStats[]> {
+  const report = await readCompetMatchStatsReport(serverRoot, matchId);
+  return report.players;
+}
+
+export async function readCompetMatchStatsReport(serverRoot: string, matchId: string): Promise<CompetMatchStatsReport> {
   try {
     const raw = await readFile(competMatchStatsPath(serverRoot, matchId), "utf8");
-    return classifyCompetMatchStats(JSON.parse(raw) as unknown);
+    return classifyCompetMatchStatsReport(JSON.parse(raw) as unknown);
   } catch {
-    return [];
+    return { players: [] };
   }
 }
 
 export function classifyCompetMatchStats(stats: unknown): CompetMatchPlayerStats[] {
-  if (!isRecord(stats) || !Array.isArray(stats.players)) return [];
-  return stats.players.flatMap((player) => {
+  return classifyCompetMatchStatsReport(stats).players;
+}
+
+export function classifyCompetMatchStatsReport(stats: unknown): CompetMatchStatsReport {
+  if (!isRecord(stats) || !Array.isArray(stats.players)) return { players: [] };
+  const firstHalfScore = sideHalfScoreValue(stats.firstHalfScore);
+  const secondHalfScore = sideHalfScoreValue(stats.secondHalfScore);
+  const players = stats.players.flatMap((player) => {
     if (!isRecord(player)) return [];
     const kastRounds = optionalNumberValue(player.kastRounds);
     const roundsPlayed = optionalNumberValue(player.roundsPlayed);
@@ -61,6 +86,11 @@ export function classifyCompetMatchStats(stats: unknown): CompetMatchPlayerStats
       ...(roundsPlayed !== undefined ? { roundsPlayed } : {}),
     }];
   });
+  return {
+    ...(firstHalfScore ? { firstHalfScore } : {}),
+    ...(secondHalfScore ? { secondHalfScore } : {}),
+    players,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -77,4 +107,11 @@ function numberValue(value: unknown): number {
 
 function optionalNumberValue(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function sideHalfScoreValue(value: unknown): CompetSideHalfScore | undefined {
+  if (!isRecord(value)) return undefined;
+  const t = optionalNumberValue(value.t);
+  const ct = optionalNumberValue(value.ct);
+  return t !== undefined && ct !== undefined ? { t, ct } : undefined;
 }

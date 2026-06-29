@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 
 import { type BotInfoEntry, parseBotInfo } from "./botInfoParser.js";
 import { type BotProfileEntry, parseBotProfiles } from "./botProfileParser.js";
@@ -22,13 +23,17 @@ export interface BotCatalogInput {
   profileDb: string;
   botInfoJson: string;
   botRosters: string;
+  teamLogoImages?: ReadonlyMap<string, string>;
 }
 
 export interface BotCatalogPaths {
   profileDbPath: string;
   botInfoPath: string;
   botRostersPath: string;
+  teamLogoDirectoryPath?: string;
 }
+
+const SAFE_TEAM_LOGO_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 function buildUnambiguousInfoByLowerName(infoByName: Map<string, BotInfoEntry>): Map<string, BotInfoEntry | undefined> {
   const fallback = new Map<string, BotInfoEntry | undefined>();
@@ -67,7 +72,10 @@ export function createBotCatalog(input: BotCatalogInput): BotCatalog {
   const infoByName = parseBotInfo(input.botInfoJson);
   const unambiguousInfoByLowerName = buildUnambiguousInfoByLowerName(infoByName);
   const candidates = parseBotProfiles(input.profileDb).map((profile) => enrichCandidate(profile, infoByName, unambiguousInfoByLowerName));
-  const rosters = parseBotRosters(input.botRosters);
+  const rosters = parseBotRosters(input.botRosters).map((roster) => {
+    const logoImage = roster.logo ? input.teamLogoImages?.get(roster.logo) : undefined;
+    return logoImage ? { ...roster, logoImage } : roster;
+  });
 
   return {
     candidates,
@@ -98,12 +106,35 @@ export function createBotCatalog(input: BotCatalogInput): BotCatalog {
   };
 }
 
+async function readTeamLogoImage(logoDirectoryPath: string | undefined, logo: string): Promise<string | undefined> {
+  if (!logoDirectoryPath || !SAFE_TEAM_LOGO_ID_PATTERN.test(logo)) return undefined;
+  try {
+    const svg = await readFile(path.join(logoDirectoryPath, `${logo}.svg`), "utf8");
+    return `data:image/svg+xml;base64,${Buffer.from(svg, "utf8").toString("base64")}`;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
+async function readTeamLogoImages(rosters: readonly BotRosterTeam[], logoDirectoryPath?: string): Promise<ReadonlyMap<string, string>> {
+  const images = new Map<string, string>();
+  const logos = [...new Set(rosters.map((roster) => roster.logo).filter((logo): logo is string => Boolean(logo)))];
+  await Promise.all(logos.map(async (logo) => {
+    const image = await readTeamLogoImage(logoDirectoryPath, logo);
+    if (image) images.set(logo, image);
+  }));
+  return images;
+}
+
 export async function loadBotCatalog(paths: BotCatalogPaths): Promise<BotCatalog> {
   const [profileDb, botInfoJson, botRosters] = await Promise.all([
     readFile(paths.profileDbPath, "utf8"),
     readFile(paths.botInfoPath, "utf8"),
     readFile(paths.botRostersPath, "utf8"),
   ]);
+  const rosters = parseBotRosters(botRosters);
+  const teamLogoImages = await readTeamLogoImages(rosters, paths.teamLogoDirectoryPath);
 
-  return createBotCatalog({ profileDb, botInfoJson, botRosters });
+  return createBotCatalog({ profileDb, botInfoJson, botRosters, teamLogoImages });
 }

@@ -167,6 +167,7 @@ async function loadRuntimeBotCatalog(serverRoot: string) {
       profileDbPath: path.join(serverRoot, "csgo", "botprofile.db"),
       botInfoPath: path.join(serverRoot, "csgo", "addons", "sourcemod", "data", "bot_info.json"),
       botRostersPath: path.join(serverRoot, "csgo", "addons", "sourcemod", "configs", "bot_rosters.txt"),
+      teamLogoDirectoryPath: path.join(serverRoot, "csgo", "materials", "panorama", "images", "tournaments", "teams"),
     });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {

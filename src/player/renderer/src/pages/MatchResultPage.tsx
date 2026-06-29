@@ -77,14 +77,20 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
   const teamSections = [
     {
       team: "teamA" as const,
-      name: "Team A",
+      name: result.team1Name,
+      logoImage: result.team1LogoImage,
       score: result.team1Score,
+      firstHalfScore: result.firstHalfScore?.team1Score,
+      secondHalfScore: result.secondHalfScore?.team1Score,
       players: sortPlayersByRating2(result.players.filter((player) => player.team === "teamA")),
     },
     {
       team: "teamB" as const,
-      name: "Team B",
+      name: result.team2Name,
+      logoImage: result.team2LogoImage,
       score: result.team2Score,
+      firstHalfScore: result.firstHalfScore?.team2Score,
+      secondHalfScore: result.secondHalfScore?.team2Score,
       players: sortPlayersByRating2(result.players.filter((player) => player.team === "teamB")),
     },
   ];
@@ -103,7 +109,22 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
           {teamSections.map((section) => (
             <section className="match-result-team-section" key={section.team}>
               <header className="match-result-team-header">
-                <strong>{section.name}</strong>
+                <div className="match-result-team-identity">
+                  {section.logoImage ? <img className="match-result-team-logo" src={section.logoImage} alt="" /> : null}
+                  <strong>{section.name}</strong>
+                </div>
+                {section.firstHalfScore !== undefined || section.secondHalfScore !== undefined ? (
+                  <div className="match-result-team-halves">
+                    <span>
+                      <span>上半场</span>
+                      <strong>{section.firstHalfScore ?? "-"}</strong>
+                    </span>
+                    <span>
+                      <span>下半场</span>
+                      <strong>{section.secondHalfScore ?? "-"}</strong>
+                    </span>
+                  </div>
+                ) : null}
                 <strong className={`match-result-team-score${section.team === result.winner ? " match-result-team-score--winner" : ""}`}>
                   {section.score}
                 </strong>

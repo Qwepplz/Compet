@@ -7,7 +7,9 @@ export interface Get5PlayerAlignment {
   team: TeamSide;
 }
 
-export type Get5MatchSeriesResult = Omit<MatchSeriesResult, "players"> & {
+type CompetTeamDisplayResultFields = "team1Name" | "team1LogoImage" | "team2Name" | "team2LogoImage";
+
+export type Get5MatchSeriesResult = Omit<MatchSeriesResult, "players" | CompetTeamDisplayResultFields> & {
   players: Get5PlayerAlignment[];
 };
 

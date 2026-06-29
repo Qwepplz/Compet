@@ -2,6 +2,7 @@ export interface BotRosterTeam {
   name: string;
   players: string[];
   logo?: string;
+  logoImage?: string;
 }
 
 type Token = string | "{" | "}";

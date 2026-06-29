@@ -6,7 +6,12 @@ import type { GameServerConfig } from "../config/config.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
-import { competMatchStatsPath, readCompetMatchStats, type CompetMatchPlayerStats } from "./competMatchStats.js";
+import {
+  competMatchStatsPath,
+  readCompetMatchStatsReport,
+  type CompetMatchHalfScores,
+  type CompetMatchPlayerStats,
+} from "./competMatchStats.js";
 import {
   get5MatchStatsRelativePath,
   get5MatchStatsPath,
@@ -41,6 +46,7 @@ export interface MatchServerExitReport {
   exitInfo: GameServerExitInfo;
   get5Result: Get5MatchResultClassification;
   competStats: CompetMatchPlayerStats[];
+  competHalfScores?: CompetMatchHalfScores;
 }
 
 const ACTIVE_MATCH_CFG_PATH = "compet/active_match.cfg";
@@ -171,9 +177,14 @@ export class MatchExecutor {
     setTimeout(() => {
       void Promise.all([
         readGet5MatchResult(this.options.config.serverRoot, matchId, new Date().toISOString()),
-        readCompetMatchStats(this.options.config.serverRoot, matchId),
+        readCompetMatchStatsReport(this.options.config.serverRoot, matchId),
       ])
-        .then(([get5Result, competStats]) => this.options.onServerExit?.(matchId, { exitInfo, get5Result, competStats }))
+        .then(([get5Result, competReport]) => this.options.onServerExit?.(matchId, {
+          exitInfo,
+          get5Result,
+          competStats: competReport.players,
+          competHalfScores: extractCompetHalfScores(competReport),
+        }))
         .catch(() => undefined);
     }, 0);
   }
@@ -186,6 +197,14 @@ export class MatchExecutor {
       records: this.options.records,
     });
   }
+}
+
+function extractCompetHalfScores(report: CompetMatchHalfScores): CompetMatchHalfScores | undefined {
+  const halfScores = {
+    ...(report.firstHalfScore ? { firstHalfScore: report.firstHalfScore } : {}),
+    ...(report.secondHalfScore ? { secondHalfScore: report.secondHalfScore } : {}),
+  };
+  return halfScores.firstHalfScore || halfScores.secondHalfScore ? halfScores : undefined;
 }
 
 function formatServerExitMonitorOutput(
