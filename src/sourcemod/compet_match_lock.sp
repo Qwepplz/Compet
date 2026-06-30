@@ -274,18 +274,12 @@ bool ApplyClientLock(int client, bool fromCommand, int requestedTeam) {
 
   if (IsPlayingTeam(requestedTeam) && requestedTeam != lockedTeam) {
     ChangeClientTeam(client, lockedTeam);
-    if (fromCommand) {
-      PrintToChat(client, "[Compet] You have been assigned to your match team.");
-    }
     return false;
   }
 
   int currentTeam = GetClientTeam(client);
   if (currentTeam != lockedTeam) {
     ChangeClientTeam(client, lockedTeam);
-    if (fromCommand) {
-      PrintToChat(client, "[Compet] You have been assigned to your match team.");
-    }
     return false;
   }
 
@@ -300,7 +294,6 @@ void MarkGet5Started(const char[] reason) {
   g_LockEnabled = false;
   StopEnforceTimer();
   PrintToServer("[Compet] %s; pre-get5 team lock disabled for match %s.", reason, g_MatchId);
-  PrintToChatAll("[Compet] get5 has started; pre-match team lock disabled.");
 }
 
 void StartEnforceTimer() {
