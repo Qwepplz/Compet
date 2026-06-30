@@ -929,6 +929,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #28d17c;
 }
 
+.match-result-team-header .match-result-team-score--loser {
+  color: #ff2727;
+}
+
 .match-result-table-wrap {
   display: flex;
   flex: 1 1 auto;

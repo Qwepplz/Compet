@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
-import type { MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
+import type { GameSide, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
 
 export interface Get5PlayerAlignment {
   steam64: string;
@@ -10,6 +10,8 @@ export interface Get5PlayerAlignment {
 type CompetTeamDisplayResultFields = "team1Name" | "team1LogoImage" | "team2Name" | "team2LogoImage";
 
 export type Get5MatchSeriesResult = Omit<MatchSeriesResult, "players" | CompetTeamDisplayResultFields> & {
+  team1StartingSide: GameSide;
+  team2StartingSide: GameSide;
   players: Get5PlayerAlignment[];
 };
 
@@ -90,6 +92,11 @@ export function classifyGet5MatchStats(stats: unknown, completedAt: string): Get
   if (!isValidMr12FinalScore(team1Score, team2Score, winner)) {
     return { status: "abnormal", reason: "invalid_mr12_score" };
   }
+  const team1StartingSide = parseGet5Side(team1.starting_side);
+  const team2StartingSide = parseGet5Side(team2.starting_side);
+  if (!team1StartingSide || !team2StartingSide || team1StartingSide === team2StartingSide) {
+    return { status: "abnormal", reason: "missing_starting_side" };
+  }
 
   return {
     status: "normal",
@@ -100,6 +107,8 @@ export function classifyGet5MatchStats(stats: unknown, completedAt: string): Get
       mapName: stringValue(map.mapname),
       team1Score,
       team2Score,
+      team1StartingSide,
+      team2StartingSide,
       players: [
         ...readPlayers(team1.players, "teamA"),
         ...readPlayers(team2.players, "teamB"),
@@ -211,6 +220,12 @@ function readPlayers(players: unknown, team: TeamSide): Get5PlayerAlignment[] {
 function parseGet5Team(value: unknown): TeamSide | null {
   if (value === "team1") return "teamA";
   if (value === "team2") return "teamB";
+  return null;
+}
+
+function parseGet5Side(value: unknown): GameSide | null {
+  if (value === "t" || value === "2" || value === 2) return "t";
+  if (value === "ct" || value === "3" || value === 3) return "ct";
   return null;
 }
 

@@ -59,6 +59,8 @@ function alignGet5ResultToRoom(room: MatchRoomRecord, result: Get5MatchSeriesRes
     team2SeriesScore: result.team1SeriesScore,
     team1Score: result.team2Score,
     team2Score: result.team1Score,
+    team1StartingSide: result.team2StartingSide,
+    team2StartingSide: result.team1StartingSide,
   };
 }
 
@@ -87,19 +89,31 @@ function oppositeTeam(team: TeamSide): TeamSide {
 }
 
 function matchHalfScoresForRoom(
-  room: MatchRoomRecord,
   halfScores: CompetMatchHalfScores | undefined,
+  result: Get5MatchSeriesResult,
 ): { firstHalfScore?: MatchHalfScore; secondHalfScore?: MatchHalfScore } {
   if (!halfScores) return {};
+  return matchHalfScoresForSides(result.team1StartingSide, result.team2StartingSide, halfScores);
+}
+
+function matchHalfScoresForSides(
+  team1StartingSide: GameSide,
+  team2StartingSide: GameSide,
+  halfScores: CompetMatchHalfScores,
+): { firstHalfScore?: MatchHalfScore; secondHalfScore?: MatchHalfScore } {
   return {
-    ...(halfScores.firstHalfScore ? { firstHalfScore: matchHalfScoreForRoom(room, halfScores.firstHalfScore, false) } : {}),
-    ...(halfScores.secondHalfScore ? { secondHalfScore: matchHalfScoreForRoom(room, halfScores.secondHalfScore, true) } : {}),
+    ...(halfScores.firstHalfScore ? { firstHalfScore: matchHalfScoreForSides(team1StartingSide, team2StartingSide, halfScores.firstHalfScore) } : {}),
+    ...(halfScores.secondHalfScore ? {
+      secondHalfScore: matchHalfScoreForSides(
+        oppositeGameSide(team1StartingSide),
+        oppositeGameSide(team2StartingSide),
+        halfScores.secondHalfScore,
+      ),
+    } : {}),
   };
 }
 
-function matchHalfScoreForRoom(room: MatchRoomRecord, halfScore: CompetSideHalfScore, sidesSwapped: boolean): MatchHalfScore {
-  const team1Side = sidesSwapped ? oppositeGameSide(room.teamA.gameSide) : room.teamA.gameSide;
-  const team2Side = sidesSwapped ? oppositeGameSide(room.teamB.gameSide) : room.teamB.gameSide;
+function matchHalfScoreForSides(team1Side: GameSide, team2Side: GameSide, halfScore: CompetSideHalfScore): MatchHalfScore {
   return {
     team1Score: halfScore[team1Side],
     team2Score: halfScore[team2Side],
@@ -732,13 +746,14 @@ export class MatchmakingService {
       }
 
       const alignedGet5Result = alignGet5ResultToRoom(room, report.get5Result.result);
+      const { team1StartingSide: _team1StartingSide, team2StartingSide: _team2StartingSide, ...publicGet5Result } = alignedGet5Result;
       const result = {
-        ...alignedGet5Result,
+        ...publicGet5Result,
         team1Name: room.teamA.name,
         ...(room.teamA.logoImage ? { team1LogoImage: room.teamA.logoImage } : {}),
         team2Name: room.teamB.name,
         ...(room.teamB.logoImage ? { team2LogoImage: room.teamB.logoImage } : {}),
-        ...matchHalfScoresForRoom(room, report.competHalfScores),
+        ...matchHalfScoresForRoom(report.competHalfScores, alignedGet5Result),
         players: mergeMatchResultPlayers(room, report.competStats),
       };
       const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: result.completedAt };

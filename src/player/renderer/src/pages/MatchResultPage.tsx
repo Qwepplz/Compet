@@ -128,7 +128,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                     </span>
                   </div>
                 ) : null}
-                <strong className={`match-result-team-score${section.team === result.winner ? " match-result-team-score--winner" : ""}`}>
+                <strong className={`match-result-team-score${section.team === result.winner ? " match-result-team-score--winner" : " match-result-team-score--loser"}`}>
                   {section.score}
                 </strong>
               </header>
