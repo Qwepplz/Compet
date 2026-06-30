@@ -7,6 +7,7 @@ import { VerificationBadge } from "../components/VerificationBadge.js";
 
 interface MatchResultPageProps {
   result: PlayerMatchResultDto;
+  selfSteam64?: string;
   onBackHome: () => void;
 }
 
@@ -75,7 +76,7 @@ function rating2Progress(rating2: number | undefined): number | null {
   return Math.max(MIN_RATING2_PROGRESS, progress);
 }
 
-export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
+export function MatchResultPage({ result, selfSteam64, onBackHome }: MatchResultPageProps) {
   const totalRounds = result.team1Score + result.team2Score;
   const teamSections = [
     {
@@ -152,6 +153,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                     <tbody>
                       {section.players.map((player) => {
                         const name = playerName(player);
+                        const isSelf = Boolean(selfSteam64) && player.steam64 === selfSteam64;
                         const badge = playerBadge(player);
                         const ratingTone = rating2Tone(player.rating2);
                         const ratingProgress = rating2Progress(player.rating2);
@@ -161,7 +163,7 @@ export function MatchResultPage({ result, onBackHome }: MatchResultPageProps) {
                               <div className="match-result-player">
                                 <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
                                 <div className="match-result-player-name-line">
-                                  <strong>{name}</strong>
+                                  <strong className={isSelf ? "match-result-player-name--self" : undefined}>{name}</strong>
                                   {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
                                 </div>
                               </div>

@@ -1238,7 +1238,7 @@ export function App() {
 
   function renderAuthenticatedView() {
     if (activeView === "match-result" && matchResult) {
-      return <MatchResultPage result={matchResult} onBackHome={() => setActiveView("home")} />;
+      return <MatchResultPage result={matchResult} selfSteam64={account?.steam64} onBackHome={() => setActiveView("home")} />;
     }
     if (activeView === "match-room") {
       return (

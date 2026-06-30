@@ -1079,6 +1079,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   white-space: nowrap;
 }
 
+.match-result-player strong.match-result-player-name--self {
+  color: #ff5500;
+}
+
 .faceit-matchroom {
   min-height: 100vh;
   background: #050505;
