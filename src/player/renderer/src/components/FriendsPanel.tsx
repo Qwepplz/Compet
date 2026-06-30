@@ -284,7 +284,7 @@ export function FriendsPanel({
                       aria-label="发送好友请求"
                       size="small"
                       onClick={() => void handleSendRequest(result.accountId)}
-                      disabled={!result.online || isFriend || hasPending || !onSendFriendRequest}
+                      disabled={isFriend || hasPending || !onSendFriendRequest}
                       loading={pendingRequestId === result.accountId}
                     >
                       发送好友请求
