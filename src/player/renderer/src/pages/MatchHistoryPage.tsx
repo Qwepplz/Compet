@@ -1,5 +1,6 @@
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { Button, Spin } from "antd";
+import type { CSSProperties } from "react";
 import type { PlayerMatchHistoryDto, PlayerMatchHistoryEntryDto } from "../../../shared/types.js";
 
 interface MatchHistoryPageProps {
@@ -9,6 +10,8 @@ interface MatchHistoryPageProps {
   onOpenMatch: (matchId: string) => void;
 }
 
+const MIN_RATING2_PROGRESS = 8;
+
 export function formatRankmeScore(score: number | null | undefined): string {
   return typeof score === "number" && Number.isFinite(score) ? Math.round(score).toLocaleString("en-US") : "未排位";
 }
@@ -17,7 +20,7 @@ function formatResultDate(completedAt: string): { date: string; time: string } {
   const date = new Date(completedAt);
   if (Number.isNaN(date.getTime())) return { date: "-", time: "-" };
   return {
-    date: date.toLocaleDateString("zh-CN", { month: "numeric", day: "numeric", weekday: "short" }),
+    date: `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`,
     time: date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
   };
 }
@@ -27,7 +30,28 @@ function formatMapName(mapName: string): string {
 }
 
 function formatRating(rating2: number | undefined): string {
-  return typeof rating2 === "number" && Number.isFinite(rating2) ? rating2.toFixed(2) : "-";
+  const displayed = displayedRating2Value(rating2);
+  return displayed === null ? "-" : displayed.toFixed(2);
+}
+
+function displayedRating2Value(rating2: number | undefined): number | null {
+  return typeof rating2 === "number" && Number.isFinite(rating2) ? Number(rating2.toFixed(2)) : null;
+}
+
+function rating2Tone(rating2: number | undefined): "low" | "mid" | "high" | "elite" | null {
+  const displayed = displayedRating2Value(rating2);
+  if (displayed === null) return null;
+  if (displayed < 0.9) return "low";
+  if (displayed < 1.3) return "mid";
+  if (displayed < 1.8) return "high";
+  return "elite";
+}
+
+function rating2Progress(rating2: number | undefined): number | null {
+  const displayed = displayedRating2Value(rating2);
+  if (displayed === null) return null;
+  const progress = Math.min(100, Math.max(0, ((displayed - 0.55) / 1.25) * 100));
+  return Math.max(MIN_RATING2_PROGRESS, progress);
 }
 
 function formatKillDeath(kills: number, deaths: number): string {
@@ -49,8 +73,10 @@ function MatchHistoryRow({
   onOpenMatch: (matchId: string) => void;
 }) {
   const date = formatResultDate(match.completedAt);
+  const ratingTone = rating2Tone(match.self.rating2);
+  const ratingProgress = rating2Progress(match.self.rating2);
   return (
-    <tr className="match-history-row" tabIndex={0} onClick={() => onOpenMatch(match.matchId)} onKeyDown={(event) => {
+    <tr className={`match-history-row match-history-row--${match.selfWon ? "win" : "loss"}`} tabIndex={0} onClick={() => onOpenMatch(match.matchId)} onKeyDown={(event) => {
       if (event.key === "Enter" || event.key === " ") onOpenMatch(match.matchId);
     }}>
       <td>
@@ -59,14 +85,25 @@ function MatchHistoryRow({
       </td>
       <td>
         <div className="match-history-score">
-          <strong className={match.selfWon ? "match-history-result--win" : "match-history-result--loss"}>{match.selfWon ? "胜" : "负"}</strong>
+          <strong className={`match-history-result-pill match-history-result-pill--${match.selfWon ? "win" : "loss"}`}>{match.selfWon ? "胜" : "负"}</strong>
           <span>{match.score.team1}</span>
           <span>:</span>
           <span>{match.score.team2}</span>
         </div>
       </td>
       <td className="match-history-rankme">{formatRankmeScore(rankmeScore)}</td>
-      <td>{formatRating(match.self.rating2)}</td>
+      <td className="match-history-rating">
+        <span
+          className={ratingTone ? `match-result-rating-pill match-result-rating-pill--${ratingTone}` : "match-result-rating-pill"}
+          style={
+            ratingProgress === null
+              ? undefined
+              : ({ "--match-result-rating-progress": `${ratingProgress}%` } as CSSProperties)
+          }
+        >
+          {formatRating(match.self.rating2)}
+        </span>
+      </td>
       <td>{match.self.kills} / {match.self.deaths} / {match.self.assists}</td>
       <td>{formatKillDeath(match.self.kills, match.self.deaths)}</td>
       <td>{formatAdr(match.self.damage, match.score.team1, match.score.team2)}</td>
@@ -84,7 +121,6 @@ export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch }: 
       <section className="match-history-panel" aria-label="历史战绩">
         <header className="match-history-header">
           <h1>Recent matches</h1>
-          <span>Full match history</span>
         </header>
         <div className="match-history-table-wrap">
           {loading ? <Spin className="match-history-loading" /> : null}
