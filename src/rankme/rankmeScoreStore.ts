@@ -4,6 +4,7 @@ import { access, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const steam64Base = 76561197960265728n;
 
 export interface RankmeScoreReader {
   getScoreBySteam64(steam64: string): Promise<number | null>;
@@ -52,7 +53,10 @@ export function parseRankmeDatabaseConfig(source: string): RankmeDatabaseConfig 
 export function buildRankmeScoreQuery(steam64: string): string | null {
   const normalizedSteam64 = steam64.trim();
   if (!/^\d{17}$/.test(normalizedSteam64)) return null;
-  return `SELECT score FROM \`rankme\` WHERE steam = '${normalizedSteam64}' LIMIT 1;`;
+  const accountId = BigInt(normalizedSteam64) - steam64Base;
+  if (accountId < 0n) return null;
+  const steam2 = `STEAM_1:${accountId % 2n}:${accountId / 2n}`;
+  return `SELECT score FROM \`rankme\` WHERE steam IN ('${normalizedSteam64}', '${steam2}') LIMIT 1;`;
 }
 
 export function parseMysqlScoreOutput(output: string): number | null {
