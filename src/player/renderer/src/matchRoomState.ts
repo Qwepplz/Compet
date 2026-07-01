@@ -15,6 +15,37 @@ export function getDisplayedMatchRoom(matchmaking: PlayerMatchmakingStateDto): P
   return getActiveMatchRoom(matchmaking);
 }
 
+export function upsertRoom(rooms: PlayerLiveMatchStateDto[], nextRoom: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto[] {
+  const index = rooms.findIndex((room) => room.id === nextRoom.id);
+  if (index === -1) return [...rooms, nextRoom];
+  return rooms.map((room, roomIndex) => (roomIndex === index ? nextRoom : room));
+}
+
+export function mergeMatchmakingSnapshotRooms(
+  current: PlayerMatchmakingStateDto,
+  snapshot: PlayerMatchmakingStateDto,
+): Pick<PlayerMatchmakingStateDto, "rooms" | "room"> {
+  const mergeSnapshotRoomProgress = (room: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto => {
+    const currentRoom = current.room?.id === room.id ? current.room : current.rooms.find((candidate) => candidate.id === room.id);
+    return currentRoom ? mergeReadyRoomProgress(currentRoom, room) : room;
+  };
+  const snapshotRooms = snapshot.rooms.map(mergeSnapshotRoomProgress);
+  const snapshotRoom = snapshot.room
+    ? mergeSnapshotRoomProgress(snapshot.room)
+    : snapshotRooms.at(-1) ?? null;
+  const currentActiveRoom = getActiveMatchRoom(current);
+  const snapshotMentionsCurrentActiveRoom = currentActiveRoom
+    ? snapshotRooms.some((room) => room.id === currentActiveRoom.id) || snapshotRoom?.id === currentActiveRoom.id
+    : false;
+  const preservedCurrentRoom = currentActiveRoom && !snapshotMentionsCurrentActiveRoom
+    ? currentActiveRoom
+    : null;
+  return {
+    rooms: preservedCurrentRoom ? upsertRoom(snapshotRooms, preservedCurrentRoom) : snapshotRooms,
+    room: snapshotRoom ?? preservedCurrentRoom,
+  };
+}
+
 export function mergeTeamsAssignedRoom(
   room: PlayerLiveMatchStateDto,
   teamA: PlayerMatchTeamDto,

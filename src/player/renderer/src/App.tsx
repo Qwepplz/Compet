@@ -25,8 +25,10 @@ import {
   getDisplayedMatchRoom,
   isAccountInReadyRoom,
   isTerminalMatchPhase,
+  mergeMatchmakingSnapshotRooms,
   mergeReadyRoomProgress,
   mergeTeamsAssignedRoom,
+  upsertRoom,
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
@@ -94,16 +96,6 @@ function viewFromMatchmaking(matchmaking: PlayerMatchmakingStateDto): PlayerView
 function viewFromSession(account: AccountView, matchmaking: PlayerMatchmakingStateDto): PlayerView {
   if (account.mustChangePassword) return "change-password";
   return viewFromMatchmaking(matchmaking);
-}
-
-function upsertRoom(rooms: PlayerLiveMatchStateDto[], nextRoom: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto[] {
-  const index = rooms.findIndex((room) => room.id === nextRoom.id);
-  if (index === -1) {
-    return [...rooms, nextRoom];
-  }
-  const nextRooms = [...rooms];
-  nextRooms[index] = nextRoom;
-  return nextRooms;
 }
 
 function mergeRoomSteamProfileData(previous: PlayerLiveMatchStateDto, next: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto {
@@ -296,7 +288,6 @@ export function App() {
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
   const [matchResult, setMatchResult] = useState<PlayerMatchResultDto | null>(null);
   const [matchResultBackView, setMatchResultBackView] = useState<"home" | "match-history">("home");
-  const [matchHistoryBackView, setMatchHistoryBackView] = useState<"home" | "match-room">("home");
   const [matchHistory, setMatchHistory] = useState<PlayerMatchHistoryDto | null>(null);
   const [matchHistoryLoading, setMatchHistoryLoading] = useState(false);
   const [rankmeScore, setRankmeScore] = useState<number | null>(null);
@@ -503,24 +494,7 @@ export function App() {
     setRealtimeStatus({ connection: "connected", stale: false });
     const snapshotActiveRoom = getActiveMatchRoom(snapshot.matchmaking);
     setMatchmaking((current) => {
-      const mergeSnapshotRoomProgress = (room: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto => {
-        const currentRoom = current.room?.id === room.id ? current.room : current.rooms.find((candidate) => candidate.id === room.id);
-        return currentRoom ? mergeReadyRoomProgress(currentRoom, room) : room;
-      };
-      const snapshotRooms = snapshot.matchmaking.rooms.map(mergeSnapshotRoomProgress);
-      const snapshotRoom = snapshot.matchmaking.room
-        ? mergeSnapshotRoomProgress(snapshot.matchmaking.room)
-        : snapshotRooms.at(-1) ?? null;
-      const currentActiveRoom = snapshotActiveRoom ? getActiveMatchRoom(current) : null;
-      const preservedCurrentRoom = currentActiveRoom
-        && !snapshotRooms.some((room) => room.id === currentActiveRoom.id)
-        && snapshotRoom?.id !== currentActiveRoom.id
-        ? currentActiveRoom
-        : null;
-      const nextRooms = preservedCurrentRoom
-        ? upsertRoom(snapshotRooms, preservedCurrentRoom)
-        : snapshotRooms;
-      const nextRoom = snapshotRoom ?? preservedCurrentRoom;
+      const { rooms: nextRooms, room: nextRoom } = mergeMatchmakingSnapshotRooms(current, snapshot.matchmaking);
       const nextParty = mergePartySnapshot(current.party, partySnapshot ?? null);
       return {
         queue: snapshot.matchmaking.queue,
@@ -896,7 +870,6 @@ export function App() {
   }
 
   async function openMatchHistory() {
-    setMatchHistoryBackView(activeView === "match-room" ? "match-room" : "home");
     setActiveView("match-history");
     await loadMatchHistory();
   }
@@ -1315,7 +1288,7 @@ export function App() {
   }
 
   function backFromMatchHistory() {
-    setActiveView(matchHistoryBackView === "match-room" && activeMatchRoom ? "match-room" : "home");
+    setActiveView(activeMatchRoom ? "match-room" : "home");
   }
 
   function renderAuthenticatedView() {
