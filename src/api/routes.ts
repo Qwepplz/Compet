@@ -124,9 +124,9 @@ function finiteNumber(value: unknown): value is number {
 }
 
 function matchHistoryRankmeScore(plan: MatchPlan, self: MatchPlayerResult): number | undefined {
-  if (finiteNumber(self.rankmeScore)) return self.rankmeScore;
   const before = plan.rankmeScoresBefore?.[self.steam64.trim()];
-  return finiteNumber(before) && finiteNumber(self.rankmeScoreDelta) ? before + self.rankmeScoreDelta : undefined;
+  if (finiteNumber(before)) return before;
+  return finiteNumber(self.rankmeScore) && finiteNumber(self.rankmeScoreDelta) ? self.rankmeScore - self.rankmeScoreDelta : undefined;
 }
 
 function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecord) {

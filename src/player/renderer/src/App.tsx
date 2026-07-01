@@ -296,6 +296,7 @@ export function App() {
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
   const [matchResult, setMatchResult] = useState<PlayerMatchResultDto | null>(null);
   const [matchResultBackView, setMatchResultBackView] = useState<"home" | "match-history">("home");
+  const [matchHistoryBackView, setMatchHistoryBackView] = useState<"home" | "match-room">("home");
   const [matchHistory, setMatchHistory] = useState<PlayerMatchHistoryDto | null>(null);
   const [matchHistoryLoading, setMatchHistoryLoading] = useState(false);
   const [rankmeScore, setRankmeScore] = useState<number | null>(null);
@@ -895,6 +896,7 @@ export function App() {
   }
 
   async function openMatchHistory() {
+    setMatchHistoryBackView(activeView === "match-room" ? "match-room" : "home");
     setActiveView("match-history");
     await loadMatchHistory();
   }
@@ -1312,13 +1314,17 @@ export function App() {
     message.success("已复制");
   }
 
+  function backFromMatchHistory() {
+    setActiveView(matchHistoryBackView === "match-room" && activeMatchRoom ? "match-room" : "home");
+  }
+
   function renderAuthenticatedView() {
     if (activeView === "match-history") {
       return (
         <MatchHistoryPage
           history={matchHistory}
           loading={matchHistoryLoading}
-          onBackHome={() => setActiveView("home")}
+          onBackHome={backFromMatchHistory}
           onOpenMatch={(matchId) => void openMatchHistoryResult(matchId)}
         />
       );
