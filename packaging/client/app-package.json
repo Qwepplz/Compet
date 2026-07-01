@@ -1,6 +1,6 @@
 {
   "name": "compet-player-client",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "private": true,
   "main": "out-player/main/index.cjs"
 }
