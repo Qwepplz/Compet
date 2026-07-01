@@ -16,6 +16,12 @@ export function formatRankmeScore(score: number | null | undefined): string {
   return typeof score === "number" && Number.isFinite(score) ? Math.round(score).toLocaleString("en-US") : "未排位";
 }
 
+function formatRankmeDelta(delta: number | null | undefined): string {
+  if (typeof delta !== "number" || !Number.isFinite(delta)) return "未排位";
+  const rounded = Math.round(delta);
+  return `${rounded >= 0 ? "+" : ""}${rounded.toLocaleString("en-US")}`;
+}
+
 function formatResultDate(completedAt: string): { date: string; time: string } {
   const date = new Date(completedAt);
   if (Number.isNaN(date.getTime())) return { date: "-", time: "-" };
@@ -65,11 +71,9 @@ function formatAdr(damage: number, team1: number, team2: number): string {
 
 function MatchHistoryRow({
   match,
-  rankmeScore,
   onOpenMatch,
 }: {
   match: PlayerMatchHistoryEntryDto;
-  rankmeScore: number | null;
   onOpenMatch: (matchId: string) => void;
 }) {
   const date = formatResultDate(match.completedAt);
@@ -91,7 +95,7 @@ function MatchHistoryRow({
           <span>{match.score.team2}</span>
         </div>
       </td>
-      <td className="match-history-rankme">{formatRankmeScore(rankmeScore)}</td>
+      <td className="match-history-rankme">{formatRankmeDelta(match.self.rankmeScoreDelta)}</td>
       <td className="match-history-rating">
         <span
           className={ratingTone ? `match-result-rating-pill match-result-rating-pill--${ratingTone}` : "match-result-rating-pill"}
@@ -114,7 +118,6 @@ function MatchHistoryRow({
 
 export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch }: MatchHistoryPageProps) {
   const matches = history?.matches ?? [];
-  const rankmeScore = history?.rankmeScore ?? null;
   return (
     <div className="match-history-page">
       <Button className="match-history-back-button" aria-label="返回主页面" icon={<ArrowLeftOutlined />} type="text" onClick={onBackHome} />
@@ -129,7 +132,7 @@ export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch }: 
               <tr>
                 <th>日期</th>
                 <th>分数</th>
-                <th aria-label="RankMe 分数"></th>
+                <th></th>
                 <th>Rating</th>
                 <th>K/D/A</th>
                 <th>K/D</th>
@@ -138,7 +141,7 @@ export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch }: 
               </tr>
             </thead>
             <tbody>
-              {matches.map((match) => <MatchHistoryRow key={match.matchId} match={match} rankmeScore={rankmeScore} onOpenMatch={onOpenMatch} />)}
+              {matches.map((match) => <MatchHistoryRow key={match.matchId} match={match} onOpenMatch={onOpenMatch} />)}
               {!loading && matches.length === 0 ? (
                 <tr>
                   <td className="match-history-empty" colSpan={8}>暂无战绩</td>

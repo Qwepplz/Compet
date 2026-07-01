@@ -139,6 +139,7 @@ function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecor
       damage: self.damage,
       headshots: self.headshots,
       rating2: self.rating2,
+      rankmeScoreDelta: self.rankmeScoreDelta,
     },
   };
 }

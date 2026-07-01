@@ -88,6 +88,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     botCatalog,
     executor,
     records,
+    rankme: rankme ?? undefined,
     events,
   });
   matchmaking = matchmakingService;

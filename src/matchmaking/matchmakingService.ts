@@ -8,6 +8,7 @@ import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
 import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
+import type { RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
@@ -204,6 +205,7 @@ export interface MatchmakingServiceDeps {
   botCatalog: BotCatalog;
   executor?: MatchExecutorPort;
   records?: Pick<MatchRecordStore, "appendEvent" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveResult" | "saveStatus">;
+  rankme?: RankmeScoreReader;
   events?: { publish(event: RealtimeEvent): void };
   mapPool?: string[];
   now?: () => string;
@@ -670,7 +672,7 @@ export class MatchmakingService {
         phase: "map_randomizing",
         mapSelection,
       };
-      await this.deps.records?.saveMatchPlan(this.buildMatchPlan(randomizingRoom, mapSelection.finalMap));
+      await this.deps.records?.saveMatchPlan(await this.buildMatchPlan(randomizingRoom, mapSelection.finalMap));
       const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
       const audience = this.roomAudience(randomizingRoom);
 
@@ -747,6 +749,7 @@ export class MatchmakingService {
 
       const alignedGet5Result = alignGet5ResultToRoom(room, report.get5Result.result);
       const { team1StartingSide: _team1StartingSide, team2StartingSide: _team2StartingSide, ...publicGet5Result } = alignedGet5Result;
+      const savedPlan = await this.readSavedMatchPlan(matchId);
       const result = {
         ...publicGet5Result,
         team1Name: room.teamA.name,
@@ -754,7 +757,7 @@ export class MatchmakingService {
         team2Name: room.teamB.name,
         ...(room.teamB.logoImage ? { team2LogoImage: room.teamB.logoImage } : {}),
         ...matchHalfScoresForRoom(report.competHalfScores, alignedGet5Result),
-        players: mergeMatchResultPlayers(room, report.competStats),
+        players: await this.applyRankmeScoreDeltas(mergeMatchResultPlayers(room, report.competStats), savedPlan?.rankmeScoresBefore),
       };
       const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: result.completedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));
@@ -952,7 +955,7 @@ export class MatchmakingService {
     await this.emit({ type: "server_preparing", matchId: room.id, accountIds: this.roomAudience(preparing) }, room.id);
 
     const savedPlan = await this.readSavedMatchPlan(room.id);
-    const plan = savedPlan?.map === finalMap ? savedPlan : this.buildMatchPlan(preparing, finalMap);
+    const plan = savedPlan?.map === finalMap ? savedPlan : await this.buildMatchPlan(preparing, finalMap);
     if (plan !== savedPlan) {
       await this.deps.records?.saveMatchPlan(plan);
     }
@@ -985,7 +988,8 @@ export class MatchmakingService {
     }
   }
 
-  private buildMatchPlan(room: MatchRoomRecord, map: string): MatchPlan {
+  private async buildMatchPlan(room: MatchRoomRecord, map: string): Promise<MatchPlan> {
+    const rankmeScoresBefore = await this.rankmeScoresBefore(room);
     return {
       id: room.id,
       phase: "server_prepare",
@@ -994,7 +998,38 @@ export class MatchmakingService {
       teamB: room.teamB,
       connectPassword: `match_${randomUUID().replace(/-/g, "").slice(0, 12)}`,
       createdAt: this.now(),
+      ...(rankmeScoresBefore ? { rankmeScoresBefore } : {}),
     };
+  }
+
+  private async rankmeScoresBefore(room: MatchRoomRecord): Promise<Record<string, number> | undefined> {
+    const rankme = this.deps.rankme;
+    if (!rankme) return undefined;
+    const entries = await Promise.all(
+      [...room.teamA.participants, ...room.teamB.participants]
+        .filter((participant) => participant.kind === "human" && participant.steam64)
+        .map(async (participant) => {
+          const steam64 = participant.steam64!;
+          const score = await rankme.getScoreBySteam64(steam64);
+          return typeof score === "number" && Number.isFinite(score) ? [steam64, score] as const : null;
+        }),
+    );
+    const rankmeScoresBefore = Object.fromEntries(entries.filter((entry): entry is readonly [string, number] => Boolean(entry)));
+    return Object.keys(rankmeScoresBefore).length > 0 ? rankmeScoresBefore : undefined;
+  }
+
+  private async applyRankmeScoreDeltas(
+    players: MatchPlayerResult[],
+    rankmeScoresBefore: Record<string, number> | undefined,
+  ): Promise<MatchPlayerResult[]> {
+    if (!this.deps.rankme || !rankmeScoresBefore) return players;
+    return Promise.all(players.map(async (player) => {
+      const before = rankmeScoresBefore[player.steam64];
+      if (player.kind !== "human" || typeof before !== "number" || !Number.isFinite(before)) return player;
+      const after = await this.deps.rankme!.getScoreBySteam64(player.steam64);
+      if (typeof after !== "number" || !Number.isFinite(after)) return player;
+      return { ...player, rankmeScoreDelta: after - before };
+    }));
   }
 
   private async readSavedMatchPlan(matchId: string): Promise<MatchPlan | undefined> {

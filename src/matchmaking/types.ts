@@ -61,6 +61,7 @@ export interface MatchPlayerResult {
   damage: number;
   headshots: number;
   rating2?: number;
+  rankmeScoreDelta?: number;
 }
 export interface MatchPlan {
   id: string;
@@ -70,4 +71,5 @@ export interface MatchPlan {
   teamB: MatchTeam;
   connectPassword: string;
   createdAt: string;
+  rankmeScoresBefore?: Record<string, number>;
 }
