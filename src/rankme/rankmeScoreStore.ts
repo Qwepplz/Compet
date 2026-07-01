@@ -5,9 +5,16 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const steam64Base = 76561197960265728n;
+export const DEFAULT_RANKME_SCORE = 1000;
+
+export type RankmeScoreLookup =
+  | { status: "found"; score: number }
+  | { status: "missing" }
+  | { status: "unavailable" };
 
 export interface RankmeScoreReader {
   getScoreBySteam64(steam64: string): Promise<number | null>;
+  lookupScoreBySteam64?(steam64: string): Promise<RankmeScoreLookup>;
 }
 
 interface RankmeDatabaseConfig {
@@ -59,11 +66,23 @@ export function buildRankmeScoreQuery(steam64: string): string | null {
   return `SELECT score FROM \`rankme\` WHERE steam IN ('${normalizedSteam64}', '${steam2}') LIMIT 1;`;
 }
 
-export function parseMysqlScoreOutput(output: string): number | null {
+export function parseMysqlScoreLookup(output: string): RankmeScoreLookup {
   const lines = output.trim().split(/\r?\n/).filter(Boolean);
-  if (lines.length !== 1) return null;
+  if (lines.length === 0) return { status: "missing" };
+  if (lines.length !== 1) return { status: "unavailable" };
   const score = Number(lines[0]);
-  return Number.isFinite(score) ? score : null;
+  return Number.isFinite(score) ? { status: "found", score } : { status: "unavailable" };
+}
+
+export function parseMysqlScoreOutput(output: string): number | null {
+  const lookup = parseMysqlScoreLookup(output);
+  return lookup.status === "found" ? lookup.score : null;
+}
+
+export async function lookupRankmeScore(reader: RankmeScoreReader, steam64: string): Promise<RankmeScoreLookup> {
+  if (reader.lookupScoreBySteam64) return reader.lookupScoreBySteam64(steam64);
+  const score = await reader.getScoreBySteam64(steam64);
+  return typeof score === "number" && Number.isFinite(score) ? { status: "found", score } : { status: "unavailable" };
 }
 
 async function resolveMysqlCliPath(): Promise<string | null> {
@@ -109,8 +128,13 @@ export class RankmeScoreStore implements RankmeScoreReader {
   }
 
   async getScoreBySteam64(steam64: string): Promise<number | null> {
+    const lookup = await this.lookupScoreBySteam64(steam64);
+    return lookup.status === "found" ? lookup.score : null;
+  }
+
+  async lookupScoreBySteam64(steam64: string): Promise<RankmeScoreLookup> {
     const query = buildRankmeScoreQuery(steam64);
-    if (!query) return null;
+    if (!query) return { status: "unavailable" };
     try {
       const { stdout } = await execFileAsync(this.mysqlPath, [
         "--batch",
@@ -126,9 +150,9 @@ export class RankmeScoreStore implements RankmeScoreReader {
         maxBuffer: 8 * 1024,
         windowsHide: true,
       });
-      return parseMysqlScoreOutput(stdout);
+      return parseMysqlScoreLookup(stdout);
     } catch {
-      return null;
+      return { status: "unavailable" };
     }
   }
 }

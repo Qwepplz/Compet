@@ -8,7 +8,7 @@ import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import type { MatchPlan, MatchPlayerResult, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
-import type { RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
+import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { CompletedMatchRecord, MatchRecordStore } from "../records/matchRecordStore.js";
 import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
@@ -155,10 +155,12 @@ function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecor
   };
 }
 
-async function rankmeScoreFor(deps: RouteDeps, account: AccountRecord): Promise<number | null> {
+async function rankmeScoreFor(deps: RouteDeps, account: AccountRecord, hasCompletedMatches: boolean | undefined): Promise<number | null> {
   const steam64 = account.steam64.trim();
   if (!steam64 || !deps.rankme) return null;
-  return deps.rankme.getScoreBySteam64(steam64);
+  const lookup = await lookupRankmeScore(deps.rankme, steam64);
+  if (lookup.status === "found") return lookup.score;
+  return lookup.status === "missing" && hasCompletedMatches === false ? DEFAULT_RANKME_SCORE : null;
 }
 
 function mapMatchmakingServiceError(error: unknown): never {
@@ -345,17 +347,19 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
   app.get("/me/rankme-score", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
-    return { score: await rankmeScoreFor(deps, auth.account) };
+    const completedMatches = deps.records ? await deps.records.listPlayerCompletedMatches(auth.account.id, 1) : undefined;
+    return { score: await rankmeScoreFor(deps, auth.account, completedMatches ? completedMatches.length > 0 : undefined) };
   });
 
   app.get("/matches/history", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const records = requireRecords(deps);
-    const rankmeScore = await rankmeScoreFor(deps, auth.account);
-    const matches = (await records.listPlayerCompletedMatches(auth.account.id, matchHistoryLimit))
+    const completedRecords = await records.listPlayerCompletedMatches(auth.account.id, matchHistoryLimit);
+    const matches = completedRecords
       .map((record) => toMatchHistoryEntry(record, auth.account))
       .filter((record): record is NonNullable<typeof record> => Boolean(record));
+    const rankmeScore = await rankmeScoreFor(deps, auth.account, completedRecords.length > 0);
     return { rankmeScore, matches };
   });
 

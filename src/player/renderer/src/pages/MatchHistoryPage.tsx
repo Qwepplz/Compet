@@ -13,7 +13,7 @@ interface MatchHistoryPageProps {
 const MIN_RATING2_PROGRESS = 8;
 
 export function formatRankmeScore(score: number | null | undefined): string {
-  return typeof score === "number" && Number.isFinite(score) ? Math.round(score).toLocaleString("en-US") : "未排位";
+  return typeof score === "number" && Number.isFinite(score) ? Math.round(score).toLocaleString("en-US") : "-";
 }
 
 function formatRankmeChange(delta: number): string {
@@ -34,8 +34,6 @@ function RankmeTrendIcon({ delta }: { delta: number }) {
 }
 
 function RankmeScoreChange({ score, delta }: { score: number | null | undefined; delta: number | null | undefined }) {
-  const hasScore = typeof score === "number" && Number.isFinite(score);
-  if (!hasScore) return <span className="match-history-rankme-unranked">未排位</span>;
   const hasDelta = typeof delta === "number" && Number.isFinite(delta);
   const roundedDelta = hasDelta ? Math.round(delta) : null;
   return (

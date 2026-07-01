@@ -8,7 +8,7 @@ import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import type { GameServerExitInfo } from "../game/gameServerLauncher.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
 import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
-import type { RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
+import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
@@ -204,7 +204,7 @@ export interface MatchmakingServiceDeps {
   friends?: { listFriends(accountId: string): Promise<FriendListDto> };
   botCatalog: BotCatalog;
   executor?: MatchExecutorPort;
-  records?: Pick<MatchRecordStore, "appendEvent" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveResult" | "saveStatus">;
+  records?: Pick<MatchRecordStore, "appendEvent" | "listPlayerCompletedMatches" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveResult" | "saveStatus">;
   rankme?: RankmeScoreReader;
   events?: { publish(event: RealtimeEvent): void };
   mapPool?: string[];
@@ -672,7 +672,18 @@ export class MatchmakingService {
         phase: "map_randomizing",
         mapSelection,
       };
-      await this.deps.records?.saveMatchPlan(await this.buildMatchPlan(randomizingRoom, mapSelection.finalMap));
+      try {
+        await this.deps.records?.saveMatchPlan(await this.buildMatchPlan(randomizingRoom, mapSelection.finalMap));
+      } catch (error) {
+        const failedAt = this.now();
+        const failure = error instanceof Error ? error.message : String(error);
+        const failedRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "failed", terminalStateAt: failedAt };
+        await this.deps.store.saveRooms(updatedRooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate)));
+        await this.deps.records?.saveStatus(room.id, { phase: "failed", error: failure });
+        await this.unlockPartyForRoom(failedRoom, failedAt);
+        await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure }, room.id);
+        return this.toPublicRoom(failedRoom);
+      }
       const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
       const audience = this.roomAudience(randomizingRoom);
 
@@ -750,6 +761,24 @@ export class MatchmakingService {
       const alignedGet5Result = alignGet5ResultToRoom(room, report.get5Result.result);
       const { team1StartingSide: _team1StartingSide, team2StartingSide: _team2StartingSide, ...publicGet5Result } = alignedGet5Result;
       const savedPlan = await this.readSavedMatchPlan(matchId);
+      let players: MatchPlayerResult[];
+      try {
+        players = await this.applyRankmeScoreDeltas(mergeMatchResultPlayers(room, report.competStats), savedPlan?.rankmeScoresBefore);
+      } catch (error) {
+        const failedAt = this.now();
+        const failure = error instanceof Error ? error.message : String(error);
+        const failed: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
+        await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? failed : candidate)));
+        await this.deps.records?.saveStatus(matchId, {
+          phase: "failed",
+          failedAt,
+          error: failure,
+          serverExit: report.exitInfo,
+        });
+        await this.unlockPartyForRoom(failed, failedAt);
+        await this.emit({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: failure }, matchId);
+        return this.toPublicRoom(failed);
+      }
       const result = {
         ...publicGet5Result,
         team1Name: room.teamA.name,
@@ -757,7 +786,7 @@ export class MatchmakingService {
         team2Name: room.teamB.name,
         ...(room.teamB.logoImage ? { team2LogoImage: room.teamB.logoImage } : {}),
         ...matchHalfScoresForRoom(report.competHalfScores, alignedGet5Result),
-        players: await this.applyRankmeScoreDeltas(mergeMatchResultPlayers(room, report.competStats), savedPlan?.rankmeScoresBefore),
+        players,
       };
       const completed: MatchRoomRecord = { ...room, phase: "completed", terminalStateAt: result.completedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));
@@ -1010,12 +1039,23 @@ export class MatchmakingService {
         .filter((participant) => participant.kind === "human" && participant.steam64)
         .map(async (participant) => {
           const steam64 = participant.steam64!;
-          const score = await rankme.getScoreBySteam64(steam64);
-          return typeof score === "number" && Number.isFinite(score) ? [steam64, score] as const : null;
+          const lookup = await lookupRankmeScore(rankme, steam64);
+          if (lookup.status === "found") return [steam64, lookup.score] as const;
+          if (lookup.status === "missing" && await this.isFirstCompletedMatch(participant)) {
+            return [steam64, DEFAULT_RANKME_SCORE] as const;
+          }
+          throw new Error("rankme starting score unavailable");
         }),
     );
-    const rankmeScoresBefore = Object.fromEntries(entries.filter((entry): entry is readonly [string, number] => Boolean(entry)));
+    const rankmeScoresBefore = Object.fromEntries(entries);
     return Object.keys(rankmeScoresBefore).length > 0 ? rankmeScoresBefore : undefined;
+  }
+
+  private async isFirstCompletedMatch(participant: MatchParticipant): Promise<boolean> {
+    const accountId = participant.accountId;
+    if (!accountId || !this.deps.records?.listPlayerCompletedMatches) return false;
+    const matches = await this.deps.records.listPlayerCompletedMatches(accountId, 1);
+    return matches.length === 0;
   }
 
   private async applyRankmeScoreDeltas(
@@ -1026,9 +1066,10 @@ export class MatchmakingService {
     return Promise.all(players.map(async (player) => {
       const before = rankmeScoresBefore[player.steam64];
       if (player.kind !== "human" || typeof before !== "number" || !Number.isFinite(before)) return player;
-      const after = await this.deps.rankme!.getScoreBySteam64(player.steam64);
-      if (typeof after !== "number" || !Number.isFinite(after)) return player;
-      return { ...player, rankmeScore: after, rankmeScoreDelta: after - before };
+      const after = await lookupRankmeScore(this.deps.rankme!, player.steam64);
+      if (after.status !== "found") throw new Error("rankme final score unavailable");
+      const rankmeScore = after.score;
+      return { ...player, rankmeScore, rankmeScoreDelta: rankmeScore - before };
     }));
   }
 

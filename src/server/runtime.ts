@@ -51,7 +51,10 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   await bootstrapAdmin(accounts, path.join(config.dataDir, "bootstrap-admin.json"));
 
   const records = new MatchRecordStore(recordsDir);
-  const rankme = await RankmeScoreStore.create(config.gameServer.serverRoot);
+  const rankme = await RankmeScoreStore.create(config.gameServer.serverRoot) ?? {
+    getScoreBySteam64: async () => null,
+    lookupScoreBySteam64: async () => ({ status: "unavailable" as const }),
+  };
   const events = new RealtimeEventBus();
   const presence = new PresenceService();
   for (const [accountId, lastSeenAt] of await sessions.listLatestLastSeenByAccount()) {
@@ -88,7 +91,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     botCatalog,
     executor,
     records,
-    rankme: rankme ?? undefined,
+    rankme,
     events,
   });
   matchmaking = matchmakingService;
@@ -122,7 +125,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     friends,
     matchmaking: matchmakingService,
     records,
-    rankme: rankme ?? undefined,
+    rankme,
     events,
     presence,
     certificateFingerprintSha256: certificate.fingerprintSha256,
