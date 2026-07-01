@@ -17,6 +17,7 @@ import { isSourceServerObservable, type SourceServerExitMonitorSpec } from "../g
 import { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import { MatchmakingStore } from "../matchmaking/matchmakingStore.js";
 import { PresenceService } from "../presence/presenceService.js";
+import { RankmeScoreStore } from "../rankme/rankmeScoreStore.js";
 import { RealtimeEventBus } from "../realtime/eventBus.js";
 import { MatchRecordStore } from "../records/matchRecordStore.js";
 import { ensureServerCertificate, type ServerCertificate } from "../tls/certificateService.js";
@@ -50,6 +51,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   await bootstrapAdmin(accounts, path.join(config.dataDir, "bootstrap-admin.json"));
 
   const records = new MatchRecordStore(recordsDir);
+  const rankme = await RankmeScoreStore.create(config.gameServer.serverRoot);
   const events = new RealtimeEventBus();
   const presence = new PresenceService();
   for (const [accountId, lastSeenAt] of await sessions.listLatestLastSeenByAccount()) {
@@ -118,6 +120,8 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     auth,
     friends,
     matchmaking: matchmakingService,
+    records,
+    rankme: rankme ?? undefined,
     events,
     presence,
     certificateFingerprintSha256: certificate.fingerprintSha256,

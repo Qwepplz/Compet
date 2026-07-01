@@ -7,7 +7,10 @@ import type { SessionService } from "../auth/sessionService.js";
 import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
+import type { MatchPlan, MatchPlayerResult, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
+import type { RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
+import type { CompletedMatchRecord, MatchRecordStore } from "../records/matchRecordStore.js";
 import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, tooManyRequests, unauthorized } from "./httpErrors.js";
 
@@ -19,6 +22,8 @@ export interface RouteDeps {
   auth: AuthService;
   friends?: FriendService;
   matchmaking?: MatchmakingService;
+  records?: Pick<MatchRecordStore, "listPlayerCompletedMatches" | "readPlayerCompletedMatch">;
+  rankme?: RankmeScoreReader;
   events?: RealtimeEventBus;
 }
 
@@ -45,6 +50,7 @@ const queueSchema = z.object({ partyId: z.string().min(1).optional() }).default(
 const friendSearchQuerySchema = z.object({ q: z.string().default("") }).default({ q: "" });
 const friendRequestSchema = z.object({ accountId: z.string().min(1) });
 const matchRoomParamsSchema = z.object({ id: z.string().min(1) });
+const matchHistoryLimit = 20;
 const realtimeEventsQuerySchema = z.object({
   afterSeq: z.coerce.number().int().min(0).default(0),
   timeoutMs: z.coerce.number().int().min(0).max(30_000).default(25_000),
@@ -89,6 +95,58 @@ function requireFriends(deps: RouteDeps): FriendService {
 function requireRealtimeEvents(deps: RouteDeps): RealtimeEventBus {
   if (!deps.events) throw new HttpError(503, "service_unavailable", "Realtime event service unavailable");
   return deps.events;
+}
+
+function requireRecords(deps: RouteDeps): Pick<MatchRecordStore, "listPlayerCompletedMatches" | "readPlayerCompletedMatch"> {
+  if (!deps.records) throw new HttpError(503, "service_unavailable", "Match records unavailable");
+  return deps.records;
+}
+
+function accountTeam(plan: MatchPlan, accountId: string): TeamSide | null {
+  if (plan.teamA.participants.some((participant) => participant.accountId === accountId)) return "teamA";
+  if (plan.teamB.participants.some((participant) => participant.accountId === accountId)) return "teamB";
+  return null;
+}
+
+function accountSteam64(plan: MatchPlan, account: AccountRecord): string {
+  const participant = [...plan.teamA.participants, ...plan.teamB.participants]
+    .find((entry) => entry.accountId === account.id);
+  return participant?.steam64?.trim() || account.steam64.trim();
+}
+
+function resultPlayer(result: MatchSeriesResult, steam64: string): MatchPlayerResult | null {
+  if (!steam64) return null;
+  return result.players.find((player) => player.steam64.trim() === steam64) ?? null;
+}
+
+function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecord) {
+  const selfTeam = accountTeam(record.plan, account.id);
+  if (!selfTeam) return null;
+  const self = resultPlayer(record.result, accountSteam64(record.plan, account));
+  if (!self) return null;
+  return {
+    matchId: record.matchId,
+    completedAt: record.result.completedAt,
+    mapName: record.result.mapName,
+    winner: record.result.winner,
+    score: { team1: record.result.team1Score, team2: record.result.team2Score },
+    selfTeam,
+    selfWon: record.result.winner === selfTeam,
+    self: {
+      kills: self.kills,
+      deaths: self.deaths,
+      assists: self.assists,
+      damage: self.damage,
+      headshots: self.headshots,
+      rating2: self.rating2,
+    },
+  };
+}
+
+async function rankmeScoreFor(deps: RouteDeps, account: AccountRecord): Promise<number | null> {
+  const steam64 = account.steam64.trim();
+  if (!steam64 || !deps.rankme) return null;
+  return deps.rankme.getScoreBySteam64(steam64);
 }
 
 function mapMatchmakingServiceError(error: unknown): never {
@@ -270,6 +328,33 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     return publicAccount(auth.account);
+  });
+
+  app.get("/me/rankme-score", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    return { score: await rankmeScoreFor(deps, auth.account) };
+  });
+
+  app.get("/matches/history", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const records = requireRecords(deps);
+    const rankmeScore = await rankmeScoreFor(deps, auth.account);
+    const matches = (await records.listPlayerCompletedMatches(auth.account.id, matchHistoryLimit))
+      .map((record) => toMatchHistoryEntry(record, auth.account))
+      .filter((record): record is NonNullable<typeof record> => Boolean(record));
+    return { rankmeScore, matches };
+  });
+
+  app.get("/matches/:id/result", async (request) => {
+    const auth = await authenticateRequest(request, deps);
+    requirePlayer(request);
+    const records = requireRecords(deps);
+    const { id } = matchRoomParamsSchema.parse(request.params);
+    const match = await records.readPlayerCompletedMatch(auth.account.id, id);
+    if (!match) throw notFound();
+    return { result: match.result };
   });
 
   app.get("/friends/search", async (request) => {

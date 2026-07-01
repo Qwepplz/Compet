@@ -1,11 +1,17 @@
 import path from "node:path";
 import type { Dirent } from "node:fs";
 import { readdir } from "node:fs/promises";
-import type { MatchPlan } from "../matchmaking/types.js";
+import type { MatchPlan, MatchSeriesResult } from "../matchmaking/types.js";
 import { readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
 
 interface EventsFile {
   events: unknown[];
+}
+
+export interface CompletedMatchRecord {
+  matchId: string;
+  plan: MatchPlan;
+  result: MatchSeriesResult;
 }
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
@@ -20,6 +26,39 @@ export class MatchRecordStore {
 
   async readMatchPlan(matchId: string): Promise<MatchPlan> {
     return readJsonFile<MatchPlan>(this.matchFile(matchId, "plan.json"));
+  }
+
+  async listPlayerCompletedMatches(accountId: string, limit: number): Promise<CompletedMatchRecord[]> {
+    if (limit <= 0) return [];
+    let entries: Dirent[];
+    try {
+      entries = await readdir(path.join(this.recordsDir, "matches"), { withFileTypes: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+
+    const matches = await Promise.all(
+      entries
+        .filter((entry) => entry.isDirectory())
+        .map((entry) => this.readPlayerCompletedMatch(accountId, entry.name)),
+    );
+
+    return matches
+      .filter((match): match is CompletedMatchRecord => Boolean(match))
+      .sort((a, b) => this.timestampOf(b.result.completedAt) - this.timestampOf(a.result.completedAt))
+      .slice(0, limit);
+  }
+
+  async readPlayerCompletedMatch(accountId: string, matchId: string): Promise<CompletedMatchRecord | null> {
+    try {
+      const plan = await this.readMatchPlan(matchId);
+      if (!this.planIncludesAccount(plan, accountId)) return null;
+      const result = await this.readResult<MatchSeriesResult>(matchId);
+      return { matchId, plan, result };
+    } catch {
+      return null;
+    }
   }
 
   async listRecentMatchMaps(limit: number): Promise<string[]> {
@@ -109,6 +148,10 @@ export class MatchRecordStore {
     if (!SAFE_MATCH_ID_PATTERN.test(matchId)) {
       throw new Error(`Invalid matchId: ${matchId}`);
     }
+  }
+
+  private planIncludesAccount(plan: MatchPlan, accountId: string): boolean {
+    return [...plan.teamA.participants, ...plan.teamB.participants].some((participant) => participant.accountId === accountId);
   }
 
   private timestampOf(value: string): number {

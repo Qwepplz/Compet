@@ -6,6 +6,7 @@ import type { UpdateCheckResult } from "../../../desktop/updateTypes.js";
 import type {
   PlayerFriendListDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchHistoryDto,
   PlayerMatchResultDto,
   PlayerMatchParticipantDto,
   PlayerMatchTeamDto,
@@ -30,6 +31,7 @@ import {
 import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
 import { MatchResultPage } from "./pages/MatchResultPage.js";
+import { MatchHistoryPage, formatRankmeScore } from "./pages/MatchHistoryPage.js";
 import {
   loadDevModeEnabled,
   loadMatchSoundEnabled,
@@ -47,7 +49,7 @@ import {
 
 const matchFoundSoundUrl = new URL("./assets/sounds/faceit_accept_sound_epic.mp3", import.meta.url).href;
 
-type PlayerView = "login" | "change-password" | "home" | "match-room" | "match-result";
+type PlayerView = "login" | "change-password" | "home" | "match-room" | "match-result" | "match-history";
 
 const defaultBaseUrl = "https://127.0.0.1:18443";
 
@@ -61,6 +63,15 @@ const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
 let startupUpdateCheckStarted = false;
+
+function HistoryChartIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" height="24" width="24" aria-hidden="true" focusable="false">
+      <path d="M3 3h2v16h16v2H3V3z" fill="currentColor" />
+      <path d="M16 13.414l5.707-5.707-1.414-1.414L16 10.586l-4-4-5.707 5.707 1.414 1.414L12 9.414l4 4z" fill="currentColor" />
+    </svg>
+  );
+}
 
 function waitForMatchmakingDelay(delayMs: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, delayMs));
@@ -284,6 +295,10 @@ export function App() {
   const [party, setParty] = useState<PlayerPartyDto | null>(null);
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
   const [matchResult, setMatchResult] = useState<PlayerMatchResultDto | null>(null);
+  const [matchResultBackView, setMatchResultBackView] = useState<"home" | "match-history">("home");
+  const [matchHistory, setMatchHistory] = useState<PlayerMatchHistoryDto | null>(null);
+  const [matchHistoryLoading, setMatchHistoryLoading] = useState(false);
+  const [rankmeScore, setRankmeScore] = useState<number | null>(null);
   const [matchmakingFeedbackPending, setMatchmakingFeedbackPending] = useState(false);
   const [matchSoundEnabled, setMatchSoundEnabled] = useState(() => loadMatchSoundEnabled());
   const [devModeEnabled, setDevModeEnabled] = useState(() => loadDevModeEnabled());
@@ -755,11 +770,15 @@ export function App() {
         }), { activate: false });
         if (event.result) {
           setMatchResult(event.result);
+          setMatchResultBackView("home");
+          void refreshRankmeScore();
           void message.success("比赛已结束");
           setActiveView("match-result");
           return;
         }
         setMatchResult(null);
+        setMatchResultBackView("home");
+        void refreshRankmeScore();
         void message.success("比赛已结束");
         setActiveView("home");
         return;
@@ -769,6 +788,7 @@ export function App() {
           phase: "failed",
         }), { activate: false });
         setMatchResult(null);
+        setMatchResultBackView("home");
         void message.error("比赛异常结束");
         setActiveView("home");
         return;
@@ -853,12 +873,51 @@ export function App() {
     }
   }
 
+  async function refreshRankmeScore() {
+    try {
+      setRankmeScore(await api.getRankmeScore());
+    } catch {
+      setRankmeScore(null);
+    }
+  }
+
+  async function loadMatchHistory() {
+    setMatchHistoryLoading(true);
+    try {
+      const nextHistory = await api.listMatchHistory();
+      setMatchHistory(nextHistory);
+      setRankmeScore(nextHistory.rankmeScore);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "加载历史战绩失败");
+    } finally {
+      setMatchHistoryLoading(false);
+    }
+  }
+
+  async function openMatchHistory() {
+    setActiveView("match-history");
+    await loadMatchHistory();
+  }
+
+  async function openMatchHistoryResult(matchId: string) {
+    try {
+      const result = await api.getMatchHistoryResult(matchId);
+      setMatchResult(result);
+      setMatchResultBackView("match-history");
+      setActiveView("match-result");
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "加载比赛详情失败");
+    }
+  }
+
   async function restoreSession() {
     try {
       const restored = await window.playerApi.restoreSession();
       if (!restored) {
         await loadSavedLogin();
         setMatchResult(null);
+        setMatchHistory(null);
+        setRankmeScore(null);
         setActiveView("login");
         return;
       }
@@ -872,14 +931,18 @@ export function App() {
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
       setMatchResult(null);
+      setMatchResultBackView("home");
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
       void hydrateRealtimeState();
+      void refreshRankmeScore();
     } catch (error) {
       message.error(error instanceof Error ? error.message : "恢复会话失败");
       await loadSavedLogin();
       setMatchResult(null);
+      setMatchHistory(null);
+      setRankmeScore(null);
       setActiveView("login");
     } finally {
       setLoading(false);
@@ -918,6 +981,8 @@ export function App() {
         setParty(null);
         setMatchmaking(emptyMatchmaking);
         setMatchResult(null);
+        setMatchHistory(null);
+        setRankmeScore(null);
         setRealtimeStatus(emptyRealtimeStatus);
         setStale(false);
         setActiveView("change-password");
@@ -926,6 +991,8 @@ export function App() {
       const restored = await window.playerApi.restoreSession();
       if (!restored) {
         setMatchResult(null);
+        setMatchHistory(null);
+        setRankmeScore(null);
         setActiveView("login");
         return;
       }
@@ -938,10 +1005,12 @@ export function App() {
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
       setMatchResult(null);
+      setMatchResultBackView("home");
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
       void hydrateRealtimeState();
+      void refreshRankmeScore();
     } catch (error) {
       message.error(error instanceof Error ? error.message : "登录失败");
     } finally {
@@ -964,6 +1033,8 @@ export function App() {
         const restored = await window.playerApi.restoreSession();
         if (!restored) {
           setMatchResult(null);
+          setMatchHistory(null);
+          setRankmeScore(null);
           setActiveView("login");
           return;
         }
@@ -976,10 +1047,12 @@ export function App() {
         setParty(restored.matchmaking.party ?? null);
         setMatchmaking(restored.matchmaking);
         setMatchResult(null);
+        setMatchResultBackView("home");
         setRealtimeStatus(emptyRealtimeStatus);
         setStale(false);
         setActiveView(viewFromSession(restored.account, restored.matchmaking));
         void hydrateRealtimeState();
+        void refreshRankmeScore();
       } else {
         setPasswordModalOpen(false);
       }
@@ -1004,6 +1077,9 @@ export function App() {
       setParty(null);
       setMatchmaking(emptyMatchmaking);
       setMatchResult(null);
+      setMatchHistory(null);
+      setMatchResultBackView("home");
+      setRankmeScore(null);
       setRealtimeStatus(emptyRealtimeStatus);
       setStale(false);
       setCurrentPassword("");
@@ -1237,8 +1313,18 @@ export function App() {
   }
 
   function renderAuthenticatedView() {
+    if (activeView === "match-history") {
+      return (
+        <MatchHistoryPage
+          history={matchHistory}
+          loading={matchHistoryLoading}
+          onBackHome={() => setActiveView("home")}
+          onOpenMatch={(matchId) => void openMatchHistoryResult(matchId)}
+        />
+      );
+    }
     if (activeView === "match-result" && matchResult) {
-      return <MatchResultPage result={matchResult} selfSteam64={account?.steam64} onBackHome={() => setActiveView("home")} />;
+      return <MatchResultPage result={matchResult} selfSteam64={account?.steam64} onBackHome={() => setActiveView(matchResultBackView)} />;
     }
     if (activeView === "match-room") {
       return (
@@ -1375,7 +1461,10 @@ export function App() {
             <SteamAvatar className="player-app-avatar" avatarUrl={account?.steamAvatarUrl} label={accountLabel} />
             <div className="player-app-brand-copy">
               <div className="player-kicker">Compet Player</div>
-              <strong>{accountLabel}</strong>
+              <div className="player-app-name-line">
+                <strong>{accountLabel}</strong>
+                <span className="player-rankme-score">{formatRankmeScore(rankmeScore)}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1386,6 +1475,13 @@ export function App() {
               {baseUrl}
             </span>
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
+            <Button
+              aria-label="历史战绩"
+              className={`player-app-settings-button player-app-history-button${activeView === "match-history" ? " player-app-history-button--active" : ""}`}
+              icon={<HistoryChartIcon />}
+              type="text"
+              onClick={() => void openMatchHistory()}
+            />
             <Button
               aria-label="设置"
               className="player-app-settings-button"

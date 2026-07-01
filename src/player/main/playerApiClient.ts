@@ -6,6 +6,7 @@ import type {
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchHistoryDto,
   PlayerMatchParticipantDto,
   PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
@@ -116,6 +117,19 @@ export class PlayerApiClient {
 
   listFriends(): Promise<PlayerFriendListDto> {
     return this.request<PlayerFriendListDto>("GET", "/friends").then((friends) => this.enrichFriendList(friends));
+  }
+
+  getRankmeScore(): Promise<number | null> {
+    return this.request<{ score: number | null }>("GET", "/me/rankme-score").then((response) => response.score);
+  }
+
+  listMatchHistory(): Promise<PlayerMatchHistoryDto> {
+    return this.request<PlayerMatchHistoryDto>("GET", "/matches/history");
+  }
+
+  async getMatchHistoryResult(matchId: string): Promise<PlayerMatchResultDto> {
+    const response = await this.request<{ result: PlayerMatchResultDto }>("GET", `/matches/${encodeURIComponent(matchId)}/result`);
+    return this.enrichMatchResult(response.result);
   }
 
   reenrichFriendSearchResults(results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> {

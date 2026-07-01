@@ -29,6 +29,22 @@ export type PlayerLiveMatchStateDto = PublicMatchRoomRecord;
 export type PlayerMatchResultDto = MatchSeriesResult;
 export type PlayerMatchPlayerResultDto = MatchPlayerResult;
 
+export interface PlayerMatchHistoryEntryDto {
+  matchId: string;
+  completedAt: string;
+  mapName: string;
+  winner: "teamA" | "teamB";
+  score: { team1: number; team2: number };
+  selfTeam: "teamA" | "teamB";
+  selfWon: boolean;
+  self: Pick<MatchPlayerResult, "kills" | "deaths" | "assists" | "damage" | "headshots" | "rating2">;
+}
+
+export interface PlayerMatchHistoryDto {
+  rankmeScore: number | null;
+  matches: PlayerMatchHistoryEntryDto[];
+}
+
 export interface PlayerRealtimeStatusDto {
   connection: PlayerRealtimeConnection;
   stale: boolean;

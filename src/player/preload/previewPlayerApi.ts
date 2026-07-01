@@ -7,6 +7,8 @@ import type {
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
   PlayerLiveMatchStateDto,
+  PlayerMatchHistoryDto,
+  PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
@@ -17,12 +19,13 @@ import type {
 } from "../shared/types.js";
 
 const createdAt = "2026-05-04T09:00:00.000Z";
+const previewSteam64 = "76561198000000001";
 
 const previewAccount: AccountView = {
   id: "preview-player",
   username: "preview",
   displayName: "Steam 预览账号",
-  steam64: "76561198000000001",
+  steam64: previewSteam64,
   steamPersonaName: "Steam 预览账号",
   role: "player",
   enabled: true,
@@ -55,6 +58,22 @@ const previewFriends: PlayerFriendListDto = {
   ],
   incomingRequests: [],
   outgoingRequests: [],
+};
+
+const previewMatchResult: PlayerMatchResultDto = {
+  winner: "teamA",
+  team1SeriesScore: 1,
+  team2SeriesScore: 0,
+  mapName: "de_mirage",
+  team1Name: "Alpha",
+  team2Name: "Bravo",
+  team1Score: 13,
+  team2Score: 8,
+  completedAt: createdAt,
+  players: [
+    { steam64: previewSteam64, name: previewAccount.displayName, kind: "human", team: "teamA", kills: 21, deaths: 9, assists: 5, damage: 2400, headshots: 10, rating2: 1.46 },
+    { steam64: "76561198000000002", name: "Bravo", kind: "human", team: "teamB", kills: 9, deaths: 21, assists: 1, damage: 900, headshots: 2, rating2: 0.66 },
+  ],
 };
 
 function makeParty(): PlayerPartyDto {
@@ -172,6 +191,21 @@ export function createPreviewPlayerApi() {
         }));
     },
     listFriends: async (): Promise<PlayerFriendListDto> => previewFriends,
+    getRankmeScore: async (): Promise<number> => 4017,
+    listMatchHistory: async (): Promise<PlayerMatchHistoryDto> => ({
+      rankmeScore: 4017,
+      matches: [{
+        matchId: "preview-match",
+        completedAt: createdAt,
+        mapName: "de_mirage",
+        winner: "teamA",
+        score: { team1: 13, team2: 8 },
+        selfTeam: "teamA",
+        selfWon: true,
+        self: { kills: 21, deaths: 9, assists: 5, damage: 2400, headshots: 10, rating2: 1.46 },
+      }],
+    }),
+    getMatchHistoryResult: async (): Promise<PlayerMatchResultDto> => previewMatchResult,
     reenrichFriends: async (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => results,
     sendFriendRequest: async (accountId: string): Promise<PlayerFriendRequestDto> => ({
       id: `preview-request-${accountId}`,
