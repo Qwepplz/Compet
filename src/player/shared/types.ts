@@ -37,7 +37,7 @@ export interface PlayerMatchHistoryEntryDto {
   score: { team1: number; team2: number };
   selfTeam: "teamA" | "teamB";
   selfWon: boolean;
-  self: Pick<MatchPlayerResult, "kills" | "deaths" | "assists" | "damage" | "headshots" | "rating2" | "rankmeScoreDelta">;
+  self: Pick<MatchPlayerResult, "kills" | "deaths" | "assists" | "damage" | "headshots" | "rating2" | "rankmeScore" | "rankmeScoreDelta">;
 }
 
 export interface PlayerMatchHistoryDto {

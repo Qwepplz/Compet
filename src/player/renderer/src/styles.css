@@ -980,6 +980,43 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   font-weight: 700;
 }
 
+.match-history-rankme-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.match-history-rankme-total {
+  color: #f1f1f1;
+}
+
+.match-history-rankme-trend {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12px;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.match-history-rankme-trend--gain {
+  color: #6ade43;
+}
+
+.match-history-rankme-trend--loss {
+  color: #ff2727;
+}
+
+.match-history-rankme-trend-icon {
+  width: 10px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.match-history-rankme-unranked {
+  color: #d8d8d8;
+}
+
 .match-history-map {
   text-transform: capitalize;
 }

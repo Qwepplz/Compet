@@ -61,6 +61,7 @@ export interface MatchPlayerResult {
   damage: number;
   headshots: number;
   rating2?: number;
+  rankmeScore?: number;
   rankmeScoreDelta?: number;
 }
 export interface MatchPlan {

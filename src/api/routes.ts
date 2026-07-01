@@ -119,6 +119,16 @@ function resultPlayer(result: MatchSeriesResult, steam64: string): MatchPlayerRe
   return result.players.find((player) => player.steam64.trim() === steam64) ?? null;
 }
 
+function finiteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function matchHistoryRankmeScore(plan: MatchPlan, self: MatchPlayerResult): number | undefined {
+  if (finiteNumber(self.rankmeScore)) return self.rankmeScore;
+  const before = plan.rankmeScoresBefore?.[self.steam64.trim()];
+  return finiteNumber(before) && finiteNumber(self.rankmeScoreDelta) ? before + self.rankmeScoreDelta : undefined;
+}
+
 function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecord) {
   const selfTeam = accountTeam(record.plan, account.id);
   if (!selfTeam) return null;
@@ -139,6 +149,7 @@ function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecor
       damage: self.damage,
       headshots: self.headshots,
       rating2: self.rating2,
+      rankmeScore: matchHistoryRankmeScore(record.plan, self),
       rankmeScoreDelta: self.rankmeScoreDelta,
     },
   };

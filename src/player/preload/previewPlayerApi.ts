@@ -202,7 +202,7 @@ export function createPreviewPlayerApi() {
         score: { team1: 13, team2: 8 },
         selfTeam: "teamA",
         selfWon: true,
-        self: { kills: 21, deaths: 9, assists: 5, damage: 2400, headshots: 10, rating2: 1.46 },
+        self: { kills: 21, deaths: 9, assists: 5, damage: 2400, headshots: 10, rating2: 1.46, rankmeScore: 4017, rankmeScoreDelta: 25 },
       }],
     }),
     getMatchHistoryResult: async (): Promise<PlayerMatchResultDto> => previewMatchResult,

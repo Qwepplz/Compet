@@ -16,10 +16,39 @@ export function formatRankmeScore(score: number | null | undefined): string {
   return typeof score === "number" && Number.isFinite(score) ? Math.round(score).toLocaleString("en-US") : "未排位";
 }
 
-function formatRankmeDelta(delta: number | null | undefined): string {
-  if (typeof delta !== "number" || !Number.isFinite(delta)) return "未排位";
+function formatRankmeChange(delta: number): string {
   const rounded = Math.round(delta);
-  return `${rounded >= 0 ? "+" : ""}${rounded.toLocaleString("en-US")}`;
+  return Math.abs(rounded).toLocaleString("en-US");
+}
+
+function RankmeTrendIcon({ delta }: { delta: number }) {
+  const isGain = Math.round(delta) >= 0;
+  return (
+    <svg className="match-history-rankme-trend-icon" viewBox="0 0 12 14" aria-hidden="true" focusable="false">
+      <path
+        d={isGain ? "M0 6l1.414 1.414L5 3.828V14h2V3.828l3.586 3.586L12 6 6 0 0 6z" : "M0 8l1.414-1.414L5 10.172V0h2v10.172l3.586-3.586L12 8l-6 6-6-6z"}
+        fill="currentColor"
+      />
+    </svg>
+  );
+}
+
+function RankmeScoreChange({ score, delta }: { score: number | null | undefined; delta: number | null | undefined }) {
+  const hasScore = typeof score === "number" && Number.isFinite(score);
+  if (!hasScore) return <span className="match-history-rankme-unranked">未排位</span>;
+  const hasDelta = typeof delta === "number" && Number.isFinite(delta);
+  const roundedDelta = hasDelta ? Math.round(delta) : null;
+  return (
+    <div className="match-history-rankme-value">
+      <span className="match-history-rankme-total">{formatRankmeScore(score)}</span>
+      {roundedDelta === null ? null : (
+        <span className={`match-history-rankme-trend match-history-rankme-trend--${roundedDelta >= 0 ? "gain" : "loss"}`}>
+          <RankmeTrendIcon delta={roundedDelta} />
+          <span>{formatRankmeChange(roundedDelta)}</span>
+        </span>
+      )}
+    </div>
+  );
 }
 
 function formatResultDate(completedAt: string): { date: string; time: string } {
@@ -95,7 +124,9 @@ function MatchHistoryRow({
           <span>{match.score.team2}</span>
         </div>
       </td>
-      <td className="match-history-rankme">{formatRankmeDelta(match.self.rankmeScoreDelta)}</td>
+      <td className="match-history-rankme">
+        <RankmeScoreChange score={match.self.rankmeScore} delta={match.self.rankmeScoreDelta} />
+      </td>
       <td className="match-history-rating">
         <span
           className={ratingTone ? `match-result-rating-pill match-result-rating-pill--${ratingTone}` : "match-result-rating-pill"}

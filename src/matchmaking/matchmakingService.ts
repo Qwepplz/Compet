@@ -1028,7 +1028,7 @@ export class MatchmakingService {
       if (player.kind !== "human" || typeof before !== "number" || !Number.isFinite(before)) return player;
       const after = await this.deps.rankme!.getScoreBySteam64(player.steam64);
       if (typeof after !== "number" || !Number.isFinite(after)) return player;
-      return { ...player, rankmeScoreDelta: after - before };
+      return { ...player, rankmeScore: after, rankmeScoreDelta: after - before };
     }));
   }
 
