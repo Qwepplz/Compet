@@ -123,12 +123,13 @@ export class PlayerApiClient {
     return this.request<{ score: number | null }>("GET", "/me/rankme-score").then((response) => response.score);
   }
 
-  listMatchHistory(): Promise<PlayerMatchHistoryDto> {
-    return this.request<PlayerMatchHistoryDto>("GET", "/matches/history");
+  listMatchHistory(accountId?: string): Promise<PlayerMatchHistoryDto> {
+    return this.request<PlayerMatchHistoryDto>("GET", accountId ? `/matches/history?accountId=${encodeURIComponent(accountId)}` : "/matches/history");
   }
 
-  async getMatchHistoryResult(matchId: string): Promise<PlayerMatchResultDto> {
-    const response = await this.request<{ result: PlayerMatchResultDto }>("GET", `/matches/${encodeURIComponent(matchId)}/result`);
+  async getMatchHistoryResult(matchId: string, accountId?: string): Promise<PlayerMatchResultDto> {
+    const path = `/matches/${encodeURIComponent(matchId)}/result`;
+    const response = await this.request<{ result: PlayerMatchResultDto }>("GET", accountId ? `${path}?accountId=${encodeURIComponent(accountId)}` : path);
     return this.enrichMatchResult(response.result);
   }
 

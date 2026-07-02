@@ -50,6 +50,7 @@ const queueSchema = z.object({ partyId: z.string().min(1).optional() }).default(
 const friendSearchQuerySchema = z.object({ q: z.string().default("") }).default({ q: "" });
 const friendRequestSchema = z.object({ accountId: z.string().min(1) });
 const matchRoomParamsSchema = z.object({ id: z.string().min(1) });
+const matchHistoryQuerySchema = z.object({ accountId: z.string().min(1).optional() }).default({});
 const matchHistoryLimit = 20;
 const realtimeEventsQuerySchema = z.object({
   afterSeq: z.coerce.number().int().min(0).default(0),
@@ -161,6 +162,17 @@ async function rankmeScoreFor(deps: RouteDeps, account: AccountRecord, hasComple
   const lookup = await lookupRankmeScore(deps.rankme, steam64);
   if (lookup.status === "found") return lookup.score;
   return lookup.status === "missing" && hasCompletedMatches === false ? DEFAULT_RANKME_SCORE : null;
+}
+
+async function resolveMatchHistoryAccount(deps: RouteDeps, authAccount: AccountRecord, accountId?: string): Promise<AccountRecord> {
+  const targetAccountId = accountId?.trim();
+  if (!targetAccountId || targetAccountId === authAccount.id) return authAccount;
+  const targetAccount = await deps.accounts.getById(targetAccountId);
+  if (!targetAccount || targetAccount.role !== "player" || !targetAccount.enabled) throw notFound();
+  const friends = requireFriends(deps);
+  const friendList = await friends.listFriends(authAccount.id);
+  if (!friendList.friends.some((friend) => friend.accountId === targetAccount.id)) throw forbidden();
+  return targetAccount;
 }
 
 function mapMatchmakingServiceError(error: unknown): never {
@@ -355,11 +367,13 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const records = requireRecords(deps);
-    const completedRecords = await records.listPlayerCompletedMatches(auth.account.id, matchHistoryLimit);
+    const { accountId } = matchHistoryQuerySchema.parse(request.query ?? {});
+    const historyAccount = await resolveMatchHistoryAccount(deps, auth.account, accountId);
+    const completedRecords = await records.listPlayerCompletedMatches(historyAccount.id, matchHistoryLimit);
     const matches = completedRecords
-      .map((record) => toMatchHistoryEntry(record, auth.account))
+      .map((record) => toMatchHistoryEntry(record, historyAccount))
       .filter((record): record is NonNullable<typeof record> => Boolean(record));
-    const rankmeScore = await rankmeScoreFor(deps, auth.account, completedRecords.length > 0);
+    const rankmeScore = await rankmeScoreFor(deps, historyAccount, completedRecords.length > 0);
     return { rankmeScore, matches };
   });
 
@@ -368,7 +382,9 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const records = requireRecords(deps);
     const { id } = matchRoomParamsSchema.parse(request.params);
-    const match = await records.readPlayerCompletedMatch(auth.account.id, id);
+    const { accountId } = matchHistoryQuerySchema.parse(request.query ?? {});
+    const historyAccount = await resolveMatchHistoryAccount(deps, auth.account, accountId);
+    const match = await records.readPlayerCompletedMatch(historyAccount.id, id);
     if (!match) throw notFound();
     return { result: match.result };
   });

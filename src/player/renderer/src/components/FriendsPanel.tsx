@@ -2,7 +2,7 @@ import { Badge, Button, Dropdown, Input, Modal } from "antd";
 import { TeamOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
-import type { PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
+import type { PlayerFriendDto, PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
 import { SteamAvatar } from "./SteamAvatar.js";
 import { playerAccountLabel } from "../playerDisplay.js";
 
@@ -17,6 +17,7 @@ interface FriendsPanelProps {
   onSendFriendRequest?: (accountId: string) => Promise<void>;
   onAcceptFriendRequest?: (requestId: string) => Promise<void>;
   onDeclineFriendRequest?: (requestId: string) => Promise<void>;
+  onViewMatchHistory?: (friend: PlayerFriendDto) => void;
   onRemoveFriend?: (friendshipId: string) => Promise<void>;
 }
 
@@ -47,6 +48,7 @@ export function FriendsPanel({
   onSendFriendRequest,
   onAcceptFriendRequest,
   onDeclineFriendRequest,
+  onViewMatchHistory,
   onRemoveFriend,
 }: FriendsPanelProps) {
   const [query, setQuery] = useState("");
@@ -133,6 +135,11 @@ export function FriendsPanel({
     }
   }
 
+  function handleViewMatchHistory(friend: PlayerFriendDto) {
+    if (!onViewMatchHistory) return;
+    onViewMatchHistory(friend);
+  }
+
   const pendingCount = friends.incomingRequests.length;
   const open = expanded || addOpen;
 
@@ -207,6 +214,11 @@ export function FriendsPanel({
                   menu={{
                     items: [
                       {
+                        key: "history",
+                        label: "查看历史战绩",
+                        disabled: !onViewMatchHistory,
+                      },
+                      {
                         key: "remove",
                         label: "删除好友",
                         danger: true,
@@ -214,6 +226,7 @@ export function FriendsPanel({
                       },
                     ],
                     onClick: ({ key }) => {
+                      if (key === "history") handleViewMatchHistory(friend);
                       if (key === "remove") void handleRemoveFriend(friend.friendshipId);
                     },
                   }}

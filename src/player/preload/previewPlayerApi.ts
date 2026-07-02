@@ -192,7 +192,7 @@ export function createPreviewPlayerApi() {
     },
     listFriends: async (): Promise<PlayerFriendListDto> => previewFriends,
     getRankmeScore: async (): Promise<number> => 4017,
-    listMatchHistory: async (): Promise<PlayerMatchHistoryDto> => ({
+    listMatchHistory: async (_accountId?: string): Promise<PlayerMatchHistoryDto> => ({
       rankmeScore: 4017,
       matches: [{
         matchId: "preview-match",
@@ -205,7 +205,7 @@ export function createPreviewPlayerApi() {
         self: { kills: 21, deaths: 9, assists: 5, damage: 2400, headshots: 10, rating2: 1.46, rankmeScore: 4017, rankmeScoreDelta: 25 },
       }],
     }),
-    getMatchHistoryResult: async (): Promise<PlayerMatchResultDto> => previewMatchResult,
+    getMatchHistoryResult: async (_matchId?: string, _accountId?: string): Promise<PlayerMatchResultDto> => previewMatchResult,
     reenrichFriends: async (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => results,
     sendFriendRequest: async (accountId: string): Promise<PlayerFriendRequestDto> => ({
       id: `preview-request-${accountId}`,
