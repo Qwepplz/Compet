@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
-import { CloseOutlined, MinusOutlined, SettingOutlined } from "@ant-design/icons";
+import { CloseOutlined, MinusOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type { UpdateCheckResult } from "../../../desktop/updateTypes.js";
 import type {
@@ -73,6 +73,17 @@ function HistoryChartIcon() {
     <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" height="24" width="24" aria-hidden="true" focusable="false">
       <path d="M3 3h2v16h16v2H3V3z" fill="currentColor" />
       <path d="M16 13.414l5.707-5.707-1.414-1.414L16 10.586l-4-4-5.707 5.707 1.414 1.414L12 9.414l4 4z" fill="currentColor" />
+    </svg>
+  );
+}
+
+function SettingsToolIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" height="24" width="24" aria-hidden="true" focusable="false">
+      <path
+        d="M4 6h9v2H4V6zm11-2h5v6h-5V4zM4 14h5v6H4v-6zm7 2h9v2h-9v-2z"
+        fill="currentColor"
+      />
     </svg>
   );
 }
@@ -1513,7 +1524,7 @@ export function App() {
             <Button
               aria-label="设置"
               className="player-app-settings-button"
-              icon={<SettingOutlined />}
+              icon={<SettingsToolIcon />}
               type="text"
               onClick={() => setSettingsModalOpen(true)}
             />
