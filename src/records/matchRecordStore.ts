@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { Dirent } from "node:fs";
-import { readdir } from "node:fs/promises";
+import { readdir, rm } from "node:fs/promises";
 import type { MatchPlan, MatchSeriesResult } from "../matchmaking/types.js";
 import { readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
 
@@ -77,6 +77,8 @@ export class MatchRecordStore {
         .map(async (entry) => {
           try {
             const plan = await this.readMatchPlan(entry.name);
+            const result = await this.readResult<Partial<MatchSeriesResult>>(entry.name);
+            if (typeof result.completedAt !== "string") return undefined;
             const map = plan.map.trim();
             if (!map) return undefined;
             return { map, createdAt: plan.createdAt };
@@ -103,6 +105,11 @@ export class MatchRecordStore {
 
   async saveResult(matchId: string, result: unknown): Promise<void> {
     await this.saveMatchFile(matchId, "result.json", result);
+  }
+
+  async deleteMatch(matchId: string): Promise<void> {
+    this.assertSafeMatchId(matchId);
+    await rm(path.join(this.recordsDir, "matches", matchId), { recursive: true, force: true });
   }
 
   async readResult<T = unknown>(matchId: string): Promise<T> {

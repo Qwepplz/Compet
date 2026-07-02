@@ -1,5 +1,5 @@
 import { existsSync, type Dirent } from "node:fs";
-import { copyFile, mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 import type { GameServerConfig } from "../config/config.js";
@@ -99,6 +99,11 @@ export class MatchExecutor {
     await this.saveConnectState(matchPlan.id, launched, connect);
     emptyServerWatchdog.start();
     return connect;
+  }
+
+  async deleteMatchArtifacts(matchId: string): Promise<void> {
+    const safeMatchId = validateMatchId(matchId);
+    await rm(path.dirname(competMatchStatsPath(this.options.config.serverRoot, safeMatchId)), { recursive: true, force: true });
   }
 
   private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {

@@ -166,11 +166,7 @@ async function completeRoomsIfGameServerUnavailable(matchmaking: MatchmakingServ
     startupObservationTimeoutMs: 60_000,
   };
   if (await isSourceServerObservable(monitor)) return;
-  await matchmaking.completeServerManagedRoomsFromServerUnavailable({
-    code: null,
-    signal: null,
-    output: [`Source server was unavailable on startup at ${monitor.host}:${monitor.port}`],
-  });
+  await matchmaking.completeServerManagedRoomsFromServerUnavailable();
 }
 
 async function loadRuntimeBotCatalog(serverRoot: string) {

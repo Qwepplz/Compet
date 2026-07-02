@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { execFile } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { access, mkdir, readFile, rm } from "node:fs/promises";
+import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -34,9 +34,14 @@ export class MysqlDatabaseBackup {
   async create(matchId: string): Promise<void> {
     const filePath = mysqlBackupFilePath(this.options.backupDir, matchId);
     await mkdir(path.dirname(filePath), { recursive: true });
+    const database = await this.resolveDatabase();
     try {
-      await (await this.resolveProcess()).dump(await this.resolveDatabase(), filePath);
+      await (await this.resolveProcess()).dump(database, filePath);
     } catch (error) {
+      if (isEmptyDatabaseDumpError(error, database.database)) {
+        await writeFile(filePath, emptyDatabaseDump(database.database), "utf8");
+        return;
+      }
       await rm(filePath, { force: true });
       throw error;
     }
@@ -163,6 +168,26 @@ async function resolveMysqldumpCliPath(mysqlPath: string): Promise<string | null
 
 function mysqlEnv(database: MysqlDatabaseConfig): NodeJS.ProcessEnv {
   return { ...process.env, MYSQL_PWD: database.password };
+}
+
+function isEmptyDatabaseDumpError(error: unknown, databaseName: string): boolean {
+  const message = error instanceof Error ? error.message : String(error);
+  return (message.includes("Unknown database") && message.includes(databaseName))
+    || message.includes("No tables found");
+}
+
+function emptyDatabaseDump(databaseName: string): string {
+  const database = quoteMysqlIdentifier(databaseName);
+  return [
+    `DROP DATABASE IF EXISTS ${database};`,
+    `CREATE DATABASE ${database};`,
+    `USE ${database};`,
+    "",
+  ].join("\n");
+}
+
+function quoteMysqlIdentifier(value: string): string {
+  return `\`${value.replace(/`/g, "``")}\``;
 }
 
 function waitForProcess(child: ReturnType<typeof spawn>, label: string): Promise<void> {
