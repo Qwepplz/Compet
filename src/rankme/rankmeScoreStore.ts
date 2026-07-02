@@ -17,7 +17,7 @@ export interface RankmeScoreReader {
   lookupScoreBySteam64?(steam64: string): Promise<RankmeScoreLookup>;
 }
 
-interface RankmeDatabaseConfig {
+export interface RankmeDatabaseConfig {
   host: string;
   database: string;
   user: string;
@@ -85,7 +85,7 @@ export async function lookupRankmeScore(reader: RankmeScoreReader, steam64: stri
   return typeof score === "number" && Number.isFinite(score) ? { status: "found", score } : { status: "unavailable" };
 }
 
-async function resolveMysqlCliPath(): Promise<string | null> {
+export async function resolveMysqlCliPath(): Promise<string | null> {
   for (const candidate of mysqlCliPaths) {
     if (candidate === "mysql.exe") {
       try {

@@ -198,12 +198,19 @@ export interface MatchExecutorPort {
   prepare(plan: MatchPlan): Promise<MatchConnectInfo>;
 }
 
+export interface MatchDatabaseBackup {
+  create(matchId: string): Promise<void>;
+  restore(matchId: string): Promise<void>;
+  discard(matchId: string): Promise<void>;
+}
+
 export interface MatchmakingServiceDeps {
   store: MatchmakingStore;
   accounts: AccountService;
   friends?: { listFriends(accountId: string): Promise<FriendListDto> };
   botCatalog: BotCatalog;
   executor?: MatchExecutorPort;
+  databaseBackup?: MatchDatabaseBackup;
   records?: Pick<MatchRecordStore, "appendEvent" | "listPlayerCompletedMatches" | "listRecentMatchMaps" | "readMatchPlan" | "saveMatchPlan" | "saveResult" | "saveStatus">;
   rankme?: RankmeScoreReader;
   events?: { publish(event: RealtimeEvent): void };
@@ -744,6 +751,7 @@ export class MatchmakingService {
 
       if (report.get5Result.status !== "normal") {
         const failedAt = this.now();
+        const databaseRestoreError = await this.restoreMatchDatabase(matchId);
         const failed: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
         await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? failed : candidate)));
         await this.deps.records?.saveStatus(matchId, {
@@ -752,6 +760,7 @@ export class MatchmakingService {
           error: "abnormal_match_end",
           get5Reason: report.get5Result.reason,
           serverExit: report.exitInfo,
+          ...(databaseRestoreError ? { databaseRestoreError } : {}),
         });
         await this.unlockPartyForRoom(failed, failedAt);
         await this.emit({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: "比赛异常结束" }, matchId);
@@ -767,6 +776,7 @@ export class MatchmakingService {
       } catch (error) {
         const failedAt = this.now();
         const failure = error instanceof Error ? error.message : String(error);
+        const databaseRestoreError = await this.restoreMatchDatabase(matchId);
         const failed: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
         await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? failed : candidate)));
         await this.deps.records?.saveStatus(matchId, {
@@ -774,6 +784,7 @@ export class MatchmakingService {
           failedAt,
           error: failure,
           serverExit: report.exitInfo,
+          ...(databaseRestoreError ? { databaseRestoreError } : {}),
         });
         await this.unlockPartyForRoom(failed, failedAt);
         await this.emit({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: failure }, matchId);
@@ -792,6 +803,7 @@ export class MatchmakingService {
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? completed : candidate)));
       await this.deps.records?.saveResult(matchId, result);
       await this.deps.records?.saveStatus(matchId, { phase: "completed", completedAt: result.completedAt, result, serverExit: report.exitInfo });
+      await this.discardMatchDatabaseBackup(matchId);
       await this.unlockPartyForRoom(completed, result.completedAt);
       await this.emit({ type: "match_completed", matchId, accountIds: this.roomAudience(completed), result }, matchId);
       return this.toPublicRoom(completed);
@@ -811,7 +823,14 @@ export class MatchmakingService {
       await this.deps.store.saveRooms(rooms.map((room) => failedById.get(room.id) ?? room));
 
       for (const failed of failedById.values()) {
-        await this.deps.records?.saveStatus(failed.id, { phase: "failed", failedAt, error: "source_server_unavailable", serverExit: exitInfo });
+        const databaseRestoreError = await this.restoreMatchDatabase(failed.id);
+        await this.deps.records?.saveStatus(failed.id, {
+          phase: "failed",
+          failedAt,
+          error: "source_server_unavailable",
+          serverExit: exitInfo,
+          ...(databaseRestoreError ? { databaseRestoreError } : {}),
+        });
         await this.unlockPartyForRoom(failed, failedAt);
         await this.emit({ type: "match_failed", matchId: failed.id, accountIds: this.roomAudience(failed), error: "比赛异常结束" }, failed.id);
       }
@@ -993,7 +1012,12 @@ export class MatchmakingService {
       return preparing;
     }
 
+    let databaseBackupCreated = false;
     try {
+      if (this.deps.databaseBackup) {
+        await this.deps.databaseBackup.create(room.id);
+        databaseBackupCreated = true;
+      }
       const connect = await this.deps.executor.prepare(plan);
       const latestRooms = await this.deps.store.listRooms();
       const latestRoom = latestRooms.find((candidate) => candidate.id === room.id) ?? preparing;
@@ -1008,9 +1032,14 @@ export class MatchmakingService {
     } catch (error) {
       const failure = error instanceof Error ? error.message : String(error);
       const failedAt = this.now();
+      const databaseRestoreError = databaseBackupCreated ? await this.restoreMatchDatabase(room.id) : undefined;
       const failed: MatchRoomRecord = { ...preparing, phase: "failed", terminalStateAt: failedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? failed : candidate)));
-      await this.deps.records?.saveStatus(room.id, { phase: "failed", error: failure });
+      await this.deps.records?.saveStatus(room.id, {
+        phase: "failed",
+        error: failure,
+        ...(databaseRestoreError ? { databaseRestoreError } : {}),
+      });
       await this.unlockPartyForRoom(failed, failedAt);
       await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(room), error: failure }, room.id);
       return failed;
@@ -1081,6 +1110,27 @@ export class MatchmakingService {
         return undefined;
       }
       throw error;
+    }
+  }
+
+  private async restoreMatchDatabase(matchId: string): Promise<string | undefined> {
+    if (!this.deps.databaseBackup) return undefined;
+    try {
+      await this.deps.databaseBackup.restore(matchId);
+      return undefined;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Failed to restore mysql backup for ${matchId}: ${message}\n`);
+      return message;
+    }
+  }
+
+  private async discardMatchDatabaseBackup(matchId: string): Promise<void> {
+    if (!this.deps.databaseBackup) return;
+    try {
+      await this.deps.databaseBackup.discard(matchId);
+    } catch (error) {
+      process.stderr.write(`Failed to discard mysql backup for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`);
     }
   }
 

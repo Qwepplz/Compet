@@ -13,6 +13,7 @@ import { FriendService } from "../friends/friendService.js";
 import { FriendStore } from "../friends/friendStore.js";
 import { MatchExecutor } from "../game/matchExecutor.js";
 import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
+import { MysqlDatabaseBackup } from "../game/mysqlDatabaseBackup.js";
 import { isSourceServerObservable, type SourceServerExitMonitorSpec } from "../game/sourceServerMonitor.js";
 import { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import { MatchmakingStore } from "../matchmaking/matchmakingStore.js";
@@ -51,6 +52,10 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   await bootstrapAdmin(accounts, path.join(config.dataDir, "bootstrap-admin.json"));
 
   const records = new MatchRecordStore(recordsDir);
+  const databaseBackup = new MysqlDatabaseBackup({
+    serverRoot: config.gameServer.serverRoot,
+    backupDir: path.join(recordsDir, "mysql-backups"),
+  });
   const rankme = await RankmeScoreStore.create(config.gameServer.serverRoot) ?? {
     getScoreBySteam64: async () => null,
     lookupScoreBySteam64: async () => ({ status: "unavailable" as const }),
@@ -90,6 +95,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     friends,
     botCatalog,
     executor,
+    databaseBackup,
     records,
     rankme,
     events,
