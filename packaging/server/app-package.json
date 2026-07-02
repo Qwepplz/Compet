@@ -1,6 +1,6 @@
 {
   "name": "compet-server-manager",
-  "version": "1.0.16",
+  "version": "1.0.17",
   "private": true,
   "main": "out/main/index.cjs",
   "dependencies": {
