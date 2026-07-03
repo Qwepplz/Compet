@@ -309,6 +309,7 @@ export function App() {
   const [party, setParty] = useState<PlayerPartyDto | null>(null);
   const [matchmaking, setMatchmaking] = useState<PlayerMatchmakingStateDto>(emptyMatchmaking);
   const [matchResult, setMatchResult] = useState<PlayerMatchResultDto | null>(null);
+  const [matchResultMatchId, setMatchResultMatchId] = useState<string | null>(null);
   const [matchResultPlayerSteam64, setMatchResultPlayerSteam64] = useState<string | undefined>(undefined);
   const [matchResultBackView, setMatchResultBackView] = useState<"home" | "match-history">("home");
   const [matchHistory, setMatchHistory] = useState<PlayerMatchHistoryDto | null>(null);
@@ -450,6 +451,26 @@ export function App() {
     };
   }, [account]);
 
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+    const unsubscribeProfiles = api.onProfilesUpdated(() => {
+      if (activeView !== "match-result" || !matchResult || !matchResultMatchId) return;
+      const viewedAccountId = matchResultBackView === "match-history" ? matchHistoryPlayer?.accountId : undefined;
+      void api.getMatchHistoryResult(matchResultMatchId, viewedAccountId)
+        .then((result) => {
+          if (!cancelled) {
+            setMatchResult(result);
+          }
+        })
+        .catch(() => undefined);
+    });
+
+    return () => {
+      cancelled = true;
+      unsubscribeProfiles();
+    };
+  }, [account, activeView, matchResult, matchResultBackView, matchResultMatchId, matchHistoryPlayer?.accountId]);
 
   useEffect(() => {
     if (!account || activeView !== "match-room" || currentRoom?.phase !== "ready") return;
@@ -724,6 +745,7 @@ export function App() {
         return;
       case "match_room_created":
         setMatchResult(null);
+        setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         playMatchFoundSound(event.matchId);
         setMatchmaking((current) => {
@@ -773,6 +795,7 @@ export function App() {
         }), { activate: false });
         if (event.result) {
           setMatchResult(event.result);
+          setMatchResultMatchId(event.matchId);
           setMatchResultPlayerSteam64(account?.steam64);
           setMatchResultBackView("home");
           void refreshRankmeScore();
@@ -781,6 +804,7 @@ export function App() {
           return;
         }
         setMatchResult(null);
+        setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchResultBackView("home");
         void refreshRankmeScore();
@@ -793,6 +817,7 @@ export function App() {
           phase: "failed",
         }), { activate: false });
         setMatchResult(null);
+        setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchResultBackView("home");
         void message.error("比赛异常结束");
@@ -919,6 +944,7 @@ export function App() {
     try {
       const result = await api.getMatchHistoryResult(matchId, matchHistoryPlayer?.accountId);
       setMatchResult(result);
+      setMatchResultMatchId(matchId);
       setMatchResultPlayerSteam64(matchHistoryPlayer?.steam64 ?? account?.steam64);
       setMatchResultBackView("match-history");
       setActiveView("match-result");
@@ -933,6 +959,7 @@ export function App() {
       if (!restored) {
         await loadSavedLogin();
         setMatchResult(null);
+        setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchHistory(null);
         setMatchHistoryPlayer(null);
@@ -950,6 +977,7 @@ export function App() {
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
       setMatchResult(null);
+      setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
       setMatchResultBackView("home");
       setMatchHistoryPlayer(null);
@@ -962,6 +990,7 @@ export function App() {
       message.error(error instanceof Error ? error.message : "恢复会话失败");
       await loadSavedLogin();
       setMatchResult(null);
+      setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
       setMatchHistory(null);
       setMatchHistoryPlayer(null);
@@ -1004,6 +1033,7 @@ export function App() {
         setParty(null);
         setMatchmaking(emptyMatchmaking);
         setMatchResult(null);
+        setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchHistory(null);
         setMatchHistoryPlayer(null);
@@ -1016,6 +1046,7 @@ export function App() {
       const restored = await window.playerApi.restoreSession();
       if (!restored) {
         setMatchResult(null);
+        setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchHistory(null);
         setMatchHistoryPlayer(null);
@@ -1032,6 +1063,7 @@ export function App() {
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
       setMatchResult(null);
+      setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
       setMatchResultBackView("home");
       setMatchHistoryPlayer(null);
@@ -1062,6 +1094,7 @@ export function App() {
         const restored = await window.playerApi.restoreSession();
         if (!restored) {
           setMatchResult(null);
+          setMatchResultMatchId(null);
           setMatchResultPlayerSteam64(undefined);
           setMatchHistory(null);
           setMatchHistoryPlayer(null);
@@ -1078,6 +1111,7 @@ export function App() {
         setParty(restored.matchmaking.party ?? null);
         setMatchmaking(restored.matchmaking);
         setMatchResult(null);
+        setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchResultBackView("home");
         setMatchHistoryPlayer(null);
@@ -1110,6 +1144,7 @@ export function App() {
       setParty(null);
       setMatchmaking(emptyMatchmaking);
       setMatchResult(null);
+      setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
       setMatchHistory(null);
       setMatchHistoryPlayer(null);
