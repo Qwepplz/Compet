@@ -352,6 +352,7 @@ export function App() {
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
   const hasActiveMatch = Boolean(activeMatchRoom);
+  const hasVisibleMatchResult = activeView === "match-result" && matchResult !== null && matchResultMatchId !== null;
   const viewingMatchHistory = activeView === "match-history" || (activeView === "match-result" && matchResultBackView === "match-history");
   const headerAccount = viewingMatchHistory ? matchHistoryPlayer ?? account : account;
   const accountLabel = playerAccountLabel(headerAccount);
@@ -452,25 +453,29 @@ export function App() {
   }, [account]);
 
   useEffect(() => {
-    if (!account) return;
+    if (!account || !hasVisibleMatchResult || !matchResultMatchId) return;
     let cancelled = false;
-    const unsubscribeProfiles = api.onProfilesUpdated(() => {
-      if (activeView !== "match-result" || !matchResult || !matchResultMatchId) return;
-      const viewedAccountId = matchResultBackView === "match-history" ? matchHistoryPlayer?.accountId : undefined;
-      void api.getMatchHistoryResult(matchResultMatchId, viewedAccountId)
+    const visibleMatchId = matchResultMatchId;
+    const viewedAccountId = matchResultBackView === "match-history" ? matchHistoryPlayer?.accountId : undefined;
+
+    function refreshVisibleMatchResult() {
+      void api.getMatchHistoryResult(visibleMatchId, viewedAccountId)
         .then((result) => {
           if (!cancelled) {
             setMatchResult(result);
           }
         })
         .catch(() => undefined);
-    });
+    }
+
+    refreshVisibleMatchResult();
+    const unsubscribeProfiles = api.onProfilesUpdated(refreshVisibleMatchResult);
 
     return () => {
       cancelled = true;
       unsubscribeProfiles();
     };
-  }, [account, activeView, matchResult, matchResultBackView, matchResultMatchId, matchHistoryPlayer?.accountId]);
+  }, [account, hasVisibleMatchResult, matchResultBackView, matchResultMatchId, matchHistoryPlayer?.accountId]);
 
   useEffect(() => {
     if (!account || activeView !== "match-room" || currentRoom?.phase !== "ready") return;
