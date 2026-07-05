@@ -106,6 +106,8 @@ function MatchHistoryRow({
   const date = formatResultDate(match.completedAt);
   const ratingTone = rating2Tone(match.self.rating2);
   const ratingProgress = rating2Progress(match.self.rating2);
+  const selfScore = match.selfTeam === "teamA" ? match.score.team1 : match.score.team2;
+  const opponentScore = match.selfTeam === "teamA" ? match.score.team2 : match.score.team1;
   return (
     <tr className={`match-history-row match-history-row--${match.selfWon ? "win" : "loss"}`} tabIndex={0} onClick={() => onOpenMatch(match.matchId)} onKeyDown={(event) => {
       if (event.key === "Enter" || event.key === " ") onOpenMatch(match.matchId);
@@ -117,9 +119,9 @@ function MatchHistoryRow({
       <td>
         <div className="match-history-score">
           <strong className={`match-history-result-pill match-history-result-pill--${match.selfWon ? "win" : "loss"}`}>{match.selfWon ? "胜" : "负"}</strong>
-          <span>{match.score.team1}</span>
+          <span>{selfScore}</span>
           <span>:</span>
-          <span>{match.score.team2}</span>
+          <span>{opponentScore}</span>
         </div>
       </td>
       <td className="match-history-rankme">
