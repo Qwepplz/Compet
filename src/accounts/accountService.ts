@@ -44,12 +44,14 @@ export class AccountService {
   async createAccount(input: CreateAccountInput): Promise<AccountRecord> {
     return this.mutationQueue.enqueue(async () => {
       if (await this.repository.findByUsername(input.username)) throw new Error("username already exists");
+      const steam64 = normalizeSteam64(input.role, input.steam64);
+      await this.assertSteam64Available(steam64);
       const now = new Date().toISOString();
       return this.repository.upsert({
         id: crypto.randomUUID(),
         username: input.username,
         displayName: input.displayName?.trim() || input.username,
-        steam64: normalizeSteam64(input.role, input.steam64),
+        steam64,
         role: input.role,
         enabled: true,
         dev: false,
@@ -67,10 +69,12 @@ export class AccountService {
       const account = await this.repository.findById(id);
       if (!account) throw new Error("account not found");
       const nextSteam64 = Object.prototype.hasOwnProperty.call(input, "steam64") ? input.steam64 : account.steam64;
+      const steam64 = normalizeSteam64(account.role, nextSteam64);
+      await this.assertSteam64Available(steam64, account.id);
       return this.repository.upsert({
         ...account,
         ...input,
-        steam64: normalizeSteam64(account.role, nextSteam64),
+        steam64,
         updatedAt: new Date().toISOString(),
       });
     });
@@ -114,5 +118,13 @@ export class AccountService {
       const now = new Date().toISOString();
       return this.repository.upsert({ ...account, lastLoginAt: now, updatedAt: now });
     });
+  }
+
+  private async assertSteam64Available(steam64: string, currentAccountId?: string): Promise<void> {
+    if (!steam64) return;
+    const existing = (await this.repository.list()).find((account) =>
+      account.id !== currentAccountId && account.role === "player" && account.steam64.trim() === steam64
+    );
+    if (existing) throw new Error("steam64 already exists");
   }
 }

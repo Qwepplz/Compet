@@ -28,8 +28,9 @@ export class MatchRecordStore {
     return readJsonFile<MatchPlan>(this.matchFile(matchId, "plan.json"));
   }
 
-  async listPlayerCompletedMatches(accountId: string, limit: number): Promise<CompletedMatchRecord[]> {
-    if (limit <= 0) return [];
+  async listPlayerCompletedMatches(steam64: string, limit: number): Promise<CompletedMatchRecord[]> {
+    const normalizedSteam64 = steam64.trim();
+    if (limit <= 0 || !normalizedSteam64) return [];
     let entries: Dirent[];
     try {
       entries = await readdir(path.join(this.recordsDir, "matches"), { withFileTypes: true });
@@ -41,7 +42,7 @@ export class MatchRecordStore {
     const matches = await Promise.all(
       entries
         .filter((entry) => entry.isDirectory())
-        .map((entry) => this.readPlayerCompletedMatch(accountId, entry.name)),
+        .map((entry) => this.readPlayerCompletedMatch(normalizedSteam64, entry.name)),
     );
 
     return matches
@@ -50,10 +51,12 @@ export class MatchRecordStore {
       .slice(0, limit);
   }
 
-  async readPlayerCompletedMatch(accountId: string, matchId: string): Promise<CompletedMatchRecord | null> {
+  async readPlayerCompletedMatch(steam64: string, matchId: string): Promise<CompletedMatchRecord | null> {
+    const normalizedSteam64 = steam64.trim();
+    if (!normalizedSteam64) return null;
     try {
       const plan = await this.readMatchPlan(matchId);
-      if (!this.planIncludesAccount(plan, accountId)) return null;
+      if (!this.planIncludesSteam64(plan, normalizedSteam64)) return null;
       const result = await this.readResult<MatchSeriesResult>(matchId);
       return { matchId, plan, result };
     } catch {
@@ -157,8 +160,10 @@ export class MatchRecordStore {
     }
   }
 
-  private planIncludesAccount(plan: MatchPlan, accountId: string): boolean {
-    return [...plan.teamA.participants, ...plan.teamB.participants].some((participant) => participant.accountId === accountId);
+  private planIncludesSteam64(plan: MatchPlan, steam64: string): boolean {
+    return [...plan.teamA.participants, ...plan.teamB.participants].some((participant) =>
+      participant.kind === "human" && participant.steam64?.trim() === steam64
+    );
   }
 
   private timestampOf(value: string): number {

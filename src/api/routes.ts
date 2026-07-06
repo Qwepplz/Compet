@@ -60,6 +60,7 @@ const realtimeEventsQuerySchema = z.object({
 function mapAccountServiceError(error: unknown): never {
   if (error instanceof Error && error.message === "account not found") throw notFound();
   if (error instanceof Error && error.message === "username already exists") throw conflict("Username already exists");
+  if (error instanceof Error && error.message === "steam64 already exists") throw conflict("Steam64 already exists");
   if (error instanceof Error && error.message === "admin account cannot be deleted") throw forbidden("Cannot delete the server admin account");
   throw error;
 }
@@ -107,16 +108,10 @@ function withServerNow<T extends object>(payload: T): T & { serverNow: string } 
   return { ...payload, serverNow: new Date().toISOString() };
 }
 
-function accountTeam(plan: MatchPlan, accountId: string): TeamSide | null {
-  if (plan.teamA.participants.some((participant) => participant.accountId === accountId)) return "teamA";
-  if (plan.teamB.participants.some((participant) => participant.accountId === accountId)) return "teamB";
+function accountTeam(plan: MatchPlan, steam64: string): TeamSide | null {
+  if (plan.teamA.participants.some((participant) => participant.kind === "human" && participant.steam64?.trim() === steam64)) return "teamA";
+  if (plan.teamB.participants.some((participant) => participant.kind === "human" && participant.steam64?.trim() === steam64)) return "teamB";
   return null;
-}
-
-function accountSteam64(plan: MatchPlan, account: AccountRecord): string {
-  const participant = [...plan.teamA.participants, ...plan.teamB.participants]
-    .find((entry) => entry.accountId === account.id);
-  return participant?.steam64?.trim() || account.steam64.trim();
 }
 
 function resultPlayer(result: MatchSeriesResult, steam64: string): MatchPlayerResult | null {
@@ -135,9 +130,10 @@ function matchHistoryRankmeScore(plan: MatchPlan, self: MatchPlayerResult): numb
 }
 
 function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecord) {
-  const selfTeam = accountTeam(record.plan, account.id);
+  const steam64 = account.steam64.trim();
+  const selfTeam = accountTeam(record.plan, steam64);
   if (!selfTeam) return null;
-  const self = resultPlayer(record.result, accountSteam64(record.plan, account));
+  const self = resultPlayer(record.result, steam64);
   if (!self) return null;
   return {
     matchId: record.matchId,
@@ -371,7 +367,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
   app.get("/me/rankme-score", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
-    const completedMatches = deps.records ? await deps.records.listPlayerCompletedMatches(auth.account.id, 1) : undefined;
+    const completedMatches = deps.records ? await deps.records.listPlayerCompletedMatches(auth.account.steam64, 1) : undefined;
     return { score: await rankmeScoreFor(deps, auth.account, completedMatches ? completedMatches.length > 0 : undefined) };
   });
 
@@ -381,7 +377,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const records = requireRecords(deps);
     const { accountId } = matchHistoryQuerySchema.parse(request.query ?? {});
     const historyAccount = await resolveMatchHistoryAccount(deps, auth.account, accountId);
-    const completedRecords = await records.listPlayerCompletedMatches(historyAccount.id, matchHistoryLimit);
+    const completedRecords = await records.listPlayerCompletedMatches(historyAccount.steam64, matchHistoryLimit);
     const matches = completedRecords
       .map((record) => toMatchHistoryEntry(record, historyAccount))
       .filter((record): record is NonNullable<typeof record> => Boolean(record));
@@ -396,7 +392,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const { id } = matchRoomParamsSchema.parse(request.params);
     const { accountId } = matchHistoryQuerySchema.parse(request.query ?? {});
     const historyAccount = await resolveMatchHistoryAccount(deps, auth.account, accountId);
-    const match = await records.readPlayerCompletedMatch(historyAccount.id, id);
+    const match = await records.readPlayerCompletedMatch(historyAccount.steam64, id);
     if (!match) throw notFound();
     return { result: match.result };
   });

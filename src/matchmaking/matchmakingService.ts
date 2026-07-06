@@ -1103,9 +1103,9 @@ export class MatchmakingService {
   }
 
   private async isFirstCompletedMatch(participant: MatchParticipant): Promise<boolean> {
-    const accountId = participant.accountId;
-    if (!accountId || !this.deps.records?.listPlayerCompletedMatches) return false;
-    const matches = await this.deps.records.listPlayerCompletedMatches(accountId, 1);
+    const steam64 = participant.steam64?.trim();
+    if (!steam64 || !this.deps.records?.listPlayerCompletedMatches) return false;
+    const matches = await this.deps.records.listPlayerCompletedMatches(steam64, 1);
     return matches.length === 0;
   }
 
