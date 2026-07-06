@@ -23,7 +23,7 @@ import {
   type QueueEntry,
 } from "./matchmakingStore.js";
 
-const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_overpass", "de_dust2", "de_ancient", "de_anubis"];
+const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_cache", "de_dust2", "de_ancient", "de_anubis"];
 const MAP_RANDOMIZATION_MS = 7_000;
 const MAP_RANDOMIZATION_REEL_LENGTH = 20;
 const RECENT_MAP_EXCLUSION_COUNT = 3;
