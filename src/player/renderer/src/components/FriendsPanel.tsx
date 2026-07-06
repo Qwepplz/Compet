@@ -55,6 +55,7 @@ export function FriendsPanel({
   const [addOpen, setAddOpen] = useState(false);
   const [searching, setSearching] = useState(false);
   const [searchResults, setSearchResults] = useState<PlayerFriendSearchResultDto[]>([]);
+  const [hasSearchedFriends, setHasSearchedFriends] = useState(false);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
   const searchResultsRef = useRef<PlayerFriendSearchResultDto[]>([]);
   searchResultsRef.current = searchResults;
@@ -85,11 +86,13 @@ export function FriendsPanel({
     const trimmed = query.trim();
     if (!trimmed || !onSearchFriends) {
       setSearchResults([]);
+      setHasSearchedFriends(false);
       return;
     }
     setSearching(true);
     try {
       setSearchResults(await onSearchFriends(trimmed));
+      setHasSearchedFriends(true);
     } finally {
       setSearching(false);
     }
@@ -261,6 +264,7 @@ export function FriendsPanel({
           setAddOpen(false);
           setQuery("");
           setSearchResults([]);
+          setHasSearchedFriends(false);
         }}
       >
         <div className="player-add-friend">
@@ -268,7 +272,10 @@ export function FriendsPanel({
             <Input
               value={query}
               placeholder="输入账号用户名"
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setHasSearchedFriends(false);
+              }}
               onPressEnter={() => void handleSearch()}
               disabled={!onSearchFriends}
             />
@@ -306,6 +313,8 @@ export function FriendsPanel({
                 );
               })}
             </div>
+          ) : hasSearchedFriends && !searching && searchResults.length === 0 ? (
+            <div className="player-empty">未找到相关用户</div>
           ) : null}
         </div>
       </Modal>
