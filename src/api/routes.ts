@@ -103,6 +103,10 @@ function requireRecords(deps: RouteDeps): Pick<MatchRecordStore, "listPlayerComp
   return deps.records;
 }
 
+function withServerNow<T extends object>(payload: T): T & { serverNow: string } {
+  return { ...payload, serverNow: new Date().toISOString() };
+}
+
 function accountTeam(plan: MatchPlan, accountId: string): TeamSide | null {
   if (plan.teamA.participants.some((participant) => participant.accountId === accountId)) return "teamA";
   if (plan.teamB.participants.some((participant) => participant.accountId === accountId)) return "teamB";
@@ -245,7 +249,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const events = requireRealtimeEvents(deps);
     const { afterSeq, timeoutMs } = realtimeEventsQuerySchema.parse(request.query ?? {});
-    return events.waitForEventsAfter(auth.account.id, afterSeq, timeoutMs);
+    return withServerNow(await events.waitForEventsAfter(auth.account.id, afterSeq, timeoutMs));
   });
 
   app.post("/auth/login", async (request) => {
@@ -475,7 +479,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return { party: (await matchmaking.getPartyForAccount(auth.account.id)) ?? null };
+      return withServerNow({ party: (await matchmaking.getPartyForAccount(auth.account.id)) ?? null });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -486,7 +490,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return { party: await matchmaking.createParty(auth.account.id) };
+      return withServerNow({ party: await matchmaking.createParty(auth.account.id) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -498,7 +502,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const matchmaking = requireMatchmaking(deps);
     const { accountId } = friendRequestSchema.parse(request.body);
     try {
-      return reply.status(201).send({ invitation: await matchmaking.inviteToParty(auth.account.id, accountId) });
+      return reply.status(201).send(withServerNow({ invitation: await matchmaking.inviteToParty(auth.account.id, accountId) }));
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -510,7 +514,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const matchmaking = requireMatchmaking(deps);
     const { id } = accountIdParamsSchema.parse(request.params);
     try {
-      return { party: await matchmaking.acceptPartyInvite(auth.account.id, id) };
+      return withServerNow({ party: await matchmaking.acceptPartyInvite(auth.account.id, id) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -548,7 +552,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const matchmaking = requireMatchmaking(deps);
     const { dev } = matchmakingStartSchema.parse(request.body ?? {});
     try {
-      return { room: await matchmaking.startPartyMatchmaking(auth.account.id, { dev }) };
+      return withServerNow({ room: await matchmaking.startPartyMatchmaking(auth.account.id, { dev }) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -559,7 +563,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return { party: await matchmaking.beginPartyMatchmaking(auth.account.id) };
+      return withServerNow({ party: await matchmaking.beginPartyMatchmaking(auth.account.id) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -570,7 +574,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return { party: await matchmaking.cancelPartyMatchmaking(auth.account.id) };
+      return withServerNow({ party: await matchmaking.cancelPartyMatchmaking(auth.account.id) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -619,7 +623,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return { room: await matchmaking.acceptReady(auth.account.id) };
+      return withServerNow({ room: await matchmaking.acceptReady(auth.account.id) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -630,7 +634,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return { room: await matchmaking.declineReady(auth.account.id) };
+      return withServerNow({ room: await matchmaking.declineReady(auth.account.id) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -652,7 +656,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return await matchmaking.getState(auth.account.id);
+      return withServerNow(await matchmaking.getState(auth.account.id));
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -664,7 +668,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const matchmaking = requireMatchmaking(deps);
     const { id } = matchRoomParamsSchema.parse(request.params);
     try {
-      return { room: await matchmaking.ackReadyRoomEntered(id, auth.account.id) };
+      return withServerNow({ room: await matchmaking.ackReadyRoomEntered(id, auth.account.id) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

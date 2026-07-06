@@ -1,5 +1,5 @@
 import { Button, Spin } from "antd";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
@@ -13,6 +13,7 @@ import { participantDisplayName } from "../playerDisplay.js";
 interface MatchRoomPageProps {
   account: AccountView | null;
   room: PlayerLiveMatchStateDto | null;
+  nowMs: number;
   onAcceptReady?: () => Promise<void>;
   onDeclineReady?: () => Promise<void>;
   onCopyText?: (text: string) => Promise<void>;
@@ -108,17 +109,11 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
 export function MatchRoomPage({
   account,
   room,
+  nowMs,
   onAcceptReady,
   onDeclineReady,
   onCopyText,
 }: MatchRoomPageProps) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    const timer = window.setInterval(() => setNowMs(Date.now()), 1000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   const connect = room?.connect;
   const selectedMap = getSelectedMap(room, nowMs);
   const roomPhase = phaseLabel(room?.phase);

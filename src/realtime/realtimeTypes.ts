@@ -1,7 +1,7 @@
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
 import type { MatchMapSelectionState } from "../matchmaking/matchmakingStore.js";
 
-type RealtimeEventWithSeq<T> = T & { seq?: number };
+type RealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string };
 
 export type RealtimeEvent =
   | RealtimeEventWithSeq<{

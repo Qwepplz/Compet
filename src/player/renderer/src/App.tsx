@@ -44,6 +44,7 @@ import {
 import { randomMatchmakingDelayMs } from "./matchTimers.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import { preloadMapImages } from "./mapAssets.js";
+import { serverSyncedNowMs, updateServerClockOffset } from "./serverClock.js";
 import {
   mergeFriendListSnapshot,
   mergePartyInvitationsSnapshot,
@@ -227,6 +228,10 @@ function partyInviteRemainingMs(invitation: PlayerPartyInvitationDto, nowMs = Da
   return Math.max(0, createdAt + PARTY_INVITE_TIMEOUT_MS - nowMs);
 }
 
+function partyInviteProgressScale(invitation: PlayerPartyInvitationDto, nowMs: number): number {
+  return Math.max(0, Math.min(1, partyInviteRemainingMs(invitation, nowMs) / PARTY_INVITE_TIMEOUT_MS));
+}
+
 function notifyPartyMembershipChange(
   previous: PlayerPartyDto | null,
   next: PlayerPartyDto | null,
@@ -254,6 +259,7 @@ interface PartyInviteToastsProps {
   account: AccountView | null;
   friends: PlayerFriendListDto;
   busyInvitationId: string | null;
+  nowMs: number;
   onAccept: (invitationId: string) => Promise<void>;
   onDecline: (invitationId: string) => Promise<void>;
   onIgnore: (invitationId: string) => Promise<void>;
@@ -264,6 +270,7 @@ function PartyInviteToasts({
   account,
   friends,
   busyInvitationId,
+  nowMs,
   onAccept,
   onDecline,
   onIgnore,
@@ -275,7 +282,7 @@ function PartyInviteToasts({
       {invitations.map((invitation) => {
         const inviter = partyInviteAccountDisplay(invitation.fromAccountId, account, friends);
         const progressStyle = {
-          "--party-invite-timeout-ms": `${partyInviteRemainingMs(invitation)}ms`,
+          transform: `scaleX(${partyInviteProgressScale(invitation, nowMs)})`,
         } as CSSProperties;
         const busy = busyInvitationId === invitation.id;
         return (
@@ -329,6 +336,8 @@ export function App() {
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
+  const [clockNowMs, setClockNowMs] = useState(() => Date.now());
+  const [serverClockOffsetMs, setServerClockOffsetMs] = useState<number | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
@@ -358,6 +367,11 @@ export function App() {
   const accountLabel = playerAccountLabel(headerAccount);
   const headerRankmeScore = viewingMatchHistory ? matchHistory?.rankmeScore ?? null : rankmeScore;
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
+  const syncedNowMs = serverSyncedNowMs(serverClockOffsetMs, clockNowMs);
+
+  function updateServerClock(serverNow: string | undefined, localNowMs = Date.now()) {
+    setServerClockOffsetMs((current) => updateServerClockOffset(current, serverNow, localNowMs));
+  }
 
   useEffect(() => {
     preloadMapImages();
@@ -367,25 +381,27 @@ export function App() {
   }, []);
 
   useEffect(() => {
+    const timer = window.setInterval(() => setClockNowMs(Date.now()), 250);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (activeMatchRoom) {
       setMatchmakingFeedbackPending(false);
     }
   }, [activeMatchRoom?.id]);
 
   useEffect(() => {
-    const invitationIds = new Set(matchmaking.partyInvitations.map((invitation) => invitation.id));
-    for (const [invitationId, timeout] of partyInviteAutoIgnoreTimeouts.current) {
-      if (!invitationIds.has(invitationId)) {
-        window.clearTimeout(timeout);
-        partyInviteAutoIgnoreTimeouts.current.delete(invitationId);
-      }
+    for (const timeout of partyInviteAutoIgnoreTimeouts.current.values()) {
+      window.clearTimeout(timeout);
     }
+    partyInviteAutoIgnoreTimeouts.current.clear();
+    const nowMs = serverSyncedNowMs(serverClockOffsetMs);
     for (const invitation of matchmaking.partyInvitations) {
-      if (partyInviteAutoIgnoreTimeouts.current.has(invitation.id)) continue;
-      const timeout = window.setTimeout(() => void ignorePartyInvite(invitation.id), partyInviteRemainingMs(invitation));
+      const timeout = window.setTimeout(() => void ignorePartyInvite(invitation.id), partyInviteRemainingMs(invitation, nowMs));
       partyInviteAutoIgnoreTimeouts.current.set(invitation.id, timeout);
     }
-  }, [matchmaking.partyInvitations]);
+  }, [matchmaking.partyInvitations, serverClockOffsetMs]);
 
   useEffect(() => () => {
     for (const timeout of partyInviteAutoIgnoreTimeouts.current.values()) {
@@ -435,9 +451,11 @@ export function App() {
       setStale(status.stale);
     });
     const unsubscribeSnapshot = api.onRealtimeSnapshot((snapshot) => {
+      updateServerClock(snapshot.serverNow ?? snapshot.matchmaking.serverNow);
       applyRealtimeSnapshot(snapshot);
     });
     const unsubscribeEvent = api.onRealtimeEvent((event) => {
+      updateServerClock(event.serverNow);
       applyRealtimeEvent(event);
     });
     const unsubscribeAccount = api.onAccountUpdated((nextAccount) => {
@@ -507,6 +525,7 @@ export function App() {
       try {
         const nextRoom = await api.ackMatchRoomEntered(readyRoom.id);
         if (!cancelled) {
+          updateServerClock(nextRoom.serverNow);
           updateCurrentRoom(nextRoom.id, () => nextRoom);
         }
       } catch {
@@ -531,6 +550,7 @@ export function App() {
   async function hydrateRealtimeState(scope: PlayerRealtimeSnapshotScope = "full") {
     try {
       const snapshot = await api.refreshRealtimeSnapshot(scope);
+      updateServerClock(snapshot.serverNow ?? snapshot.matchmaking.serverNow);
       applyRealtimeSnapshot(snapshot);
     } catch {
       // 保持恢复后的基础状态，不把实时快照失败当成登录失败。
@@ -1258,6 +1278,7 @@ export function App() {
 
   async function createParty() {
     const nextParty = await api.createParty();
+    updateServerClock(nextParty.serverNow);
     setParty(nextParty);
     setMatchmaking((current) => ({
       ...current,
@@ -1272,7 +1293,8 @@ export function App() {
     if (!party) {
       await createParty();
     }
-    await api.inviteToParty(targetAccountId);
+    const invitation = await api.inviteToParty(targetAccountId);
+    updateServerClock(invitation.serverNow);
     void message.success("队伍邀请已发送");
   }
 
@@ -1280,6 +1302,7 @@ export function App() {
     setBusyPartyInvitationId(invitationId);
     try {
       const nextParty = await api.acceptPartyInvite(invitationId);
+      updateServerClock(nextParty.serverNow);
       resolvedPartyInvitationIds.current.add(invitationId);
       clearPartyInviteAutoIgnoreTimeout(invitationId);
       setParty(nextParty);
@@ -1327,6 +1350,7 @@ export function App() {
 
   async function startPartyMatchmaking(options?: { dev?: boolean }) {
     const nextRoom = await api.startPartyMatchmaking(options);
+    updateServerClock(nextRoom.serverNow);
     setMatchmaking((current) => ({
       ...current,
       room: nextRoom,
@@ -1349,6 +1373,7 @@ export function App() {
         await createParty();
       }
       const pendingParty = await api.beginPartyMatchmaking();
+      updateServerClock(pendingParty.serverNow);
       matchmakingPendingSynced = true;
       setParty(pendingParty);
       setMatchmaking((current) => ({
@@ -1362,6 +1387,7 @@ export function App() {
       if (matchmakingPendingSynced) {
         const nextParty = await api.cancelPartyMatchmaking().catch(() => undefined);
         if (nextParty) {
+          updateServerClock(nextParty.serverNow);
           setParty(nextParty);
           setMatchmaking((current) => ({
             ...current,
@@ -1378,6 +1404,7 @@ export function App() {
   async function acceptReady() {
     if (!currentRoom) return;
     const nextRoom = await api.acceptReady();
+    updateServerClock(nextRoom.serverNow);
     updateCurrentRoom(nextRoom.id, () => nextRoom);
     await hydrateRealtimeState("matchmaking");
   }
@@ -1385,6 +1412,7 @@ export function App() {
   async function declineReady() {
     if (!currentRoom) return;
     const nextRoom = await api.declineReady();
+    updateServerClock(nextRoom.serverNow);
     updateCurrentRoom(nextRoom.id, () => nextRoom);
     if (isTerminalMatchPhase(nextRoom.phase)) {
       setActiveView("home");
@@ -1420,6 +1448,7 @@ export function App() {
         <MatchRoomPage
           account={account}
           room={currentRoomWithKnownProfiles}
+          nowMs={syncedNowMs}
           onAcceptReady={() => acceptReady()}
           onDeclineReady={() => declineReady()}
           onCopyText={(text) => copyText(text)}
@@ -1434,6 +1463,7 @@ export function App() {
         matchmakingPending={matchmakingFeedbackPending || Boolean(syncedMatchmakingPendingAt)}
         matchmakingPendingStartedAt={syncedMatchmakingPendingAt}
         matchmakingOccupancyActiveCount={matchmaking.occupancy.activeCount}
+        nowMs={syncedNowMs}
         devModeEnabled={devModeEnabled}
         onInviteFriend={!hasActiveMatch ? inviteToParty : undefined}
         onLeaveParty={party && !hasActiveMatch ? leaveParty : undefined}
@@ -1626,6 +1656,7 @@ export function App() {
           account={account}
           friends={friends}
           busyInvitationId={busyPartyInvitationId}
+          nowMs={syncedNowMs}
           onAccept={acceptPartyInvite}
           onDecline={declinePartyInvite}
           onIgnore={ignorePartyInvite}

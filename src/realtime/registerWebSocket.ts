@@ -117,7 +117,7 @@ async function handleMessage(socket: WebSocket, data: RawData, accountId: string
 
   const command = parseRealtimeCommand(message);
   if (command) {
-    sendJson(socket, await executeRealtimeCommand(command, accountId, deps));
+    sendJson(socket, withCommandServerNow(await executeRealtimeCommand(command, accountId, deps)));
   }
 }
 
@@ -147,6 +147,20 @@ function sendJson(socket: WebSocket, payload: unknown): void {
   if (socket.readyState === SOCKET_OPEN) {
     socket.send(JSON.stringify(payload));
   }
+}
+
+function withCommandServerNow(payload: unknown): unknown {
+  if (typeof payload !== "object" || payload === null || (payload as { type?: unknown }).type !== "command_ack") {
+    return payload;
+  }
+  const ack = payload as { ok?: unknown; result?: unknown };
+  if (ack.ok !== true || typeof ack.result !== "object" || ack.result === null || Array.isArray(ack.result)) {
+    return payload;
+  }
+  return {
+    ...payload,
+    result: { ...ack.result, serverNow: now() },
+  };
 }
 
 async function publishPresenceUpdated(

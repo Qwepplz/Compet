@@ -1,5 +1,5 @@
 import { Button, Modal, Spin, message } from "antd";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
@@ -14,6 +14,7 @@ interface HomePageProps {
   matchmakingPending?: boolean;
   matchmakingPendingStartedAt?: string | null;
   matchmakingOccupancyActiveCount?: number;
+  nowMs: number;
   devModeEnabled?: boolean;
   onInviteFriend?: (accountId: string) => Promise<void>;
   onLeaveParty?: () => Promise<void>;
@@ -55,6 +56,7 @@ export function HomePage({
   matchmakingPending = false,
   matchmakingPendingStartedAt = null,
   matchmakingOccupancyActiveCount = 0,
+  nowMs,
   devModeEnabled = false,
   onInviteFriend,
   onLeaveParty,
@@ -64,28 +66,14 @@ export function HomePage({
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
   const [leavingParty, setLeavingParty] = useState(false);
   const [matchingPending, setMatchingPending] = useState(false);
-  const [matchingStartedAt, setMatchingStartedAt] = useState<number | null>(null);
-  const [matchingNowMs, setMatchingNowMs] = useState(() => Date.now());
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
   const hasSteamBinding = Boolean(account?.steam64?.trim());
   const isMatchmakingPending = matchingPending || matchmakingPending;
   const occupancyActiveCount = Math.max(0, matchmakingOccupancyActiveCount);
   const isMatchmakingOccupied = occupancyActiveCount > 0;
   const primaryDisabled = !hasSteamBinding || !canStart || isMatchmakingPending || isMatchmakingOccupied;
-  const matchingElapsedMs = matchingStartedAt ? matchingNowMs - matchingStartedAt : 0;
-
-  useEffect(() => {
-    if (!isMatchmakingPending) {
-      setMatchingStartedAt(null);
-      return;
-    }
-    const syncedStartedAt = matchmakingPendingStartedAt ? Date.parse(matchmakingPendingStartedAt) : NaN;
-    const startedAt = Number.isFinite(syncedStartedAt) ? syncedStartedAt : Date.now();
-    setMatchingStartedAt(startedAt);
-    setMatchingNowMs(startedAt);
-    const timer = window.setInterval(() => setMatchingNowMs(Date.now()), 250);
-    return () => window.clearInterval(timer);
-  }, [isMatchmakingPending, matchmakingPendingStartedAt]);
+  const matchingStartedAtMs = matchmakingPendingStartedAt ? Date.parse(matchmakingPendingStartedAt) : NaN;
+  const matchingElapsedMs = Number.isFinite(matchingStartedAtMs) ? Math.max(0, nowMs - matchingStartedAtMs) : null;
 
   async function inviteFriend(accountId: string) {
     if (!onInviteFriend) return;
@@ -218,7 +206,7 @@ export function HomePage({
               {isMatchmakingPending ? (
                 <span className="faceit-matchmaking-indicator" aria-live="polite">
                   <Spin size="small" />
-                  <span>{formatMatchmakingElapsed(matchingElapsedMs)}</span>
+                  {matchingElapsedMs !== null ? <span>{formatMatchmakingElapsed(matchingElapsedMs)}</span> : null}
                 </span>
               ) : null}
             </span>

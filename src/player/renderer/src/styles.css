@@ -1972,7 +1972,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background: #ff5500;
   transform: scaleX(1);
   transform-origin: right;
-  animation: player-party-invite-timeout var(--party-invite-timeout-ms, 30s) linear forwards;
+  transition: transform 0.25s linear;
 }
 
 .player-party-invite-body {
@@ -2026,12 +2026,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   justify-content: flex-end;
   gap: 8px;
   justify-self: end;
-}
-
-@keyframes player-party-invite-timeout {
-  to {
-    transform: scaleX(0);
-  }
 }
 
 .ant-btn-primary:not(:disabled) {

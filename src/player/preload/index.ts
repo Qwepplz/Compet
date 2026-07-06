@@ -17,6 +17,7 @@ import type {
   PlayerRealtimeSnapshotDto,
   PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
+  PlayerServerTimedDto,
 } from "../shared/types.js";
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(channel, ...args);
@@ -47,20 +48,20 @@ export const playerApi = {
   acceptFriendRequest: (requestId: string): Promise<PlayerFriendListDto> => invoke("friends:acceptRequest", requestId),
   declineFriendRequest: (requestId: string): Promise<void> => invoke("friends:declineRequest", requestId),
   removeFriend: (friendshipId: string): Promise<void> => invoke("friends:remove", friendshipId),
-  getParty: (): Promise<PlayerPartyDto | null> => invoke("party:get"),
-  createParty: (): Promise<PlayerPartyDto> => invoke("party:create"),
-  inviteToParty: (accountId: string): Promise<PlayerPartyInvitationDto> => invoke("party:invite", accountId),
-  acceptPartyInvite: (invitationId: string): Promise<PlayerPartyDto> => invoke("party:acceptInvite", invitationId),
+  getParty: (): Promise<PlayerServerTimedDto<PlayerPartyDto> | null> => invoke("party:get"),
+  createParty: (): Promise<PlayerServerTimedDto<PlayerPartyDto>> => invoke("party:create"),
+  inviteToParty: (accountId: string): Promise<PlayerServerTimedDto<PlayerPartyInvitationDto>> => invoke("party:invite", accountId),
+  acceptPartyInvite: (invitationId: string): Promise<PlayerServerTimedDto<PlayerPartyDto>> => invoke("party:acceptInvite", invitationId),
   declinePartyInvite: (invitationId: string): Promise<void> => invoke("party:declineInvite", invitationId),
   ignorePartyInvite: (invitationId: string): Promise<void> => invoke("party:ignoreInvite", invitationId),
   leaveParty: (): Promise<void> => invoke("party:leave"),
-  beginPartyMatchmaking: (): Promise<PlayerPartyDto> => invoke("party:beginMatchmaking"),
-  cancelPartyMatchmaking: (): Promise<PlayerPartyDto | undefined> => invoke("party:cancelMatchmaking"),
-  startPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerLiveMatchStateDto> => invoke("party:startMatchmaking", options),
+  beginPartyMatchmaking: (): Promise<PlayerServerTimedDto<PlayerPartyDto>> => invoke("party:beginMatchmaking"),
+  cancelPartyMatchmaking: (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => invoke("party:cancelMatchmaking"),
+  startPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("party:startMatchmaking", options),
   getMatchmakingState: (): Promise<PlayerMatchmakingStateDto> => invoke("matchmaking:getState"),
-  ackMatchRoomEntered: (roomId: string): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:roomEntered", roomId),
-  acceptReady: (): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:acceptReady"),
-  declineReady: (): Promise<PlayerLiveMatchStateDto> => invoke("matchmaking:declineReady"),
+  ackMatchRoomEntered: (roomId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:roomEntered", roomId),
+  acceptReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:acceptReady"),
+  declineReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:declineReady"),
   refreshRealtimeSnapshot: (scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto> =>
     invoke("matchmaking:refreshSnapshot", scope),
   onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) =>

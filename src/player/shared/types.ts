@@ -28,6 +28,7 @@ export type PlayerMapSelectionStateDto = MatchMapSelectionState;
 export type PlayerLiveMatchStateDto = PublicMatchRoomRecord;
 export type PlayerMatchResultDto = MatchSeriesResult;
 export type PlayerMatchPlayerResultDto = MatchPlayerResult;
+export type PlayerServerTimedDto<T> = T & { serverNow?: string };
 
 export interface PlayerMatchHistoryEntryDto {
   matchId: string;
@@ -61,16 +62,18 @@ export interface PlayerMatchmakingStateDto {
   partyInvitations: PlayerPartyInvitationDto[];
   room: PlayerLiveMatchStateDto | null;
   occupancy: PlayerMatchmakingOccupancyDto;
+  serverNow?: string;
 }
 
 export interface PlayerRealtimeSnapshotDto {
   reason: PlayerRealtimeSnapshotReason;
+  serverNow?: string;
   friends?: PlayerFriendListDto;
   party?: PlayerPartyDto | null;
   matchmaking: PlayerMatchmakingStateDto;
 }
 
-type PlayerRealtimeEventWithSeq<T> = T & { seq?: number };
+type PlayerRealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string };
 
 export type PlayerRealtimeEvent =
   | PlayerRealtimeEventWithSeq<{

@@ -16,7 +16,11 @@ export class RealtimeEventBus {
   private nextSeq = 1;
 
   publish(event: RealtimeEvent): void {
-    const sequencedEvent: SequencedRealtimeEvent = { ...event, seq: event.seq ?? this.nextSeq++ } as SequencedRealtimeEvent;
+    const sequencedEvent: SequencedRealtimeEvent = {
+      ...event,
+      seq: event.seq ?? this.nextSeq++,
+      serverNow: event.serverNow ?? new Date().toISOString(),
+    } as SequencedRealtimeEvent;
     this.history.push(sequencedEvent);
     if (this.history.length > MAX_REPLAY_EVENTS) {
       this.history.splice(0, this.history.length - MAX_REPLAY_EVENTS);

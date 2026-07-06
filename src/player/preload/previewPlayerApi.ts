@@ -16,6 +16,7 @@ import type {
   PlayerRealtimeSnapshotDto,
   PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
+  PlayerServerTimedDto,
 } from "../shared/types.js";
 
 const createdAt = "2026-05-04T09:00:00.000Z";
@@ -222,13 +223,13 @@ export function createPreviewPlayerApi() {
     acceptFriendRequest: async (): Promise<PlayerFriendListDto> => previewFriends,
     declineFriendRequest: async (): Promise<void> => undefined,
     removeFriend: async (): Promise<void> => undefined,
-    getParty: async (): Promise<PlayerPartyDto | null> => party,
-    createParty: async (): Promise<PlayerPartyDto> => {
+    getParty: async (): Promise<PlayerServerTimedDto<PlayerPartyDto> | null> => party,
+    createParty: async (): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
       const next = ensureParty();
       publishSnapshot();
       return next;
     },
-    inviteToParty: async (accountId: string): Promise<PlayerPartyInvitationDto> => ({
+    inviteToParty: async (accountId: string): Promise<PlayerServerTimedDto<PlayerPartyInvitationDto>> => ({
       id: `preview-invite-${accountId}`,
       partyId: ensureParty().id,
       fromAccountId: previewAccount.id,
@@ -236,7 +237,7 @@ export function createPreviewPlayerApi() {
       status: "pending",
       createdAt,
     }),
-    acceptPartyInvite: async (): Promise<PlayerPartyDto> => {
+    acceptPartyInvite: async (): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
       const next = ensureParty();
       publishSnapshot();
       return next;
@@ -248,41 +249,41 @@ export function createPreviewPlayerApi() {
       room = null;
       publishSnapshot();
     },
-    beginPartyMatchmaking: async (): Promise<PlayerPartyDto> => {
+    beginPartyMatchmaking: async (): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
       const now = new Date().toISOString();
       const nextParty = { ...ensureParty(), matchmakingPendingAt: now, updatedAt: now };
       party = nextParty;
       publishSnapshot();
       return nextParty;
     },
-    cancelPartyMatchmaking: async (): Promise<PlayerPartyDto | undefined> => {
+    cancelPartyMatchmaking: async (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => {
       if (!party) return undefined;
       party = { ...party, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
       publishSnapshot();
       return party;
     },
-    startPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerLiveMatchStateDto> => {
+    startPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
       const nextParty = ensureParty();
       room = makeReadyRoom(nextParty);
       publishSnapshot();
       return room;
     },
     getMatchmakingState: async (): Promise<PlayerMatchmakingStateDto> => matchmaking(),
-    ackMatchRoomEntered: async (): Promise<PlayerLiveMatchStateDto> => {
+    ackMatchRoomEntered: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);
       room = { ...room, readyDeadlineAt: room.readyDeadlineAt ?? new Date(Date.now() + 60_000).toISOString() };
       publishSnapshot();
       return room;
     },
-    acceptReady: async (): Promise<PlayerLiveMatchStateDto> => {
+    acceptReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);
       room = { ...room, phase: "match_room", ready: [{ accountId: previewAccount.id, ready: true }] };
       publishSnapshot();
       return room;
     },
-    declineReady: async (): Promise<PlayerLiveMatchStateDto> => {
+    declineReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);
       publishSnapshot();

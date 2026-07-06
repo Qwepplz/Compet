@@ -17,6 +17,7 @@ import type {
   PlayerRealtimeSnapshotDto,
   PlayerRealtimeSnapshotReason,
   PlayerRealtimeSnapshotScope,
+  PlayerServerTimedDto,
 } from "../shared/types.js";
 import { isRealtimeCommandServiceError } from "./playerRealtimeClient.js";
 import { RemoteProfileService, type PlayerProfile } from "./remoteProfileService.js";
@@ -47,7 +48,10 @@ export interface PlayerRealtimeEventsResult {
   events: PlayerRealtimeEvent[];
   gap: boolean;
   latestSeq: number;
+  serverNow?: string;
 }
+
+type ServerTimedResponse = { serverNow?: string };
 
 export class PlayerApiError extends Error {
   constructor(message: string, readonly statusCode?: number) {
@@ -172,35 +176,36 @@ export class PlayerApiClient {
     );
   }
 
-  getParty(): Promise<PlayerPartyDto | null> {
-    return this.request<{ party: PlayerPartyDto | null }>("GET", "/party").then((response) => response.party);
+  getParty(): Promise<PlayerServerTimedDto<PlayerPartyDto> | null> {
+    return this.request<{ party: PlayerPartyDto | null } & ServerTimedResponse>("GET", "/party")
+      .then((response) => attachServerNow(response.party, response));
   }
 
-  async createParty(): Promise<PlayerPartyDto> {
-    const response = await this.commandOrRequest<{ party: PlayerPartyDto }>(
+  async createParty(): Promise<PlayerServerTimedDto<PlayerPartyDto>> {
+    const response = await this.commandOrRequest<{ party: PlayerPartyDto } & ServerTimedResponse>(
       "party.create",
       {},
       () => this.request("POST", "/party/create", {}),
     );
-    return response.party;
+    return attachServerNow(response.party, response);
   }
 
-  async inviteToParty(accountId: string): Promise<PlayerPartyInvitationDto> {
-    const response = await this.commandOrRequest<{ invitation: PlayerPartyInvitationDto }>(
+  async inviteToParty(accountId: string): Promise<PlayerServerTimedDto<PlayerPartyInvitationDto>> {
+    const response = await this.commandOrRequest<{ invitation: PlayerPartyInvitationDto } & ServerTimedResponse>(
       "party.invite",
       { accountId },
       () => this.request("POST", "/party/invite", { accountId }),
     );
-    return response.invitation;
+    return attachServerNow(response.invitation, response);
   }
 
-  async acceptPartyInvite(invitationId: string): Promise<PlayerPartyDto> {
-    const response = await this.commandOrRequest<{ party: PlayerPartyDto }>(
+  async acceptPartyInvite(invitationId: string): Promise<PlayerServerTimedDto<PlayerPartyDto>> {
+    const response = await this.commandOrRequest<{ party: PlayerPartyDto } & ServerTimedResponse>(
       "party.acceptInvite",
       { invitationId },
       () => this.request("POST", `/party/invitations/${encodeURIComponent(invitationId)}/accept`, {}),
     );
-    return response.party;
+    return attachServerNow(response.party, response);
   }
 
   declinePartyInvite(invitationId: string): Promise<void> {
@@ -223,27 +228,27 @@ export class PlayerApiClient {
     return this.commandOrRequest("party.leave", {}, () => this.request("POST", "/party/leave", {}));
   }
 
-  async beginPartyMatchmaking(): Promise<PlayerPartyDto> {
-    const response = await this.commandOrRequest<{ party: PlayerPartyDto }>(
+  async beginPartyMatchmaking(): Promise<PlayerServerTimedDto<PlayerPartyDto>> {
+    const response = await this.commandOrRequest<{ party: PlayerPartyDto } & ServerTimedResponse>(
       "party.beginMatchmaking",
       {},
       () => this.request("POST", "/party/matchmaking/begin", {}),
     );
-    return response.party;
+    return attachServerNow(response.party, response);
   }
 
-  async cancelPartyMatchmaking(): Promise<PlayerPartyDto | undefined> {
-    const response = await this.commandOrRequest<{ party?: PlayerPartyDto }>(
+  async cancelPartyMatchmaking(): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> {
+    const response = await this.commandOrRequest<{ party?: PlayerPartyDto } & ServerTimedResponse>(
       "party.cancelMatchmaking",
       {},
       () => this.request("POST", "/party/matchmaking/cancel", {}),
     );
-    return response.party;
+    return attachServerNow(response.party, response);
   }
 
-  async startPartyMatchmaking(options: { dev?: boolean } = {}): Promise<PlayerLiveMatchStateDto> {
+  async startPartyMatchmaking(options: { dev?: boolean } = {}): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
     const payload = options.dev ? { dev: true } : {};
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
       "party.startMatchmaking",
       payload,
       () => this.request(
@@ -253,7 +258,7 @@ export class PlayerApiClient {
         MATCHMAKING_START_TIMEOUT_MS,
       ),
     );
-    return response.room;
+    return attachServerNow(response.room, response);
   }
 
   async getMatchmakingState(): Promise<PlayerMatchmakingStateDto> {
@@ -264,48 +269,49 @@ export class PlayerApiClient {
     return this.getMatchmakingState();
   }
 
-  async ackMatchRoomEntered(roomId: string): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+  async ackMatchRoomEntered(roomId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
       "matchRoom.entered",
       { roomId },
       () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/entered`, {}),
     );
-    return response.room;
+    return attachServerNow(response.room, response);
   }
 
-  async acceptReady(): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+  async acceptReady(): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
       "matchmaking.acceptReady",
       {},
       () => this.request("POST", "/matchmaking/ready", {}),
     );
-    return response.room;
+    return attachServerNow(response.room, response);
   }
 
-  async declineReady(): Promise<PlayerLiveMatchStateDto> {
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto }>(
+  async declineReady(): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
+    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
       "matchmaking.declineReady",
       {},
       () => this.request("POST", "/matchmaking/ready/decline", {}),
     );
-    return response.room;
+    return attachServerNow(response.room, response);
   }
 
   async fetchRealtimeSnapshot(reason: PlayerRealtimeSnapshotReason, scope: PlayerRealtimeSnapshotScope = "full"): Promise<PlayerRealtimeSnapshotDto> {
     if (scope === "matchmaking") {
-      return { reason, matchmaking: await this.getMatchmakingState() };
+      const matchmaking = await this.getMatchmakingState();
+      return { reason, serverNow: matchmaking.serverNow, matchmaking };
     }
     const [friends, party, matchmaking] = await Promise.all([
       this.listFriends(),
       this.getParty(),
       this.getMatchmakingState(),
     ]);
-    return { reason, friends, party, matchmaking };
+    return { reason, serverNow: matchmaking.serverNow, friends, party, matchmaking };
   }
 
   async fetchRealtimeEvents(afterSeq: number, timeoutMs: number): Promise<PlayerRealtimeEventsResult> {
     const query = new URLSearchParams({ afterSeq: String(afterSeq), timeoutMs: String(timeoutMs) });
-    const response = await this.request<{ events: Array<PlayerRealtimeEvent & { accountIds?: string[] }>; gap: boolean; latestSeq?: number }>(
+    const response = await this.request<{ events: Array<PlayerRealtimeEvent & { accountIds?: string[] }>; gap: boolean; latestSeq?: number } & ServerTimedResponse>(
       "GET",
       `/realtime/events?${query.toString()}`,
       undefined,
@@ -314,6 +320,7 @@ export class PlayerApiClient {
     return {
       gap: response.gap,
       latestSeq: typeof response.latestSeq === "number" ? response.latestSeq : afterSeq,
+      serverNow: response.serverNow,
       events: response.events.map(stripRealtimeAudience),
     };
   }
@@ -508,6 +515,14 @@ export class PlayerApiClient {
 function stripRealtimeAudience(event: PlayerRealtimeEvent & { accountIds?: string[] }): PlayerRealtimeEvent {
   const { accountIds: _accountIds, ...rest } = event;
   return rest as PlayerRealtimeEvent;
+}
+
+function attachServerNow<T extends object>(value: T, response: ServerTimedResponse): PlayerServerTimedDto<T>;
+function attachServerNow<T extends object>(value: T | null, response: ServerTimedResponse): PlayerServerTimedDto<T> | null;
+function attachServerNow<T extends object>(value: T | undefined, response: ServerTimedResponse): PlayerServerTimedDto<T> | undefined;
+function attachServerNow<T extends object>(value: T | null | undefined, response: ServerTimedResponse): PlayerServerTimedDto<T> | null | undefined {
+  if (!response.serverNow || typeof value !== "object" || value === null || Array.isArray(value)) return value;
+  return { ...value, serverNow: response.serverNow };
 }
 
 function collectRoomSteam64s(room: PlayerLiveMatchStateDto): string[] {
