@@ -16,7 +16,7 @@ interface PersistedSession extends SavedPlayerLogin {
   token?: string;
 }
 
-const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
+const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 } };
 
 export function isSafeSteamConnectUrl(connectUrl: string): boolean {
   if (typeof connectUrl !== "string" || /[\r\n]/.test(connectUrl)) return false;

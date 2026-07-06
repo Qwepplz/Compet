@@ -19,6 +19,7 @@ export type RealtimeEvent =
   | RealtimeEventWithSeq<{ type: "party_invite_received"; accountIds: string[]; invitation: unknown }>
   | RealtimeEventWithSeq<{ type: "party_invite_resolved"; accountIds: string[]; invitation: unknown }>
   | RealtimeEventWithSeq<{ type: "queue_updated"; accountIds: string[]; queue: unknown[] }>
+  | RealtimeEventWithSeq<{ type: "matchmaking_occupancy_updated"; occupancy: { activeCount: number } }>
   | RealtimeEventWithSeq<{
       type: "ready_check_started";
       matchId: string;

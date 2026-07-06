@@ -1,5 +1,5 @@
 import { requestJson } from "../../shared/httpJsonClient.js";
-import type { AccountView, CreateAccountInput, LoginResult, UpdateAccountInput } from "../shared/types.js";
+import type { AccountView, CreateAccountInput, LoginResult, MatchmakingOccupancy, UpdateAccountInput } from "../shared/types.js";
 
 export class ServiceApiClient {
   private token?: string;
@@ -8,6 +8,11 @@ export class ServiceApiClient {
 
   async serverInfo(): Promise<{ version: string; certificateFingerprintSha256: string; websocketPath: string }> {
     return this.request("GET", "/server/info");
+  }
+
+  async matchmakingOccupancy(): Promise<MatchmakingOccupancy> {
+    const response = await this.request<{ occupancy: MatchmakingOccupancy }>("GET", "/admin/matchmaking/occupancy");
+    return response.occupancy;
   }
 
   async login(username: string, password: string): Promise<LoginResult> {

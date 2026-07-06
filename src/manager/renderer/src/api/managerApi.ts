@@ -1,4 +1,4 @@
-import type { AccountView, BootstrapAdminInput, CreateAccountInput, DiagnosticResult, LogEntry, LoginResult, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
+import type { AccountView, BootstrapAdminInput, CreateAccountInput, DiagnosticResult, LogEntry, LoginResult, ManagerConfig, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
 import type { UpdateCheckResult } from "../../../../desktop/updateTypes.js";
 
 export type { UpdateCheckResult };
@@ -16,6 +16,7 @@ export const managerApi = {
   login: (username: string, password: string) => window.managerApi.login(username, password) as Promise<LoginResult>,
   loadSavedLogin: () => window.managerApi.loadSavedLogin() as Promise<SavedLoginCredentials | null>,
   changePassword: (currentPassword: string, newPassword: string) => window.managerApi.changePassword(currentPassword, newPassword) as Promise<void>,
+  matchmakingOccupancy: () => window.managerApi.matchmakingOccupancy() as Promise<MatchmakingOccupancy>,
   getVersion: () => window.managerApi.getVersion() as Promise<string>,
   checkUpdate: () => window.managerApi.checkUpdate() as Promise<UpdateCheckResult>,
   installUpdate: () => window.managerApi.installUpdate() as Promise<UpdateCheckResult & { installing: boolean }>,

@@ -17,6 +17,7 @@ export const managerApi = {
   logout: () => invoke("auth:logout"),
   changePassword: (currentPassword: string, newPassword: string) => invoke("auth:changePassword", currentPassword, newPassword),
   serverInfo: () => invoke("server:info"),
+  matchmakingOccupancy: () => invoke("matchmaking:occupancy"),
   listAccounts: () => invoke("accounts:list"),
   createAccount: (input: unknown) => invoke("accounts:create", input),
   updateAccount: (id: string, input: unknown) => invoke("accounts:update", id, input),

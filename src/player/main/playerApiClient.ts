@@ -412,7 +412,7 @@ export class PlayerApiClient {
       return this.enrichRoom(room);
     }));
     const room = state.room ? (roomIds.has(state.room.id) ? rooms.find((item) => item.id === state.room?.id) ?? state.room : await this.enrichRoom(state.room)) : null;
-    return { ...state, rooms, partyInvitations: state.partyInvitations ?? [], room };
+    return { ...state, rooms, partyInvitations: state.partyInvitations ?? [], room, occupancy: state.occupancy ?? { activeCount: 0 } };
   }
 
   private async enrichRoom(room: PlayerLiveMatchStateDto): Promise<PlayerLiveMatchStateDto> {

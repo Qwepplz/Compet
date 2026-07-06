@@ -13,6 +13,7 @@ interface HomePageProps {
   party: PlayerPartyDto | null;
   matchmakingPending?: boolean;
   matchmakingPendingStartedAt?: string | null;
+  matchmakingOccupancyActiveCount?: number;
   devModeEnabled?: boolean;
   onInviteFriend?: (accountId: string) => Promise<void>;
   onLeaveParty?: () => Promise<void>;
@@ -53,6 +54,7 @@ export function HomePage({
   party,
   matchmakingPending = false,
   matchmakingPendingStartedAt = null,
+  matchmakingOccupancyActiveCount = 0,
   devModeEnabled = false,
   onInviteFriend,
   onLeaveParty,
@@ -67,7 +69,9 @@ export function HomePage({
   const canStart = Boolean(onStartMatchmaking && (!party || party.ownerAccountId === account?.id));
   const hasSteamBinding = Boolean(account?.steam64?.trim());
   const isMatchmakingPending = matchingPending || matchmakingPending;
-  const primaryDisabled = !hasSteamBinding || !canStart || isMatchmakingPending;
+  const occupancyActiveCount = Math.max(0, matchmakingOccupancyActiveCount);
+  const isMatchmakingOccupied = occupancyActiveCount > 0;
+  const primaryDisabled = !hasSteamBinding || !canStart || isMatchmakingPending || isMatchmakingOccupied;
   const matchingElapsedMs = matchingStartedAt ? matchingNowMs - matchingStartedAt : 0;
 
   useEffect(() => {
@@ -219,6 +223,14 @@ export function HomePage({
               ) : null}
             </span>
           </Button>
+          <div
+            className={`faceit-occupancy-indicator faceit-occupancy-indicator--${isMatchmakingOccupied ? "busy" : "available"}`}
+            aria-label={`游戏房间占用 ${occupancyActiveCount}`}
+            title={`游戏房间占用 ${occupancyActiveCount}`}
+          >
+            <span className="faceit-occupancy-dot" />
+            <span className="faceit-occupancy-count">{occupancyActiveCount}</span>
+          </div>
           {party ? (
             <Button
               className="faceit-secondary-cta"

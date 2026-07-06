@@ -28,6 +28,10 @@ export interface ServiceStatus {
   lastError?: string;
 }
 
+export interface MatchmakingOccupancy {
+  activeCount: number;
+}
+
 export interface LogEntry {
   id: string;
   timestamp: string;

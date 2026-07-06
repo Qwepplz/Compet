@@ -26,6 +26,10 @@ body { overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", Arial, sans
 .manager-header > * { min-width: 0; }
 .manager-header .status-row { min-width: 0; justify-content: flex-end; }
 .manager-status { min-width: 0; max-width: 100%; display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 52px; line-height: 1; }
+.manager-occupancy { display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 22px; min-width: 34px; padding: 0 8px; border: 1px solid #e5e7eb; border-radius: 999px; background: #fff; color: #172033; font-size: 12px; font-weight: 700; line-height: 20px; }
+.manager-occupancy-dot { width: 8px; height: 8px; flex: 0 0 8px; border-radius: 50%; }
+.manager-occupancy--busy .manager-occupancy-dot { background: #ff2727; }
+.manager-occupancy--available .manager-occupancy-dot { background: #16a34a; }
 .manager-status-tag { margin-inline-end: 0; display: inline-flex; align-items: center; height: 22px; line-height: 20px; }
 .status-url { display: inline-flex; align-items: center; max-width: min(42vw, 520px); height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 22px; }
 .error-text { padding: 10px 12px; border-radius: 6px; background: #fef2f2; color: #991b1b; overflow-wrap: anywhere; }

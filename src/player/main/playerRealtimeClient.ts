@@ -406,6 +406,7 @@ function sanitizeRealtimeEvent(message: unknown): PlayerRealtimeEvent | undefine
     case "party_invite_received":
     case "party_invite_resolved":
     case "queue_updated":
+    case "matchmaking_occupancy_updated":
     case "ready_check_started":
     case "ready_check_updated":
     case "match_room_created":

@@ -239,6 +239,10 @@ export interface PublicMatchRoomRecord {
   createdAt: string;
 }
 
+export interface MatchmakingOccupancySummary {
+  activeCount: number;
+}
+
 export class MatchmakingService {
   private readonly now: () => string;
   private readonly idFactory: () => string;
@@ -335,6 +339,7 @@ export class MatchmakingService {
             ...party,
             ownerAccountId: ownerLeft ? remainingMemberIds[0]! : party.ownerAccountId,
             memberAccountIds: remainingMemberIds,
+            matchmakingPendingAt: undefined,
             updatedAt: this.now(),
           }
         : undefined;
@@ -345,6 +350,7 @@ export class MatchmakingService {
       await this.deps.store.saveParties(updated);
       if (ownerLeft) await this.expirePendingInvitationsForParty(party.id);
       await this.emit({ type: "party_updated", accountIds: [accountId, ...remainingMemberIds], party: nextParty ?? null });
+      if (party.matchmakingPendingAt) await this.emitOccupancyUpdated();
     });
   }
 
@@ -371,6 +377,7 @@ export class MatchmakingService {
             ...party,
             ownerAccountId: ownerLeft ? remainingMemberIds[0]! : party.ownerAccountId,
             memberAccountIds: remainingMemberIds,
+            matchmakingPendingAt: undefined,
             updatedAt: this.now(),
           }
         : undefined;
@@ -381,6 +388,7 @@ export class MatchmakingService {
       await this.deps.store.saveParties(updated);
       if (ownerLeft) await this.expirePendingInvitationsForParty(party.id);
       await this.emit({ type: "party_updated", accountIds: [accountId, ...remainingMemberIds], party: nextParty ?? null });
+      if (party.matchmakingPendingAt) await this.emitOccupancyUpdated();
     });
   }
 
@@ -493,11 +501,15 @@ export class MatchmakingService {
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
       this.requireOpenParty(party);
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
+      if (this.hasActiveMatchmaking(await this.deps.store.listRooms(), parties)) {
+        throw new Error("matchmaking is already active");
+      }
 
       const now = this.now();
       const updatedParty: PartyRecord = { ...party, matchmakingPendingAt: now, updatedAt: now };
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
       await this.emitPartyUpdated(updatedParty);
+      await this.emitOccupancyUpdated();
       return updatedParty;
     });
   }
@@ -513,6 +525,7 @@ export class MatchmakingService {
       const updatedParty: PartyRecord = { ...party, matchmakingPendingAt: undefined, updatedAt: this.now() };
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
       await this.emitPartyUpdated(updatedParty);
+      await this.emitOccupancyUpdated();
       return updatedParty;
     });
   }
@@ -529,8 +542,8 @@ export class MatchmakingService {
       if (party.memberAccountIds.length > MAX_PARTY_HUMANS) throw new Error("party is full");
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
       const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms());
-      if (existingRooms.some((room) => isServerManagedPhase(room.phase))) {
-        throw new Error("game server is already active");
+      if (this.hasActiveMatchmaking(existingRooms, parties, { allowedPendingPartyId: party.id })) {
+        throw new Error("matchmaking is already active");
       }
 
       const startedAt = this.now();
@@ -560,6 +573,7 @@ export class MatchmakingService {
       await this.expirePendingInvitationsForParty(party.id);
       this.scheduleReadyTimeout(room);
       await this.emitPartyUpdated(updatedParty);
+      await this.emitOccupancyUpdated();
       await this.emitReadyRoomCreatedPerAccount(room);
       await this.emit(this.toReadyEvent("ready_check_started", room));
       await this.emit(this.toReadyEvent("ready_check_updated", room));
@@ -731,16 +745,40 @@ export class MatchmakingService {
     party: PartyRecord | null;
     partyInvitations: PartyInvitationDto[];
     room: PublicMatchRoomRecord | null;
+    occupancy: MatchmakingOccupancySummary;
   }> {
     const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
-    const rooms = this.pruneTerminalRooms(await this.deps.store.listRooms())
+    const allRooms = this.pruneTerminalRooms(await this.deps.store.listRooms());
+    const rooms = allRooms
       .filter((room) => this.roomHasAccount(room, accountId))
       .map((room) => this.toPlayerPublicRoom(room, accountId));
-    const party = (await this.deps.store.listParties()).find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
+    const parties = await this.deps.store.listParties();
+    const party = parties.find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
     const partyInvitations = (await this.deps.store.listInvitations()).filter(
       (invitation) => invitation.toAccountId === accountId && invitation.status === "pending" && !this.isPartyInviteOverdue(invitation),
     );
-    return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms) };
+    return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms), occupancy: this.occupancySummary(allRooms, parties) };
+  }
+
+  async getOccupancy(): Promise<MatchmakingOccupancySummary> {
+    return this.occupancySummary(this.pruneTerminalRooms(await this.deps.store.listRooms()), await this.deps.store.listParties());
+  }
+
+  private occupancySummary(rooms: MatchRoomRecord[], parties: PartyRecord[]): MatchmakingOccupancySummary {
+    return { activeCount: this.hasActiveMatchmaking(rooms, parties) ? 1 : 0 };
+  }
+
+  private hasActiveMatchmaking(
+    rooms: MatchRoomRecord[],
+    parties: PartyRecord[],
+    options: { allowedPendingPartyId?: string } = {},
+  ): boolean {
+    if (rooms.some((room) => !isTerminalMatchPhase(room.phase))) return true;
+    return parties.some((party) => (
+      party.id !== options.allowedPendingPartyId
+      && (party.status ?? "open") === "open"
+      && Boolean(party.matchmakingPendingAt)
+    ));
   }
 
   completeMatchFromServerExit(matchId: string, report: MatchServerExitReport): Promise<PublicMatchRoomRecord | undefined> {
@@ -961,6 +999,10 @@ export class MatchmakingService {
       }
     }
     this.deps.events?.publish(event);
+  }
+
+  private async emitOccupancyUpdated(): Promise<void> {
+    await this.emit({ type: "matchmaking_occupancy_updated", occupancy: await this.getOccupancy() });
   }
 
   private async emitReadyRoomCreatedPerAccount(room: MatchRoomRecord): Promise<void> {
@@ -1411,6 +1453,7 @@ export class MatchmakingService {
         const updatedParty: PartyRecord = { ...party, status: "open", lockedMatchId: undefined, updatedAt: failedAt };
         await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
         await this.emitPartyUpdated(updatedParty);
+        await this.emitOccupancyUpdated();
       }
     }
 
@@ -1430,6 +1473,7 @@ export class MatchmakingService {
     const updatedParty: PartyRecord = { ...party, status: "open", lockedMatchId: undefined, updatedAt };
     await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
     await this.emitPartyUpdated(updatedParty);
+    await this.emitOccupancyUpdated();
   }
 
   private roomHasAccount(room: MatchRoomRecord, accountId: string): boolean {

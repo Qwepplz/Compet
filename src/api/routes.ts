@@ -179,6 +179,7 @@ function mapMatchmakingServiceError(error: unknown): never {
   if (error instanceof Error) {
     if (error.message.includes("party owner required")) throw forbidden(error.message);
     if (error.message.includes("steam64 required for matchmaking")) throw badRequest(error.message);
+    if (error.message.includes("matchmaking is already active")) throw conflict(error.message);
     if (
       error.message.includes("party not found") ||
       error.message.includes("party invitation not found") ||
@@ -348,6 +349,13 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
       mapAccountServiceError(error);
     }
     return { ok: true };
+  });
+
+  app.get("/admin/matchmaking/occupancy", async (request) => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    const matchmaking = requireMatchmaking(deps);
+    return { occupancy: await matchmaking.getOccupancy() };
   });
 
   app.get("/me", async (request) => {

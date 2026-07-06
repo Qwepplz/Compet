@@ -137,6 +137,7 @@ export function createPreviewPlayerApi() {
     party,
     partyInvitations: [],
     room,
+    occupancy: { activeCount: room || party?.matchmakingPendingAt ? 1 : 0 },
   });
 
   const snapshot = (scope: PlayerRealtimeSnapshotScope = "full"): PlayerRealtimeSnapshotDto =>

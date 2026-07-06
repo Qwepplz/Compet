@@ -77,6 +77,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
   });
   ipcMain.handle("credentials:load", () => deps.loadSavedLogin());
   ipcMain.handle("server:info", () => deps.getApiClient().serverInfo());
+  ipcMain.handle("matchmaking:occupancy", () => deps.getApiClient().matchmakingOccupancy());
   ipcMain.handle("accounts:list", () => deps.getApiClient().accounts());
   ipcMain.handle("accounts:create", (_event, input) => deps.getApiClient().createAccount(input));
   ipcMain.handle("accounts:update", (_event, id, input) => deps.getApiClient().updateAccount(id, input));

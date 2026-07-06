@@ -1,6 +1,6 @@
 import { Button, Card, message, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
-import type { BootstrapAdminInput, SavedLoginCredentials, ServiceStatus } from "../../shared/types.js";
+import type { BootstrapAdminInput, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus } from "../../shared/types.js";
 import { managerApi } from "./api/managerApi.js";
 import { AppShell } from "./components/AppShell.js";
 import { AccountsPage } from "./pages/AccountsPage.js";
@@ -13,6 +13,8 @@ import { OverviewPage } from "./pages/OverviewPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
 
 const initialStatus: ServiceStatus = { state: "stopped", baseUrl: "https://127.0.0.1:18443" };
+const initialMatchmakingOccupancy: MatchmakingOccupancy = { activeCount: 0 };
+const MATCHMAKING_OCCUPANCY_POLL_MS = 2_000;
 
 export function App() {
   const [status, setStatus] = useState<ServiceStatus>(initialStatus);
@@ -21,11 +23,36 @@ export function App() {
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
   const [savedLogin, setSavedLogin] = useState<SavedLoginCredentials | null>(null);
   const [serviceActionPending, setServiceActionPending] = useState(false);
+  const [matchmakingOccupancy, setMatchmakingOccupancy] = useState<MatchmakingOccupancy>(initialMatchmakingOccupancy);
 
   useEffect(() => {
     void refreshStatus();
     void loadSavedLogin();
   }, []);
+
+  useEffect(() => {
+    if (!loggedIn || status.state !== "running") {
+      setMatchmakingOccupancy(initialMatchmakingOccupancy);
+      return;
+    }
+
+    let cancelled = false;
+    const refreshMatchmakingOccupancy = async () => {
+      try {
+        const nextOccupancy = await managerApi.matchmakingOccupancy();
+        if (!cancelled) setMatchmakingOccupancy(nextOccupancy);
+      } catch {
+        if (!cancelled) setMatchmakingOccupancy(initialMatchmakingOccupancy);
+      }
+    };
+
+    void refreshMatchmakingOccupancy();
+    const timer = window.setInterval(refreshMatchmakingOccupancy, MATCHMAKING_OCCUPANCY_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [loggedIn, status.state]);
 
   async function loadSavedLogin() {
     try {
@@ -178,7 +205,7 @@ export function App() {
   }
 
   return (
-    <AppShell page={page} status={status} onPageChange={(nextPage) => {
+    <AppShell page={page} status={status} matchmakingOccupancy={matchmakingOccupancy} onPageChange={(nextPage) => {
       if (!serviceActionPending) setPage(nextPage);
     }}>
       {page === "overview" && (

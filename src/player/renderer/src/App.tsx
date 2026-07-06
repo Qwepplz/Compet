@@ -62,7 +62,7 @@ type PasswordChangeValues = { currentPassword: string; newPassword: string; conf
 type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steamPersonaName" | "steamAvatarUrl">;
 type MatchHistoryPlayer = Pick<AccountView, "steam64" | "steamPersonaName" | "steamAvatarUrl"> & { accountId: string };
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
-const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null };
+const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 } };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
@@ -559,6 +559,7 @@ export function App() {
           resolvedPartyInvitationIds.current,
         ),
         room: nextRoom,
+        occupancy: snapshot.matchmaking.occupancy,
       };
     });
     if (snapshotActiveRoom) {
@@ -736,6 +737,12 @@ export function App() {
         setMatchmaking((current) => ({
           ...current,
           queue: event.queue,
+        }));
+        return;
+      case "matchmaking_occupancy_updated":
+        setMatchmaking((current) => ({
+          ...current,
+          occupancy: event.occupancy,
         }));
         return;
       case "ready_check_started":
@@ -1324,6 +1331,7 @@ export function App() {
       ...current,
       room: nextRoom,
       rooms: upsertRoom(current.rooms, nextRoom),
+      occupancy: { activeCount: 1 },
     }));
     playMatchFoundSound(nextRoom.id);
     setActiveView("match-room");
@@ -1346,6 +1354,7 @@ export function App() {
       setMatchmaking((current) => ({
         ...current,
         party: pendingParty,
+        occupancy: { activeCount: 1 },
       }));
       await waitForMatchmakingDelay(randomMatchmakingDelayMs());
       await startPartyMatchmaking(options);
@@ -1357,6 +1366,7 @@ export function App() {
           setMatchmaking((current) => ({
             ...current,
             party: nextParty,
+            occupancy: { activeCount: 0 },
           }));
         }
       }
@@ -1423,6 +1433,7 @@ export function App() {
         party={visibleHomeParty}
         matchmakingPending={matchmakingFeedbackPending || Boolean(syncedMatchmakingPendingAt)}
         matchmakingPendingStartedAt={syncedMatchmakingPendingAt}
+        matchmakingOccupancyActiveCount={matchmaking.occupancy.activeCount}
         devModeEnabled={devModeEnabled}
         onInviteFriend={!hasActiveMatch ? inviteToParty : undefined}
         onLeaveParty={party && !hasActiveMatch ? leaveParty : undefined}

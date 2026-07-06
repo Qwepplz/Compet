@@ -50,12 +50,17 @@ export interface PlayerRealtimeStatusDto {
   stale: boolean;
 }
 
+export interface PlayerMatchmakingOccupancyDto {
+  activeCount: number;
+}
+
 export interface PlayerMatchmakingStateDto {
   queue: PlayerQueueEntryDto[];
   rooms: PlayerLiveMatchStateDto[];
   party: PlayerPartyDto | null;
   partyInvitations: PlayerPartyInvitationDto[];
   room: PlayerLiveMatchStateDto | null;
+  occupancy: PlayerMatchmakingOccupancyDto;
 }
 
 export interface PlayerRealtimeSnapshotDto {
@@ -82,6 +87,7 @@ export type PlayerRealtimeEvent =
   | PlayerRealtimeEventWithSeq<{ type: "party_invite_received"; invitation: PlayerPartyInvitationDto }>
   | PlayerRealtimeEventWithSeq<{ type: "party_invite_resolved"; invitation: PlayerPartyInvitationDto }>
   | PlayerRealtimeEventWithSeq<{ type: "queue_updated"; queue: PlayerQueueEntryDto[] }>
+  | PlayerRealtimeEventWithSeq<{ type: "matchmaking_occupancy_updated"; occupancy: PlayerMatchmakingOccupancyDto }>
   | PlayerRealtimeEventWithSeq<{
       type: "ready_check_started";
       matchId: string;
