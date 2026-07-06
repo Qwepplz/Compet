@@ -677,8 +677,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-queue-actions .faceit-occupancy-indicator {
-  grid-column: 4;
-  justify-self: start;
+  grid-column: 2;
+  justify-self: end;
   position: fixed;
   top: 654px;
   display: inline-flex;
@@ -695,11 +695,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .player-app-layout .faceit-queue-actions .faceit-occupancy-indicator {
-  left: calc(50vw + 4px);
+  left: calc(50vw - 320px);
 }
 
 .player-app-layout--collapsed .faceit-queue-actions .faceit-occupancy-indicator {
-  left: calc(50vw + 140px);
+  left: calc(50vw - 184px);
 }
 
 .faceit-occupancy-dot {
