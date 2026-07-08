@@ -1484,46 +1484,63 @@ export function App() {
     );
   }
 
+  const windowControls = (
+    <div className="player-window-controls" aria-label="窗口控制">
+      <Button
+        aria-label="最小化窗口"
+        className="player-window-control"
+        icon={<MinusOutlined />}
+        type="text"
+        onClick={() => void api.minimizeWindow()}
+      />
+      <Button
+        aria-label="关闭窗口"
+        className="player-window-control player-window-control--close"
+        icon={<CloseOutlined />}
+        type="text"
+        onClick={() => void api.closeWindow()}
+      />
+    </div>
+  );
+
   if (activeView === "login") {
     return (
-      <div className="player-shell">
-        <Card className="player-card">
-          <div className="player-header">
-            <div className="player-kicker">Compet Player</div>
-            <h2 className="player-title">玩家登录</h2>
-            <p className="player-copy">使用 Compet 账号登录，恢复当前玩家状态并继续比赛流程。</p>
-          </div>
-          <Form
-            form={loginForm}
-            layout="vertical"
-            initialValues={{
-              baseUrl: savedLogin?.baseUrl ?? baseUrl,
-              username: savedLogin?.username,
-              password: savedLogin?.password,
-            }}
-            onFinish={(values) => void login(values)}
-          >
-            <Form.Item label="服务器地址" name="baseUrl" rules={[{ required: true, message: "请输入服务器地址" }]}>
-              <Input onChange={(event) => setBaseUrl(event.target.value)} />
-            </Form.Item>
-            <Form.Item label="用户名" name="username" rules={[{ required: true, message: "请输入用户名" }]}>
-              <Input />
-            </Form.Item>
-            <Form.Item label="密码" name="password" rules={[{ required: true, message: "请输入密码" }]}>
-              <Input.Password />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" block loading={loginPending} disabled={loginPending}>
-              登录
-            </Button>
-          </Form>
-        </Card>
+      <div className="player-shell player-shell--auth">
+        <div className="player-window-drag-region player-window-drag-region--auth" />
+        <div className="player-auth-chrome">{windowControls}</div>
+        <Form
+          className="player-login-form"
+          form={loginForm}
+          layout="vertical"
+          initialValues={{
+            baseUrl: savedLogin?.baseUrl ?? baseUrl,
+            username: savedLogin?.username,
+            password: savedLogin?.password,
+          }}
+          onFinish={(values) => void login(values)}
+        >
+          <Form.Item label="服务器地址" name="baseUrl" rules={[{ required: true, message: "请输入服务器地址" }]}>
+            <Input onChange={(event) => setBaseUrl(event.target.value)} />
+          </Form.Item>
+          <Form.Item label="用户名" name="username" rules={[{ required: true, message: "请输入用户名" }]}>
+            <Input />
+          </Form.Item>
+          <Form.Item label="密码" name="password" rules={[{ required: true, message: "请输入密码" }]}>
+            <Input.Password />
+          </Form.Item>
+          <Button type="primary" htmlType="submit" block loading={loginPending} disabled={loginPending}>
+            登录
+          </Button>
+        </Form>
       </div>
     );
   }
 
   if (activeView === "change-password") {
     return (
-      <div className="player-shell">
+      <div className="player-shell player-shell--auth">
+        <div className="player-window-drag-region player-window-drag-region--auth" />
+        <div className="player-auth-chrome">{windowControls}</div>
         <Card className="player-card">
           <div className="player-header">
             <div className="player-kicker">Security</div>
@@ -1609,22 +1626,7 @@ export function App() {
               type="text"
               onClick={() => setSettingsModalOpen(true)}
             />
-            <div className="player-window-controls" aria-label="窗口控制">
-              <Button
-                aria-label="最小化窗口"
-                className="player-window-control"
-                icon={<MinusOutlined />}
-                type="text"
-                onClick={() => void api.minimizeWindow()}
-              />
-              <Button
-                aria-label="关闭窗口"
-                className="player-window-control player-window-control--close"
-                icon={<CloseOutlined />}
-                type="text"
-                onClick={() => void api.closeWindow()}
-              />
-            </div>
+            {windowControls}
           </div>
         </div>
 
