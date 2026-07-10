@@ -987,9 +987,9 @@ export function App() {
 
   async function restoreSession() {
     try {
+      await loadSavedLogin();
       const restored = await window.playerApi.restoreSession();
       if (!restored) {
-        await loadSavedLogin();
         setMatchResult(null);
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
@@ -1020,7 +1020,6 @@ export function App() {
       void refreshRankmeScore();
     } catch (error) {
       message.error(error instanceof Error ? error.message : "恢复会话失败");
-      await loadSavedLogin();
       setMatchResult(null);
       setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
