@@ -1,4 +1,4 @@
-import { DashboardOutlined, FileTextOutlined, SafetyCertificateOutlined, SettingOutlined, TeamOutlined, ToolOutlined } from "@ant-design/icons";
+import { DashboardOutlined, FileTextOutlined, SafetyCertificateOutlined, SettingOutlined, TeamOutlined } from "@ant-design/icons";
 import { Layout, Menu, Space, Tag, Typography } from "antd";
 import type { ReactNode } from "react";
 import type { MatchmakingOccupancy, ServiceStatus } from "../../../shared/types.js";
@@ -6,7 +6,6 @@ import type { MatchmakingOccupancy, ServiceStatus } from "../../../shared/types.
 const menuItems = [
   { key: "overview", icon: <DashboardOutlined />, label: "概览" },
   { key: "accounts", icon: <TeamOutlined />, label: "账号" },
-  { key: "diagnostics", icon: <ToolOutlined />, label: "诊断" },
   { key: "logs", icon: <FileTextOutlined />, label: "日志" },
   { key: "settings", icon: <SettingOutlined />, label: "设置" },
 ];

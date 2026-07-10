@@ -1,9 +1,9 @@
 import type { AccountRole } from "../../accounts/accountTypes.js";
+import type { ActivityLogInput } from "../../shared/activityLog.js";
 
 export type { AccountRole } from "../../accounts/accountTypes.js";
+export type { LogLevel, LogSource } from "../../shared/activityLog.js";
 export type ServiceState = "stopped" | "starting" | "running" | "stopping" | "failed";
-export type LogLevel = "info" | "warn" | "error" | "debug";
-export type DiagnosticStatus = "pass" | "warn" | "fail" | "unavailable";
 
 export interface ManagerConfig {
   host: string;
@@ -30,19 +30,9 @@ export interface MatchmakingOccupancy {
   activeCount: number;
 }
 
-export interface LogEntry {
+export interface LogEntry extends Omit<ActivityLogInput, "timestamp"> {
   id: string;
   timestamp: string;
-  level: LogLevel;
-  source: "manager" | "server" | "diagnostics";
-  message: string;
-}
-export interface DiagnosticResult {
-  id: string;
-  label: string;
-  status: DiagnosticStatus;
-  summary: string;
-  detail?: string;
 }
 
 export interface BootstrapAdminInput {

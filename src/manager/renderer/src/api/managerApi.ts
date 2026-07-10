@@ -1,4 +1,4 @@
-import type { AccountView, BootstrapAdminInput, CreateAccountInput, DiagnosticResult, LogEntry, LoginResult, ManagerConfig, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
+import type { AccountView, BootstrapAdminInput, CreateAccountInput, LogEntry, LoginResult, ManagerConfig, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
 import type { UpdateCheckResult } from "../../../../desktop/updateTypes.js";
 
 export type { UpdateCheckResult };
@@ -12,7 +12,6 @@ export const managerApi = {
   stopService: () => window.managerApi.stopService() as Promise<ServiceStatus>,
   restartService: () => window.managerApi.restartService() as Promise<ServiceStatus>,
   writeBootstrap: (input: BootstrapAdminInput) => window.managerApi.writeBootstrap(input) as Promise<string>,
-  runDiagnostics: (input: unknown) => window.managerApi.runDiagnostics(input) as Promise<DiagnosticResult[]>,
   login: (username: string, password: string) => window.managerApi.login(username, password) as Promise<LoginResult>,
   loadSavedLogin: () => window.managerApi.loadSavedLogin() as Promise<SavedLoginCredentials | null>,
   changePassword: (currentPassword: string, newPassword: string) => window.managerApi.changePassword(currentPassword, newPassword) as Promise<void>,
@@ -33,5 +32,7 @@ export const accountApi = {
 export const logApi = {
   recent: () => window.managerApi.recentLogs() as Promise<LogEntry[]>,
   listFiles: () => window.managerApi.listLogFiles() as Promise<string[]>,
-  readFile: (name: string) => window.managerApi.readLogFile(name) as Promise<string>,
+  readFile: (name: string) => window.managerApi.readLogFile(name) as Promise<LogEntry[]>,
+  onAppended: (callback: (entry: LogEntry) => void) => window.managerApi.onLogAppended((entry) => callback(entry as LogEntry)),
+  removeAppendedListener: () => window.managerApi.removeLogAppendedListener(),
 };

@@ -6,7 +6,6 @@ import type { ManagedServiceProcess } from "./serviceProcess.js";
 import type { AccountView, CreateAccountInput, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../shared/types.js";
 import { ServiceApiClient } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
-import { runLocalDiagnostics } from "./diagnostics.js";
 import { delay } from "../../shared/async.js";
 import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
 import { AccountService } from "../../accounts/accountService.js";
@@ -15,6 +14,7 @@ import { JsonAccountRepository } from "../../accounts/accountRepository.js";
 import type { AccountRecord } from "../../accounts/accountTypes.js";
 import { JsonSessionRepository } from "../../auth/sessionRepository.js";
 import { SessionService } from "../../auth/sessionService.js";
+import type { ActivityLogInput, LogActor } from "../../shared/activityLog.js";
 
 export interface IpcDeps {
   configStore: FileConfigStore;
@@ -32,6 +32,15 @@ const STARTUP_POLL_INTERVAL_MS = 250;
 
 export function registerManagerIpc(deps: IpcDeps): void {
   let offlineAccounts: { filePath: string; accounts: AccountService; sessions: SessionService } | undefined;
+  let managerActor: LogActor | undefined;
+
+  async function logActivity(input: ActivityLogInput): Promise<void> {
+    try {
+      await deps.logStore.append(input);
+    } catch (error) {
+      console.error("Failed to write manager activity log", error);
+    }
+  }
 
   async function getOfflineAccounts(): Promise<typeof offlineAccounts> {
     if (deps.service.status().state !== "stopped") return undefined;
@@ -57,14 +66,14 @@ export function registerManagerIpc(deps: IpcDeps): void {
     return offlineAccounts;
   }
 
-  async function requireOfflineAdmin(offline: NonNullable<typeof offlineAccounts>): Promise<string> {
+  async function requireOfflineAdmin(offline: NonNullable<typeof offlineAccounts>): Promise<AccountRecord> {
     const token = deps.getApiClient().sessionToken();
     if (!token) throw new Error("Manager login required");
     const session = await offline.sessions.verifyToken(token);
     if (!session) throw new Error("Manager login required");
     const admin = await offline.accounts.getById(session.accountId);
     if (!admin || admin.role !== "admin" || !admin.enabled) throw new Error("Manager login required");
-    return admin.id;
+    return admin;
   }
 
   async function listAccounts(): Promise<AccountView[]> {
@@ -77,42 +86,53 @@ export function registerManagerIpc(deps: IpcDeps): void {
   async function createAccount(input: CreateAccountInput): Promise<AccountView> {
     const offline = await getOfflineAccounts();
     if (!offline) return deps.getApiClient().createAccount(input);
-    await requireOfflineAdmin(offline);
-    return toAccountView(await offline.accounts.createAccount({ ...input, role: "player", mustChangePassword: false }));
+    const admin = await requireOfflineAdmin(offline);
+    const account = toAccountView(await offline.accounts.createAccount({ ...input, role: "player", mustChangePassword: false }));
+    await logActivity({ source: "account", level: "info", message: "离线创建账号成功", actor: toLogActor(admin), context: { targetId: account.id, targetUsername: account.username } });
+    return account;
   }
 
   async function updateAccount(id: string, input: UpdateAccountInput): Promise<AccountView> {
     const offline = await getOfflineAccounts();
     if (!offline) return deps.getApiClient().updateAccount(id, input);
-    const adminId = await requireOfflineAdmin(offline);
-    if (id === adminId && input.enabled === false) throw new Error("Cannot disable current admin");
-    return toAccountView(await offline.accounts.updateAccount(id, input));
+    const admin = await requireOfflineAdmin(offline);
+    if (id === admin.id && input.enabled === false) throw new Error("Cannot disable current admin");
+    const account = toAccountView(await offline.accounts.updateAccount(id, input));
+    await logActivity({ source: "account", level: "info", message: "离线修改账号成功", actor: toLogActor(admin), context: { targetId: account.id, targetUsername: account.username } });
+    return account;
   }
 
   async function resetPassword(id: string, password: string): Promise<AccountView> {
     const offline = await getOfflineAccounts();
     if (!offline) return deps.getApiClient().resetPassword(id, password);
-    await requireOfflineAdmin(offline);
+    const admin = await requireOfflineAdmin(offline);
     const account = await offline.accounts.resetPassword(id, password);
     await offline.sessions.revokeSessionsForAccount(id);
-    return toAccountView(account);
+    const view = toAccountView(account);
+    await logActivity({ source: "account", level: "info", message: "离线重置账号密码成功", actor: toLogActor(admin), context: { targetId: view.id, targetUsername: view.username } });
+    return view;
   }
 
   async function deleteAccount(id: string): Promise<void> {
     const offline = await getOfflineAccounts();
     if (!offline) return deps.getApiClient().deleteAccount(id);
-    const adminId = await requireOfflineAdmin(offline);
-    if (id === adminId) throw new Error("Cannot delete current admin");
+    const admin = await requireOfflineAdmin(offline);
+    if (id === admin.id) throw new Error("Cannot delete current admin");
+    const target = await offline.accounts.getById(id);
     try {
       await offline.sessions.revokeSessionsForAccount(id);
     } catch {
       // Deleting the account makes any leftover sessions fail account lookup.
     }
     await offline.accounts.deleteAccount(id);
+    await logActivity({ source: "account", level: "info", message: "离线删除账号成功", actor: toLogActor(admin), context: { targetId: id, targetUsername: target?.username ?? "unknown" } });
   }
 
   ipcMain.handle("config:load", () => deps.configStore.load());
-  ipcMain.handle("config:save", (_event, config) => deps.configStore.save(config));
+  ipcMain.handle("config:save", async (_event, config) => {
+    await deps.configStore.save(config);
+    await logActivity({ source: "manager", level: "info", message: "更新管理器设置", actor: managerActor });
+  });
   ipcMain.handle("config:selectServerRoot", async () => {
     const result = await dialog.showOpenDialog({
       title: "Select CSGO Dedicated Server directory",
@@ -142,11 +162,15 @@ export function registerManagerIpc(deps: IpcDeps): void {
     deps.setApiClient(apiClient);
     return waitForServiceReady(deps.service, apiClient);
   });
-  ipcMain.handle("bootstrap:write", async (_event, input) => writeBootstrapAdminFile((await deps.configStore.load()).dataDir, input));
-  ipcMain.handle("diagnostics:run", (_event, input) => runLocalDiagnostics(input));
+  ipcMain.handle("bootstrap:write", async (_event, input) => {
+    const filePath = await writeBootstrapAdminFile((await deps.configStore.load()).dataDir, input);
+    await logActivity({ source: "account", level: "info", message: "写入初始管理员配置", actor: managerActor, context: { filePath } });
+    return filePath;
+  });
   ipcMain.handle("auth:login", async (_event, username: string, password: string) => {
     try {
       const result = await deps.getApiClient().login(username, password);
+      managerActor = { accountId: result.account.id, username: result.account.username, role: result.account.role, ...(result.account.steam64 ? { steam64: result.account.steam64 } : {}) };
       await deps.saveSavedLogin({ username, password });
       return result;
     } catch (error) {
@@ -154,7 +178,10 @@ export function registerManagerIpc(deps: IpcDeps): void {
       throw error;
     }
   });
-  ipcMain.handle("auth:logout", () => deps.getApiClient().logout());
+  ipcMain.handle("auth:logout", async () => {
+    await deps.getApiClient().logout();
+    managerActor = undefined;
+  });
   ipcMain.handle("auth:changePassword", async (_event, currentPassword: string, newPassword: string) => {
     await deps.getApiClient().changePassword(currentPassword, newPassword);
     const savedLogin = await deps.loadSavedLogin();
@@ -183,6 +210,10 @@ export function registerManagerIpc(deps: IpcDeps): void {
 function toAccountView(account: AccountRecord): AccountView {
   const { passwordHash: _passwordHash, lastLoginAt, ...view } = account;
   return { ...view, lastLoginAt: lastLoginAt ?? undefined };
+}
+
+function toLogActor(account: AccountRecord): LogActor {
+  return { accountId: account.id, username: account.username, role: account.role, ...(account.steam64 ? { steam64: account.steam64 } : {}) };
 }
 
 async function statusWithExternalProbe(deps: IpcDeps): Promise<ServiceStatus> {

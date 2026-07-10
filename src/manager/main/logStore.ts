@@ -1,25 +1,40 @@
 import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
 import { mkdir, readdir, readFile, appendFile } from "node:fs/promises";
 import path from "node:path";
-import type { LogEntry, LogLevel } from "../shared/types.js";
+import type { ActivityLogInput } from "../../shared/activityLog.js";
+import type { LogEntry } from "../shared/types.js";
 import { redactSensitiveText } from "./redact.js";
 
-export class FileLogStore {
+export class FileLogStore extends EventEmitter {
   private entries: LogEntry[] = [];
+  private writeQueue = Promise.resolve();
 
-  constructor(private readonly logDir: string, private readonly maxRecent = 500) {}
+  constructor(private readonly logDir: string, private readonly maxRecent = 2_000) {
+    super();
+  }
 
-  async append(source: LogEntry["source"], level: LogLevel, message: string): Promise<LogEntry> {
+  append(input: ActivityLogInput): Promise<LogEntry> {
     const entry: LogEntry = {
+      ...input,
       id: randomUUID(),
-      timestamp: new Date().toISOString(),
-      source,
-      level,
-      message: redactSensitiveText(message),
+      timestamp: input.timestamp ?? new Date().toISOString(),
+      message: redactSensitiveText(input.message.trim()),
+      ...(input.context ? {
+        context: Object.fromEntries(Object.entries(input.context).map(([key, value]) => [
+          key,
+          typeof value === "string" ? redactSensitiveText(value) : value,
+        ])),
+      } : {}),
     };
-    await this.writeEntry(entry);
-    this.entries = [...this.entries, entry].slice(-this.maxRecent);
-    return entry;
+    const operation = this.writeQueue.then(async () => {
+      await this.writeEntry(entry);
+      this.entries = [...this.entries, entry].slice(-this.maxRecent);
+      this.emit("entry", entry);
+      return entry;
+    });
+    this.writeQueue = operation.then(() => undefined, () => undefined);
+    return operation;
   }
 
   recent(): LogEntry[] {
@@ -35,11 +50,29 @@ export class FileLogStore {
     }
   }
 
-  async readFile(name: string): Promise<string> {
+  async readFile(name: string): Promise<LogEntry[]> {
     if (name.includes("..") || path.basename(name) !== name || !name.endsWith(".log")) {
       throw new Error("invalid log file name");
     }
-    return readFile(path.join(this.logDir, name), "utf8");
+    await this.writeQueue;
+    const content = await readFile(path.join(this.logDir, name), "utf8");
+    return content
+      .split(/\r?\n/u)
+      .filter(Boolean)
+      .flatMap((line) => {
+        try {
+          const entry = JSON.parse(line) as Partial<LogEntry>;
+          return typeof entry.id === "string"
+            && typeof entry.timestamp === "string"
+            && typeof entry.source === "string"
+            && typeof entry.level === "string"
+            && typeof entry.message === "string"
+            ? [entry as LogEntry]
+            : [];
+        } catch {
+          return [];
+        }
+      });
   }
 
   private async writeEntry(entry: LogEntry): Promise<void> {

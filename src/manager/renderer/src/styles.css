@@ -29,3 +29,32 @@ body { overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", Arial, sans
 .manager-status-tag { margin-inline-end: 0; display: inline-flex; align-items: center; height: 22px; line-height: 20px; }
 .status-url { display: inline-flex; align-items: center; max-width: min(42vw, 520px); height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 22px; }
 .error-text { padding: 10px 12px; border-radius: 6px; background: #fef2f2; color: #991b1b; overflow-wrap: anywhere; }
+.logs-page { height: calc(100vh - 84px); min-height: 0; display: flex; flex-direction: column; }
+.logs-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.logs-header .page-title { flex: 0 0 auto; margin: 0; }
+.logs-toolbar { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.logs-file-select { width: 164px; }
+.logs-level-select { width: 94px; }
+.logs-source-select { width: 112px; }
+.logs-search { width: 210px; }
+.logs-error { flex: 0 0 auto; margin-bottom: 10px; }
+.logs-viewer { flex: 1; min-height: 0; overflow: auto; border: 1px solid #3c3c3c; border-radius: 4px; background: #1e1e1e; color: #d4d4d4; font: 12px/20px Consolas, "Cascadia Mono", monospace; letter-spacing: 0; }
+.log-line { display: grid; grid-template-columns: 104px 46px 82px 132px max-content max-content; min-width: max-content; height: 20px; white-space: nowrap; }
+.log-line:hover { background: #2a2d2e; }
+.log-line > span { min-width: 0; padding: 0 6px; overflow: hidden; text-overflow: ellipsis; }
+.log-time { color: #858585; }
+.log-level { font-weight: 700; }
+.log-source { color: #9cdcfe; }
+.log-actor { color: #dcdcaa; }
+.log-message { color: #d4d4d4; }
+.log-context { color: #808080; }
+.log-line--debug .log-level { color: #858585; }
+.log-line--info .log-level { color: #75beff; }
+.log-line--warn .log-level { color: #cca700; }
+.log-line--error .log-level { color: #f48771; }
+.logs-empty { padding: 8px 10px; color: #858585; }
+@media (max-width: 1180px) {
+  .logs-header { align-items: flex-start; }
+  .logs-toolbar { flex-wrap: wrap; }
+  .logs-search { width: 180px; }
+}

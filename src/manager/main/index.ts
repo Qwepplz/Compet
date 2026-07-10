@@ -50,16 +50,25 @@ registerManagerIpc({
   setApiClient: (client) => { apiClient = client; },
 });
 
-function appendLog(...args: Parameters<FileLogStore["append"]>): void {
-  void logStore.append(...args).catch((error) => console.error("Failed to write manager log", error));
+function appendLog(input: Parameters<FileLogStore["append"]>[0]): void {
+  void logStore.append(input).catch((error) => console.error("Failed to write manager log", error));
 }
 
-service.on("log", (source, level, message) => appendLog(source, level, message));
-service.on("status", (status) => appendLog("manager", "info", `service state ${status.state}`));
+service.on("log", (entry) => appendLog(entry));
+service.on("status", (status) => appendLog({
+  source: "manager",
+  level: status.state === "failed" ? "error" : "info",
+  message: `服务状态变更为 ${status.state}`,
+  context: { state: status.state, baseUrl: status.baseUrl, pid: status.pid ?? null, lastError: status.lastError ?? null },
+}));
 
 let isQuitPromptOpen = false;
 let isQuitConfirmed = false;
 let mainWindow: BrowserWindow | undefined;
+
+logStore.on("entry", (entry) => {
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("logs:appended", entry);
+});
 
 async function createWindow(): Promise<void> {
   appendBootLog(bootLogFile, "creating BrowserWindow");
@@ -82,7 +91,7 @@ async function createWindow(): Promise<void> {
   });
   win.webContents.on("render-process-gone", (_event, details) => {
     appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`);
-    appendLog("manager", "error", `renderer process gone: ${details.reason}`);
+    appendLog({ source: "manager", level: "error", message: `渲染进程退出: ${details.reason}`, context: { exitCode: details.exitCode } });
   });
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`);
@@ -116,7 +125,7 @@ app.whenReady().then(createWindow).catch((error) => {
   const message = error instanceof Error ? error.stack ?? error.message : String(error);
   console.error("Failed to start Compet Server Manager", message);
   appendBootLog(bootLogFile, "startup failed", error);
-  appendLog("manager", "error", `startup failed: ${message}`);
+  appendLog({ source: "manager", level: "error", message: `管理器启动失败: ${message}` });
   dialog.showErrorBox("Compet Server Manager 启动失败", message);
   app.exit(1);
 });

@@ -8,6 +8,7 @@ import { registerRoutes, type RouteDeps } from "../api/routes.js";
 import type { PresenceService } from "../presence/presenceService.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import { registerWebSocket } from "../realtime/registerWebSocket.js";
+import { installHttpActivityLogging, logRealtimeEvent, writeActivityLog } from "./activityLogger.js";
 
 export interface CreateServerOptions extends RouteDeps {
   https?: ServerOptions;
@@ -20,9 +21,15 @@ export async function createServer(options: CreateServerOptions) {
   const app = Fastify(fastifyOptions as any);
   await app.register(websocket);
   installApiRateLimit(app);
+  installHttpActivityLogging(app);
+  const unsubscribeActivityEvents = options.events?.subscribe(logRealtimeEvent);
+  app.addHook("onClose", (_instance, done) => {
+    unsubscribeActivityEvents?.();
+    done();
+  });
   await registerRoutes(app, options);
   await registerWebSocket(app, options);
-  app.setErrorHandler((error, _request, reply) => {
+  app.setErrorHandler((error, request, reply) => {
     if (error instanceof HttpError) {
       reply.status(error.statusCode).send({ error: { code: error.code, message: error.message } });
       return;
@@ -31,6 +38,16 @@ export async function createServer(options: CreateServerOptions) {
       reply.status(400).send({ error: { code: "bad_request", message: "Invalid request" } });
       return;
     }
+    writeActivityLog({
+      source: "server",
+      level: "error",
+      message: `未处理的服务端异常: ${error instanceof Error ? error.message : String(error)}`,
+      context: {
+        method: request.method,
+        requestId: request.id,
+        ...(request.routeOptions.url ? { route: request.routeOptions.url } : {}),
+      },
+    });
     reply.status(500).send({ error: { code: "internal_error", message: "Internal server error" } });
   });
   return app;

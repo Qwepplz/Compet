@@ -11,7 +11,6 @@ export const managerApi = {
   stopService: () => invoke("service:stop"),
   restartService: () => invoke("service:restart"),
   writeBootstrap: (input: unknown) => invoke("bootstrap:write", input),
-  runDiagnostics: (input: unknown) => invoke("diagnostics:run", input),
   login: (username: string, password: string) => invoke("auth:login", username, password),
   loadSavedLogin: () => invoke("credentials:load"),
   logout: () => invoke("auth:logout"),
@@ -25,6 +24,14 @@ export const managerApi = {
   recentLogs: () => invoke("logs:recent"),
   listLogFiles: () => invoke("logs:listFiles"),
   readLogFile: (name: string) => invoke("logs:readFile", name),
+  onLogAppended: (callback: (entry: unknown) => void) => {
+    ipcRenderer.removeAllListeners("logs:appended");
+    const listener = (_event: Electron.IpcRendererEvent, entry: unknown) => callback(entry);
+    ipcRenderer.on("logs:appended", listener);
+  },
+  removeLogAppendedListener: () => {
+    ipcRenderer.removeAllListeners("logs:appended");
+  },
   getVersion: (): Promise<string> => invoke("updates:version"),
   checkUpdate: () => invoke("updates:check"),
   installUpdate: () => invoke("updates:install"),

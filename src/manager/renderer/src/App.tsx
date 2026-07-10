@@ -6,7 +6,6 @@ import { AppShell } from "./components/AppShell.js";
 import { AccountsPage } from "./pages/AccountsPage.js";
 import { BootstrapPage } from "./pages/BootstrapPage.js";
 import { ChangePasswordPage } from "./pages/ChangePasswordPage.js";
-import { DiagnosticsPage } from "./pages/DiagnosticsPage.js";
 import { LoginPage } from "./pages/LoginPage.js";
 import { LogsPage } from "./pages/LogsPage.js";
 import { OverviewPage } from "./pages/OverviewPage.js";
@@ -212,7 +211,6 @@ export function App() {
         <OverviewPage status={status} onStart={startService} onStop={stopService} onRestart={restartService} />
       )}
       {page === "accounts" && <AccountsPage />}
-      {page === "diagnostics" && <DiagnosticsPage />}
       {page === "logs" && <LogsPage />}
       {page === "settings" && <SettingsPage />}
     </AppShell>

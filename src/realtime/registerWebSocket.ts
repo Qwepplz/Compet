@@ -8,6 +8,7 @@ import type { PresenceService, PresenceSummary } from "../presence/presenceServi
 import type { RealtimeEventBus } from "./eventBus.js";
 import { executeRealtimeCommand, parseRealtimeCommand, type RealtimeCommandMatchmaking } from "./realtimeCommands.js";
 import { RealtimeSocketRegistry } from "./realtimeSocketRegistry.js";
+import { accountActor, logRealtimeCommand, writeActivityLog } from "../server/activityLogger.js";
 
 export interface WebSocketDeps {
   accounts: AccountService;
@@ -42,12 +43,20 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
     const accountPromise = authorizeWebSocket(token, deps).catch(() => undefined);
     let authorizationCheck: ReturnType<typeof setInterval> | undefined;
     let registeredAccountId: string | undefined;
+    let registeredAccount: AccountRecord | undefined;
     const cleanup = () => {
       sockets.unregister(socket);
+      let connectionCount: number | null = null;
       if (registeredAccountId && deps.presence) {
-        void publishPresenceUpdated("disconnect", deps, deps.presence.unregister(registeredAccountId));
-        registeredAccountId = undefined;
+        const summary = deps.presence.unregister(registeredAccountId);
+        connectionCount = summary.connectionCount;
+        void publishPresenceUpdated("disconnect", deps, summary);
       }
+      if (registeredAccount) {
+        writeActivityLog({ source: "realtime", level: "info", message: "断开实时连接", actor: accountActor(registeredAccount), context: { ip: request.ip, connectionCount } });
+      }
+      registeredAccountId = undefined;
+      registeredAccount = undefined;
       if (authorizationCheck) {
         clearInterval(authorizationCheck);
         authorizationCheck = undefined;
@@ -55,16 +64,22 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
     };
 
     socket.on("close", cleanup);
-    socket.on("error", cleanup);
+    socket.on("error", (error) => {
+      if (registeredAccount) {
+        writeActivityLog({ source: "realtime", level: "error", message: `实时连接错误: ${error.message}`, actor: accountActor(registeredAccount), context: { ip: request.ip } });
+      }
+      cleanup();
+    });
 
     socket.on("message", async (data) => {
       const account = await accountPromise;
       if (!account) return;
-      await handleMessage(socket, data, account.id, deps);
+      await handleMessage(socket, data, account, deps);
     });
 
     void accountPromise.then((account) => {
       if (!account) {
+        writeActivityLog({ source: "realtime", level: "warn", message: "实时连接鉴权失败", context: { ip: request.ip } });
         closeUnauthorized(socket);
         return;
       }
@@ -72,17 +87,28 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       if (socket.readyState !== SOCKET_OPEN) return;
       authorizationCheck = setInterval(() => {
         void authorizeWebSocket(token, deps).then((currentAccount) => {
-          if (!currentAccount || currentAccount.id !== account.id) closeUnauthorized(socket);
-        }).catch(() => closeUnauthorized(socket));
+          if (!currentAccount || currentAccount.id !== account.id) {
+            writeActivityLog({ source: "realtime", level: "warn", message: "实时连接重新鉴权失败", actor: accountActor(account), context: { ip: request.ip } });
+            closeUnauthorized(socket);
+          }
+        }).catch((error) => {
+          writeActivityLog({ source: "realtime", level: "error", message: `实时连接重新鉴权异常: ${error instanceof Error ? error.message : String(error)}`, actor: accountActor(account), context: { ip: request.ip } });
+          closeUnauthorized(socket);
+        });
       }, 5_000);
       sockets.register(account.id, socket);
+      registeredAccount = account;
       sendJson(socket, { type: "hello", accountId: account.id, serverTime: now() });
       sendJson(socket, { type: "server_status", status: "online", serverTime: now() });
       replayEvents(socket, account.id, request.query.lastSeq, deps);
+      let connectionCount = 1;
       if (deps.presence) {
         registeredAccountId = account.id;
-        void publishPresenceUpdated("connect", deps, deps.presence.register(account.id));
+        const summary = deps.presence.register(account.id);
+        connectionCount = summary.connectionCount;
+        void publishPresenceUpdated("connect", deps, summary);
       }
+      writeActivityLog({ source: "realtime", level: "info", message: "建立实时连接", actor: accountActor(account), context: { ip: request.ip, connectionCount } });
     });
   });
 }
@@ -101,11 +127,12 @@ async function authorizeWebSocket(
   return account;
 }
 
-async function handleMessage(socket: WebSocket, data: RawData, accountId: string, deps: WebSocketDeps): Promise<void> {
+async function handleMessage(socket: WebSocket, data: RawData, account: AccountRecord, deps: WebSocketDeps): Promise<void> {
   let message: unknown;
   try {
     message = JSON.parse(data.toString());
   } catch {
+    writeActivityLog({ source: "realtime", level: "warn", message: "发送了无效的实时消息", actor: accountActor(account) });
     sendJson(socket, { type: "error", code: "invalid_message", message: "Invalid JSON message" });
     return;
   }
@@ -117,8 +144,12 @@ async function handleMessage(socket: WebSocket, data: RawData, accountId: string
 
   const command = parseRealtimeCommand(message);
   if (command) {
-    sendJson(socket, withCommandServerNow(await executeRealtimeCommand(command, accountId, deps)));
+    const ack = await executeRealtimeCommand(command, account.id, deps);
+    logRealtimeCommand(account, command, ack);
+    sendJson(socket, withCommandServerNow(ack));
+    return;
   }
+  writeActivityLog({ source: "realtime", level: "warn", message: "发送了未知的实时命令", actor: accountActor(account) });
 }
 
 function replayEvents(socket: WebSocket, accountId: string, lastSeq: string | undefined, deps: WebSocketDeps): void {

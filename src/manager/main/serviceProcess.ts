@@ -3,6 +3,7 @@ import { spawn as nodeSpawn, type ChildProcessByStdio } from "node:child_process
 import path from "node:path";
 import type { Readable } from "node:stream";
 import type { ManagerConfig, ServiceStatus } from "../shared/types.js";
+import { isActivityLogInput, SERVER_ACTIVITY_PREFIX, type ActivityLogInput } from "../../shared/activityLog.js";
 
 type SpawnFn = typeof nodeSpawn;
 type ManagedChildProcess = ChildProcessByStdio<null, Readable, Readable>;
@@ -13,6 +14,8 @@ export class ManagedServiceProcess extends EventEmitter {
   private stopPromise?: Promise<ServiceStatus>;
   private readonly stoppingChildren = new WeakSet<ManagedChildProcess>();
   private readonly stderrBuffers = new WeakMap<ManagedChildProcess, string>();
+  private readonly stdoutLineBuffers = new WeakMap<ManagedChildProcess, string>();
+  private readonly stderrLineBuffers = new WeakMap<ManagedChildProcess, string>();
   private current: ServiceStatus = { state: "stopped", baseUrl: "https://127.0.0.1:8443" };
 
   constructor(private readonly cwd: string, private readonly spawnFn: SpawnFn = nodeSpawn) {
@@ -70,13 +73,15 @@ export class ManagedServiceProcess extends EventEmitter {
   }
 
   private bindChild(child: ManagedChildProcess, config: ManagerConfig): void {
-    child.stdout.on("data", (chunk) => this.emit("log" satisfies ServiceEvents, "server", "info", String(chunk)));
+    child.stdout.on("data", (chunk) => this.consumeLines(this.stdoutLineBuffers, child, String(chunk), (line) => this.emitStdoutLine(line)));
     child.stderr.on("data", (chunk) => {
       const text = String(chunk);
       this.appendStderr(child, text);
-      this.emit("log" satisfies ServiceEvents, "server", "error", text);
+      this.consumeLines(this.stderrLineBuffers, child, text, (line) => this.emitLog({ source: "server", level: "error", message: line }));
     });
     child.on("exit", (code) => {
+      this.flushLines(this.stdoutLineBuffers, child, (line) => this.emitStdoutLine(line));
+      this.flushLines(this.stderrLineBuffers, child, (line) => this.emitLog({ source: "server", level: "error", message: line }));
       const wasStopping = this.stoppingChildren.has(child);
       if (this.child !== child) {
         return;
@@ -88,6 +93,40 @@ export class ManagedServiceProcess extends EventEmitter {
         this.setStatus({ state: "stopped", baseUrl: this.baseUrl(config) });
       }
     });
+  }
+
+  private emitStdoutLine(line: string): void {
+    if (!line.startsWith(SERVER_ACTIVITY_PREFIX)) {
+      this.emitLog({ source: "server", level: "info", message: line });
+      return;
+    }
+    try {
+      const input = JSON.parse(line.slice(SERVER_ACTIVITY_PREFIX.length));
+      this.emitLog(isActivityLogInput(input) ? input : { source: "server", level: "warn", message: "Invalid structured server log" });
+    } catch {
+      this.emitLog({ source: "server", level: "warn", message: "Failed to parse structured server log" });
+    }
+  }
+
+  private emitLog(input: ActivityLogInput): void {
+    if (input.message.trim()) this.emit("log" satisfies ServiceEvents, input);
+  }
+
+  private consumeLines(
+    buffers: WeakMap<ManagedChildProcess, string>,
+    child: ManagedChildProcess,
+    chunk: string,
+    emitLine: (line: string) => void,
+  ): void {
+    const parts = `${buffers.get(child) ?? ""}${chunk}`.split(/\r?\n/u);
+    buffers.set(child, parts.pop() ?? "");
+    for (const line of parts) emitLine(line);
+  }
+
+  private flushLines(buffers: WeakMap<ManagedChildProcess, string>, child: ManagedChildProcess, emitLine: (line: string) => void): void {
+    const line = buffers.get(child);
+    buffers.delete(child);
+    if (line) emitLine(line);
   }
 
   private baseUrl(config: ManagerConfig): string {
