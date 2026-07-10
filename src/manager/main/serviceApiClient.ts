@@ -26,6 +26,10 @@ export class ServiceApiClient {
     this.token = undefined;
   }
 
+  sessionToken(): string | undefined {
+    return this.token;
+  }
+
   async changePassword(currentPassword: string, newPassword: string): Promise<void> {
     await this.request("POST", "/auth/change-password", { currentPassword, newPassword });
   }
