@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { Alert, Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
+import { Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
 import { CloseOutlined, MinusOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
-import type { UpdateCheckResult } from "../../../desktop/updateTypes.js";
+import type { UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
 import type {
   PlayerFriendDto,
   PlayerFriendListDto,
@@ -67,7 +67,9 @@ const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], part
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
-let startupUpdateCheckStarted = false;
+const STARTUP_UPDATE_RETRY_COUNT = 5;
+const STARTUP_UPDATE_RETRY_DELAY_MS = 1_000;
+let startupInitializationStarted = false;
 
 function HistoryChartIcon() {
   return (
@@ -91,12 +93,6 @@ function SettingsToolIcon() {
 
 function waitForMatchmakingDelay(delayMs: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, delayMs));
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function getCurrentRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
@@ -309,6 +305,7 @@ function PartyInviteToasts({
 
 export function App() {
   const [loading, setLoading] = useState(true);
+  const [loadingMessage, setLoadingMessage] = useState("正在检查更新");
   const [activeView, setActiveView] = useState<PlayerView>("login");
   const [baseUrl, setBaseUrl] = useState(defaultBaseUrl);
   const [account, setAccount] = useState<AccountView | null>(null);
@@ -339,9 +336,6 @@ export function App() {
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState<number | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
-  const [checkingUpdate, setCheckingUpdate] = useState(false);
-  const [installingUpdate, setInstallingUpdate] = useState(false);
-  const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
@@ -375,9 +369,8 @@ export function App() {
 
   useEffect(() => {
     preloadMapImages();
-    void restoreSession();
     void window.playerApi.getVersion().then(setCurrentVersion);
-    void checkStartupUpdate();
+    void initializeStartup();
   }, []);
 
   useEffect(() => {
@@ -1027,8 +1020,6 @@ export function App() {
       setMatchHistoryPlayer(null);
       setRankmeScore(null);
       setActiveView("login");
-    } finally {
-      setLoading(false);
     }
   }
 
@@ -1190,42 +1181,36 @@ export function App() {
     }
   }
 
-  async function checkUpdate() {
-    setCheckingUpdate(true);
-    setUpdateResult(null);
-    try {
-      const result = await window.playerApi.checkUpdate() as UpdateCheckResult;
-      setUpdateResult(result);
-      message.success(result.updateAvailable ? "发现可用更新" : "当前已是最新版本");
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : "检查更新失败");
-    } finally {
-      setCheckingUpdate(false);
-    }
+  async function initializeStartup() {
+    if (startupInitializationStarted) return;
+    startupInitializationStarted = true;
+    const installing = await checkStartupUpdate();
+    if (installing) return;
+    await restoreSession();
+    setLoading(false);
   }
 
-  async function checkStartupUpdate() {
-    if (startupUpdateCheckStarted) return;
-    startupUpdateCheckStarted = true;
-    try {
-      const result = await window.playerApi.checkUpdate() as UpdateCheckResult;
-      if (!result.updateAvailable) return;
-      setUpdateResult(result);
-      message.info("发现可用更新");
-    } catch {
-      return;
-    }
-  }
+  async function checkStartupUpdate(): Promise<boolean> {
+    for (let retry = 0; retry <= STARTUP_UPDATE_RETRY_COUNT; retry += 1) {
+      setLoadingMessage("正在检查更新");
+      try {
+        const result = await window.playerApi.checkUpdate() as UpdateCheckResult;
+        if (!result.updateAvailable) return false;
 
-  async function installUpdate() {
-    setInstallingUpdate(true);
-    try {
-      await window.playerApi.installUpdate();
-      message.info("更新已下载，正在重启");
-    } catch (error) {
-      message.error(error instanceof Error ? error.message : "安装更新失败");
-      setInstallingUpdate(false);
+        setLoadingMessage("正在安装更新");
+        const installResult = await window.playerApi.installUpdate() as UpdateInstallResult;
+        if (installResult.installing) return true;
+        if (!installResult.updateAvailable) return false;
+      } catch {
+        // The next attempt handles transient update service and download failures.
+      }
+
+      if (retry < STARTUP_UPDATE_RETRY_COUNT) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, STARTUP_UPDATE_RETRY_DELAY_MS));
+      }
     }
+
+    return false;
   }
 
   async function searchFriends(query: string) {
@@ -1478,7 +1463,10 @@ export function App() {
   if (loading) {
     return (
       <div className="player-loading-screen">
-        <Spin size="large" />
+        <div className="player-loading-content">
+          <Spin size="large" />
+          <span>{loadingMessage}</span>
+        </div>
       </div>
     );
   }
@@ -1763,31 +1751,6 @@ export function App() {
                     <div className="player-settings-pane">
                       <div className="player-settings-update">
                         <div className="player-settings-version">当前版本：{currentVersion || "读取中"}</div>
-                        {updateResult?.updateAvailable === true ? (
-                          <Button
-                            type="primary"
-                            onClick={() => void installUpdate()}
-                            loading={installingUpdate}
-                            disabled={installingUpdate}
-                          >
-                            下载并安装
-                          </Button>
-                        ) : (
-                          <Button onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={checkingUpdate}>
-                            检查更新
-                          </Button>
-                        )}
-                        {updateResult ? (
-                          <Alert
-                            type={updateResult.updateAvailable ? "info" : "success"}
-                            showIcon
-                            message={
-                              updateResult.updateAvailable
-                                ? `发现 ${updateResult.latestVersion}，需更新 ${updateResult.changedFiles} 个文件，约 ${formatBytes(updateResult.changedBytes)}`
-                                : `当前版本 ${updateResult.currentVersion} 已是最新`
-                            }
-                          />
-                        ) : null}
                       </div>
                     </div>
                   ),

@@ -71,6 +71,14 @@ input {
   place-items: center;
 }
 
+.player-loading-content {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  color: #a8a8a8;
+  font-size: 13px;
+}
+
 .player-card {
   width: 100%;
   max-width: 460px;
