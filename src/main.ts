@@ -7,7 +7,6 @@ async function main(): Promise<void> {
   const address = await runtime.app.listen({ host: config.host, port: config.port });
 
   console.log(`Compet server listening at ${address}`);
-  console.log(`TLS certificate SHA-256 fingerprint: ${runtime.certificate.fingerprintSha256}`);
 }
 
 void main().catch((error) => {

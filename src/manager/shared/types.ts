@@ -23,8 +23,6 @@ export interface ServiceStatus {
   state: ServiceState;
   pid?: number;
   baseUrl: string;
-  version?: string;
-  certificateFingerprintSha256?: string;
   lastError?: string;
 }
 

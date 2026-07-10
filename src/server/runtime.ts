@@ -21,7 +21,7 @@ import { PresenceService } from "../presence/presenceService.js";
 import { RankmeScoreStore } from "../rankme/rankmeScoreStore.js";
 import { RealtimeEventBus } from "../realtime/eventBus.js";
 import { MatchRecordStore } from "../records/matchRecordStore.js";
-import { ensureServerCertificate, type ServerCertificate } from "../tls/certificateService.js";
+import { ensureServerCertificate } from "../tls/certificateService.js";
 import { createServer } from "./createServer.js";
 
 export interface Runtime {
@@ -29,7 +29,6 @@ export interface Runtime {
   accounts: AccountService;
   sessions: SessionService;
   auth: AuthService;
-  certificate: ServerCertificate;
   friends: FriendService;
   matchmaking: MatchmakingService;
   events: RealtimeEventBus;
@@ -134,7 +133,6 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     rankme,
     events,
     presence,
-    certificateFingerprintSha256: certificate.fingerprintSha256,
     https: { key: certificate.keyPem, cert: certificate.certPem },
   });
   app.addHook("onClose", (_instance, done) => {
@@ -145,7 +143,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     done();
   });
 
-  return { app, accounts, sessions, auth, certificate, friends, matchmaking: matchmakingService, events, records };
+  return { app, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
 }
 
 function resolveOfflineCleanupGraceMs(): number {

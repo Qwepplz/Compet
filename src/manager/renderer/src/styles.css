@@ -11,10 +11,6 @@ body { overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", Arial, sans
 .status-row { display: flex; gap: 8px; align-items: center; flex-wrap: nowrap; max-width: 100%; }
 .auth-page { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
 .auth-card { width: min(420px, 100%); }
-.overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
-.metric { padding: 14px; border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; }
-.metric-label { margin-bottom: 6px; color: #64748b; font-size: 12px; }
-.metric-value { overflow-wrap: anywhere; font-size: 15px; color: #172033; }
 .action-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .settings-page { min-height: calc(100vh - 84px); display: flex; flex-direction: column; }
 .settings-body { flex: 1; display: flex; min-height: 0; }

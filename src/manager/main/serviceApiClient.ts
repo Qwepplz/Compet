@@ -6,8 +6,8 @@ export class ServiceApiClient {
 
   constructor(private readonly baseUrl: string) {}
 
-  async serverInfo(): Promise<{ version: string; certificateFingerprintSha256: string; websocketPath: string }> {
-    return this.request("GET", "/server/info");
+  async health(): Promise<void> {
+    await this.request("GET", "/health");
   }
 
   async matchmakingOccupancy(): Promise<MatchmakingOccupancy> {

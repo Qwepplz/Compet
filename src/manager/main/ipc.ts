@@ -76,7 +76,6 @@ export function registerManagerIpc(deps: IpcDeps): void {
     }
   });
   ipcMain.handle("credentials:load", () => deps.loadSavedLogin());
-  ipcMain.handle("server:info", () => deps.getApiClient().serverInfo());
   ipcMain.handle("matchmaking:occupancy", () => deps.getApiClient().matchmakingOccupancy());
   ipcMain.handle("accounts:list", () => deps.getApiClient().accounts());
   ipcMain.handle("accounts:create", (_event, input) => deps.getApiClient().createAccount(input));
@@ -108,14 +107,12 @@ async function statusWithExternalProbe(deps: IpcDeps): Promise<ServiceStatus> {
 async function probeExternalService(config: ManagerConfig): Promise<{ apiClient: ServiceApiClient; status: ServiceStatus } | undefined> {
   const apiClient = new ServiceApiClient(baseUrl(config));
   try {
-    const info = await apiClient.serverInfo();
+    await apiClient.health();
     return {
       apiClient,
       status: {
         state: "running",
         baseUrl: baseUrl(config),
-        version: info.version,
-        certificateFingerprintSha256: info.certificateFingerprintSha256,
       },
     };
   } catch {
@@ -130,7 +127,7 @@ function baseUrl(config: ManagerConfig): string {
 
 export async function waitForServiceReady(
   service: Pick<ManagedServiceProcess, "status">,
-  apiClient: Pick<ServiceApiClient, "serverInfo">,
+  apiClient: Pick<ServiceApiClient, "health">,
   timeoutMs = STARTUP_TIMEOUT_MS,
   intervalMs = STARTUP_POLL_INTERVAL_MS,
 ): Promise<ReturnType<ManagedServiceProcess["status"]>> {
@@ -141,12 +138,8 @@ export async function waitForServiceReady(
     if (status.state === "failed" || status.state === "stopped") return status;
 
     try {
-      const info = await apiClient.serverInfo();
-      return {
-        ...status,
-        version: info.version,
-        certificateFingerprintSha256: info.certificateFingerprintSha256,
-      };
+      await apiClient.health();
+      return status;
     } catch {
       await delay(intervalMs);
     }

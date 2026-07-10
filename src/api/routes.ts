@@ -16,7 +16,6 @@ import { badRequest, conflict, forbidden, HttpError, notFound, tooManyRequests, 
 
 export interface RouteDeps {
   config?: ServerConfig;
-  certificateFingerprintSha256: string;
   accounts: AccountService;
   sessions: SessionService;
   auth: AuthService;
@@ -233,12 +232,6 @@ function mapFriendServiceError(error: unknown): never {
 
 export async function registerRoutes(app: FastifyInstance<any, any, any, any, any>, deps: RouteDeps): Promise<void> {
   app.get("/health", async () => ({ ok: true, serverTime: new Date().toISOString() }));
-
-  app.get("/server/info", async () => ({
-    version: "0.1.0",
-    certificateFingerprintSha256: deps.certificateFingerprintSha256,
-    websocketPath: "/ws",
-  }));
 
   app.get("/realtime/events", async (request) => {
     const auth = await authenticateRequest(request, deps);
