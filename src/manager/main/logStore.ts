@@ -4,23 +4,37 @@ import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { type ActivityLogInput, type LogActor } from "../../shared/activityLog.js";
 import type { LogEntry } from "../shared/types.js";
+import { SevenZipLogArchiver } from "./logArchiver.js";
 import { redactSensitiveText } from "./redact.js";
 
 type LogContext = NonNullable<LogEntry["context"]>;
 
+interface FileLogStoreOptions {
+  maxRecent?: number;
+  sevenZipPath?: string;
+  now?: () => Date;
+}
+
 export class FileLogStore extends EventEmitter {
   private entries: LogEntry[] = [];
   private writeQueue = Promise.resolve();
+  private readonly maxRecent: number;
+  private readonly now: () => Date;
+  private readonly archiver?: SevenZipLogArchiver;
+  private archiveAttemptedUtcDay?: string;
 
-  constructor(private readonly logDir: string, private readonly maxRecent = 2_000) {
+  constructor(private readonly logDir: string, options: FileLogStoreOptions = {}) {
     super();
+    this.maxRecent = options.maxRecent ?? 2_000;
+    this.now = options.now ?? (() => new Date());
+    if (options.sevenZipPath) this.archiver = new SevenZipLogArchiver(logDir, options.sevenZipPath);
   }
 
   append(input: ActivityLogInput): Promise<LogEntry> {
     const entry: LogEntry = {
       ...input,
       id: randomUUID(),
-      timestamp: input.timestamp ?? new Date().toISOString(),
+      timestamp: input.timestamp ?? this.now().toISOString(),
       message: redactSensitiveText(input.message.trim()),
       ...(input.context ? {
         context: Object.fromEntries(Object.entries(input.context).map(([key, value]) => [
@@ -30,7 +44,10 @@ export class FileLogStore extends EventEmitter {
       } : {}),
     };
     const operation = this.writeQueue.then(async () => {
+      const currentUtcDay = this.currentUtcDay();
+      if (this.archiveAttemptedUtcDay !== currentUtcDay) await this.archiveWithoutBlockingLogs(currentUtcDay);
       await this.writeEntry(entry);
+      if (entry.timestamp.slice(0, 10) < currentUtcDay) await this.archiveWithoutBlockingLogs(currentUtcDay);
       this.entries = [...this.entries, entry].slice(-this.maxRecent);
       this.emit("entry", entry);
       return entry;
@@ -39,8 +56,35 @@ export class FileLogStore extends EventEmitter {
     return operation;
   }
 
+  archiveExpiredLogs(): Promise<void> {
+    const operation = this.writeQueue.then(async () => {
+      const currentUtcDay = this.currentUtcDay();
+      try {
+        await this.archiver?.archiveBefore(currentUtcDay);
+      } finally {
+        this.archiveAttemptedUtcDay = currentUtcDay;
+      }
+    });
+    this.writeQueue = operation.then(() => undefined, () => undefined);
+    return operation;
+  }
+
   recent(): LogEntry[] {
     return [...this.entries];
+  }
+
+  private currentUtcDay(): string {
+    return this.now().toISOString().slice(0, 10);
+  }
+
+  private async archiveWithoutBlockingLogs(currentUtcDay: string): Promise<void> {
+    try {
+      await this.archiver?.archiveBefore(currentUtcDay);
+    } catch (error) {
+      console.error("Failed to archive expired logs", error);
+    } finally {
+      this.archiveAttemptedUtcDay = currentUtcDay;
+    }
   }
 
   private async writeEntry(entry: LogEntry): Promise<void> {

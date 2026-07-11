@@ -31,7 +31,11 @@ if (isPackagedRuntime) app.setPath("userData", managerUserDataPath);
 
 const configStore = new FileConfigStore(path.join(managerUserDataPath, "manager-config.json"), appRoot);
 const credentialStore = new SavedLoginStore(path.join(managerUserDataPath, "manager-login.json"));
-const logStore = new FileLogStore(path.join(appRoot, "server-data", "logs"));
+const logDir = path.join(appRoot, "server-data", "logs");
+const sevenZipPath = isPackagedRuntime
+  ? path.join(appRoot, "runtime", "7z", "7zr.exe")
+  : path.join(appRoot, "packaging", "server", "runtime", "7zr.exe");
+const logStore = new FileLogStore(logDir, { sevenZipPath });
 const service = new ManagedServiceProcess(appRoot);
 let apiClient = new ServiceApiClient("https://127.0.0.1:8443");
 
@@ -121,7 +125,16 @@ app.on("before-quit", async (event) => {
   }
 });
 
-app.whenReady().then(createWindow).catch((error) => {
+app.whenReady().then(async () => {
+  try {
+    await logStore.archiveExpiredLogs();
+  } catch (error) {
+    console.error("Failed to archive expired logs during startup", error);
+    appendBootLog(bootLogFile, "expired log archive failed", error);
+    appendLog({ source: "manager", level: "error", message: "Expired log archive failed", context: { errorCode: "log_archive_error" } });
+  }
+  await createWindow();
+}).catch((error) => {
   const message = error instanceof Error ? error.stack ?? error.message : String(error);
   console.error("Failed to start Compet Server Manager", message);
   appendBootLog(bootLogFile, "startup failed", error);

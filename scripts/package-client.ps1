@@ -33,18 +33,10 @@ function Get-ArchiveEntryPath {
 }
 
 function Get-SevenZipCommand {
-  if ($env:COMPET_7Z -and (Test-Path -LiteralPath $env:COMPET_7Z)) {
-    return $env:COMPET_7Z
-  }
   if (Test-Path -LiteralPath $repoLocal7z) {
     return $repoLocal7z
   }
-
-  foreach ($commandName in @("7zr.exe", "7z.exe", "7za.exe")) {
-    $command = Get-Command $commandName -ErrorAction SilentlyContinue
-    if ($command) { return $command.Source }
-  }
-  throw "7z executable not found. Set COMPET_7Z, place 7zr.exe at .local-tools\7zr.exe, or install 7z/7zr."
+  throw "Packaging 7z executable not found: $repoLocal7z"
 }
 
 function Get-PackageVersion {

@@ -16,6 +16,7 @@ $nodeRuntime = (Get-Command "node.exe" -ErrorAction Stop).Source
 $serverExe = "Compet Server Manager.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
+$logArchive7z = Join-Path $repo "packaging\server\runtime\7zr.exe"
 $packageVersion = [string]((Get-Content -LiteralPath (Join-Path $repo "packaging\server\app-package.json") -Raw | ConvertFrom-Json).version)
 
 function Get-ArchiveEntryPath {
@@ -34,18 +35,10 @@ function Get-ArchiveEntryPath {
 }
 
 function Get-SevenZipCommand {
-  if ($env:COMPET_7Z -and (Test-Path -LiteralPath $env:COMPET_7Z)) {
-    return $env:COMPET_7Z
-  }
   if (Test-Path -LiteralPath $repoLocal7z) {
     return $repoLocal7z
   }
-
-  foreach ($commandName in @("7zr.exe", "7z.exe", "7za.exe")) {
-    $command = Get-Command $commandName -ErrorAction SilentlyContinue
-    if ($command) { return $command.Source }
-  }
-  throw "7z executable not found. Set COMPET_7Z, place 7zr.exe at .local-tools\7zr.exe, or install 7z/7zr."
+  throw "Packaging 7z executable not found: $repoLocal7z"
 }
 
 function Get-PackageVersion {
@@ -284,6 +277,8 @@ Set-ExeVersionInfo `
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\node") -Force | Out-Null
 Copy-Item -LiteralPath $nodeRuntime -Destination (Join-Path $appRoot "runtime\node\node.exe")
+New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\7z") -Force | Out-Null
+Copy-Item -LiteralPath $logArchive7z -Destination (Join-Path $appRoot "runtime\7z\7zr.exe")
 
 New-Item -ItemType Directory -Path (Join-Path $appRoot "dist") -Force | Out-Null
 $serverBundle = Join-Path $appRoot "dist\main.cjs"
@@ -314,6 +309,7 @@ $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $electronRuntimeRoot "ffmpeg.dll")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "package.json")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "runtime\node\node.exe")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "runtime\7z\7zr.exe")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "dist\main.cjs")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\main\index.cjs")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\preload\index.js")),
