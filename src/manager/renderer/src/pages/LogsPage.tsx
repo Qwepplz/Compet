@@ -1,4 +1,4 @@
-import { CopyOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Input, Select, Tooltip, message } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogEntry, LogLevel, LogSource } from "../../../shared/types.js";
@@ -14,6 +14,7 @@ export function LogsPage() {
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<LogLevel>();
   const [source, setSource] = useState<LogSource>();
+  const [username, setUsername] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
   const requestIdRef = useRef(0);
@@ -57,13 +58,15 @@ export function LogsPage() {
 
   const visibleLogs = useMemo(() => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
+    const exactUsername = username.trim();
     return logs.filter((entry) => {
       if (level && entry.level !== level) return false;
       if (source && entry.source !== source) return false;
+      if (exactUsername && entry.actor?.username !== exactUsername) return false;
       if (!normalizedQuery) return true;
       return formatSearchText(entry).toLocaleLowerCase().includes(normalizedQuery);
     });
-  }, [level, logs, query, source]);
+  }, [level, logs, query, source, username]);
 
   const sources = useMemo(() => [...new Set(logs.map((entry) => entry.source))].sort(), [logs]);
 
@@ -71,11 +74,6 @@ export function LogsPage() {
     const viewer = viewerRef.current;
     if (viewer && followTailRef.current) viewer.scrollTop = viewer.scrollHeight;
   }, [visibleLogs]);
-
-  async function copyVisibleLogs() {
-    await navigator.clipboard.writeText(visibleLogs.map(formatLogLine).join("\n"));
-    message.success("已复制当前日志");
-  }
 
   return (
     <div className="logs-page">
@@ -114,15 +112,19 @@ export function LogsPage() {
           />
           <Input
             allowClear
+            placeholder="用户名"
+            value={username}
+            className="logs-username"
+            onChange={(event) => setUsername(event.target.value)}
+          />
+          <Input
+            allowClear
             prefix={<SearchOutlined />}
             placeholder="筛选日志"
             value={query}
             className="logs-search"
             onChange={(event) => setQuery(event.target.value)}
           />
-          <Tooltip title="复制当前日志">
-            <Button aria-label="复制当前日志" icon={<CopyOutlined />} disabled={visibleLogs.length === 0} onClick={() => void copyVisibleLogs()} />
-          </Tooltip>
           <Tooltip title="刷新">
             <Button aria-label="刷新" icon={<ReloadOutlined />} loading={loading} onClick={() => void load()} />
           </Tooltip>
@@ -178,8 +180,4 @@ function formatActorTitle(entry: LogEntry): string {
 
 function formatSearchText(entry: LogEntry): string {
   return [entry.timestamp, entry.level, entry.source, formatActorLabel(entry), entry.actor?.accountId, entry.actor?.steam64, entry.message, entry.context && formatContext(entry.context)].filter(Boolean).join(" ");
-}
-
-function formatLogLine(entry: LogEntry): string {
-  return [formatTime(entry.timestamp), entry.level.toUpperCase(), entry.source, formatActorLabel(entry), entry.message, entry.context && formatContext(entry.context)].filter(Boolean).join(" ");
 }

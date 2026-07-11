@@ -88,7 +88,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
     if (!offline) return deps.getApiClient().createAccount(input);
     const admin = await requireOfflineAdmin(offline);
     const account = toAccountView(await offline.accounts.createAccount({ ...input, role: "player", mustChangePassword: false }));
-    await logActivity({ source: "account", level: "info", message: "离线创建账号成功", actor: toLogActor(admin), context: { targetId: account.id, targetUsername: account.username } });
+    await logActivity({ source: "account", level: "info", message: "Offline account created", actor: toLogActor(admin), context: { targetId: account.id, targetUsername: account.username } });
     return account;
   }
 
@@ -98,7 +98,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
     const admin = await requireOfflineAdmin(offline);
     if (id === admin.id && input.enabled === false) throw new Error("Cannot disable current admin");
     const account = toAccountView(await offline.accounts.updateAccount(id, input));
-    await logActivity({ source: "account", level: "info", message: "离线修改账号成功", actor: toLogActor(admin), context: { targetId: account.id, targetUsername: account.username } });
+    await logActivity({ source: "account", level: "info", message: "Offline account updated", actor: toLogActor(admin), context: { targetId: account.id, targetUsername: account.username } });
     return account;
   }
 
@@ -109,7 +109,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
     const account = await offline.accounts.resetPassword(id, password);
     await offline.sessions.revokeSessionsForAccount(id);
     const view = toAccountView(account);
-    await logActivity({ source: "account", level: "info", message: "离线重置账号密码成功", actor: toLogActor(admin), context: { targetId: view.id, targetUsername: view.username } });
+    await logActivity({ source: "account", level: "info", message: "Offline account password reset", actor: toLogActor(admin), context: { targetId: view.id, targetUsername: view.username } });
     return view;
   }
 
@@ -125,13 +125,13 @@ export function registerManagerIpc(deps: IpcDeps): void {
       // Deleting the account makes any leftover sessions fail account lookup.
     }
     await offline.accounts.deleteAccount(id);
-    await logActivity({ source: "account", level: "info", message: "离线删除账号成功", actor: toLogActor(admin), context: { targetId: id, targetUsername: target?.username ?? "unknown" } });
+    await logActivity({ source: "account", level: "info", message: "Offline account deleted", actor: toLogActor(admin), context: { targetId: id, targetUsername: target?.username ?? "unknown" } });
   }
 
   ipcMain.handle("config:load", () => deps.configStore.load());
   ipcMain.handle("config:save", async (_event, config) => {
     await deps.configStore.save(config);
-    await logActivity({ source: "manager", level: "info", message: "更新管理器设置", actor: managerActor });
+    await logActivity({ source: "manager", level: "info", message: "Manager settings updated", actor: managerActor });
   });
   ipcMain.handle("config:selectServerRoot", async () => {
     const result = await dialog.showOpenDialog({
@@ -164,7 +164,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
   });
   ipcMain.handle("bootstrap:write", async (_event, input) => {
     const filePath = await writeBootstrapAdminFile((await deps.configStore.load()).dataDir, input);
-    await logActivity({ source: "account", level: "info", message: "写入初始管理员配置", actor: managerActor, context: { filePath } });
+    await logActivity({ source: "account", level: "info", message: "Bootstrap administrator file written", actor: managerActor, context: { filePath } });
     return filePath;
   });
   ipcMain.handle("auth:login", async (_event, username: string, password: string) => {

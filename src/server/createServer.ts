@@ -8,7 +8,7 @@ import { registerRoutes, type RouteDeps } from "../api/routes.js";
 import type { PresenceService } from "../presence/presenceService.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import { registerWebSocket } from "../realtime/registerWebSocket.js";
-import { installHttpActivityLogging, logRealtimeEvent, writeActivityLog } from "./activityLogger.js";
+import { installHttpActivityLogging, logRealtimeEvent, recordHttpActivityError, writeActivityLog } from "./activityLogger.js";
 
 export interface CreateServerOptions extends RouteDeps {
   https?: ServerOptions;
@@ -30,6 +30,7 @@ export async function createServer(options: CreateServerOptions) {
   await registerRoutes(app, options);
   await registerWebSocket(app, options);
   app.setErrorHandler((error, request, reply) => {
+    recordHttpActivityError(request, error);
     if (error instanceof HttpError) {
       reply.status(error.statusCode).send({ error: { code: error.code, message: error.message } });
       return;
@@ -41,7 +42,7 @@ export async function createServer(options: CreateServerOptions) {
     writeActivityLog({
       source: "server",
       level: "error",
-      message: `未处理的服务端异常: ${error instanceof Error ? error.message : String(error)}`,
+      message: "Unhandled server exception",
       context: {
         method: request.method,
         requestId: request.id,

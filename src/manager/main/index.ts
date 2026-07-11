@@ -58,8 +58,8 @@ service.on("log", (entry) => appendLog(entry));
 service.on("status", (status) => appendLog({
   source: "manager",
   level: status.state === "failed" ? "error" : "info",
-  message: `服务状态变更为 ${status.state}`,
-  context: { state: status.state, baseUrl: status.baseUrl, pid: status.pid ?? null, lastError: status.lastError ?? null },
+  message: `Service state changed: ${status.state}`,
+  context: { state: status.state, baseUrl: status.baseUrl, pid: status.pid ?? null, ...(status.lastError ? { errorCode: "service_error" } : {}) },
 }));
 
 let isQuitPromptOpen = false;
@@ -91,7 +91,7 @@ async function createWindow(): Promise<void> {
   });
   win.webContents.on("render-process-gone", (_event, details) => {
     appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`);
-    appendLog({ source: "manager", level: "error", message: `渲染进程退出: ${details.reason}`, context: { exitCode: details.exitCode } });
+    appendLog({ source: "manager", level: "error", message: "Renderer process exited", context: { reason: details.reason, exitCode: details.exitCode } });
   });
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`);
@@ -125,7 +125,7 @@ app.whenReady().then(createWindow).catch((error) => {
   const message = error instanceof Error ? error.stack ?? error.message : String(error);
   console.error("Failed to start Compet Server Manager", message);
   appendBootLog(bootLogFile, "startup failed", error);
-  appendLog({ source: "manager", level: "error", message: `管理器启动失败: ${message}` });
+  appendLog({ source: "manager", level: "error", message: "Manager startup failed", context: { errorCode: "startup_error" } });
   dialog.showErrorBox("Compet Server Manager 启动失败", message);
   app.exit(1);
 });

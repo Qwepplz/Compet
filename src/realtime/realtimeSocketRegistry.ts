@@ -41,10 +41,12 @@ export class RealtimeSocketRegistry {
     }
   }
 
-  publish(event: RealtimeEvent): void {
+  publish(event: RealtimeEvent): { targetedConnections: number; sentConnections: number } {
     const sockets = resolveAudience(event, this.socketsByAccount, this.accountBySocket);
-    if (sockets.size === 0) return;
-    sendJsonToSockets(sockets, event);
+    return {
+      targetedConnections: sockets.size,
+      sentConnections: sendJsonToSockets(sockets, event),
+    };
   }
 }
 
@@ -72,11 +74,17 @@ function resolveAudience(
   return new Set(accountBySocket.keys());
 }
 
-function sendJsonToSockets(sockets: Set<WebSocket>, payload: unknown): void {
+function sendJsonToSockets(sockets: Set<WebSocket>, payload: unknown): number {
   const encoded = JSON.stringify(payload);
+  let sentConnections = 0;
   for (const socket of sockets) {
-    if (socket.readyState === SOCKET_OPEN) {
+    if (socket.readyState !== SOCKET_OPEN) continue;
+    try {
       socket.send(encoded);
+      sentConnections += 1;
+    } catch {
+      // The delivery summary records failed sends without stopping other sockets.
     }
   }
+  return sentConnections;
 }

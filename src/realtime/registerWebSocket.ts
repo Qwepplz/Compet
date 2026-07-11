@@ -8,7 +8,7 @@ import type { PresenceService, PresenceSummary } from "../presence/presenceServi
 import type { RealtimeEventBus } from "./eventBus.js";
 import { executeRealtimeCommand, parseRealtimeCommand, type RealtimeCommandMatchmaking } from "./realtimeCommands.js";
 import { RealtimeSocketRegistry } from "./realtimeSocketRegistry.js";
-import { accountActor, logRealtimeCommand, writeActivityLog } from "../server/activityLogger.js";
+import { accountActor, logRealtimeCommand, nextActivityId, writeActivityLog } from "../server/activityLogger.js";
 
 export interface WebSocketDeps {
   accounts: AccountService;
@@ -31,7 +31,27 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
   deps: WebSocketDeps,
 ): Promise<void> {
   const sockets = new RealtimeSocketRegistry();
-  const unsubscribeEvents = deps.events?.subscribe((event) => sockets.publish(event));
+  const unsubscribeEvents = deps.events?.subscribe((event) => {
+    const delivery = sockets.publish(event);
+    const failedConnections = delivery.targetedConnections - delivery.sentConnections;
+    const sequence = (event as { seq?: unknown }).seq;
+    const eventId = typeof sequence === "number" ? `evt-${sequence}` : nextActivityId("evt-delivery");
+    let result = "ok";
+    if (delivery.targetedConnections === 0) result = "no_connections";
+    else if (delivery.sentConnections === 0) result = "failed";
+    else if (failedConnections > 0) result = "partial";
+    writeActivityLog({
+      source: "realtime",
+      level: failedConnections > 0 ? "warn" : "info",
+      message: `<--- Event WebSocket, id [${eventId}]: type=${event.type}`,
+      context: {
+        targetedConnections: delivery.targetedConnections,
+        sentConnections: delivery.sentConnections,
+        failedConnections,
+        result,
+      },
+    });
+  });
 
   app.addHook("onClose", (_instance, done) => {
     unsubscribeEvents?.();
@@ -39,12 +59,22 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
   });
 
   app.get<{ Querystring: WebSocketQuery }>("/ws", { websocket: true }, (socket, request) => {
+    const connectionId = `ws-${request.id}`;
+    writeActivityLog({
+      source: "realtime",
+      level: "info",
+      message: `---> Connection WebSocket, id [${connectionId}]`,
+      context: { ip: request.ip },
+    });
     const token = request.query.token;
     const accountPromise = authorizeWebSocket(token, deps).catch(() => undefined);
     let authorizationCheck: ReturnType<typeof setInterval> | undefined;
     let registeredAccountId: string | undefined;
     let registeredAccount: AccountRecord | undefined;
-    const cleanup = () => {
+    let cleanedUp = false;
+    const cleanup = (reason: string, closeCode?: number) => {
+      if (cleanedUp) return;
+      cleanedUp = true;
       sockets.unregister(socket);
       let connectionCount: number | null = null;
       if (registeredAccountId && deps.presence) {
@@ -52,9 +82,13 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
         connectionCount = summary.connectionCount;
         void publishPresenceUpdated("disconnect", deps, summary);
       }
-      if (registeredAccount) {
-        writeActivityLog({ source: "realtime", level: "info", message: "断开实时连接", actor: accountActor(registeredAccount), context: { ip: request.ip, connectionCount } });
-      }
+      writeActivityLog({
+        source: "realtime",
+        level: "info",
+        message: `<--- Connection WebSocket, id [${connectionId}]: state=closed`,
+        ...(registeredAccount ? { actor: accountActor(registeredAccount) } : {}),
+        context: { ip: request.ip, connectionCount, reason, ...(closeCode === undefined ? {} : { closeCode }) },
+      });
       registeredAccountId = undefined;
       registeredAccount = undefined;
       if (authorizationCheck) {
@@ -63,23 +97,37 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       }
     };
 
-    socket.on("close", cleanup);
-    socket.on("error", (error) => {
-      if (registeredAccount) {
-        writeActivityLog({ source: "realtime", level: "error", message: `实时连接错误: ${error.message}`, actor: accountActor(registeredAccount), context: { ip: request.ip } });
-      }
-      cleanup();
+    socket.on("close", (code) => cleanup("closed", code));
+    socket.on("error", () => {
+      writeActivityLog({
+        source: "realtime",
+        level: "error",
+        message: `WebSocket error, id [${connectionId}]`,
+        ...(registeredAccount ? { actor: accountActor(registeredAccount) } : {}),
+        context: { ip: request.ip, errorCode: "websocket_error" },
+      });
+      cleanup("error");
     });
 
     socket.on("message", async (data) => {
       const account = await accountPromise;
-      if (!account) return;
-      await handleMessage(socket, data, account, deps);
+      if (!account) {
+        const messageId = nextActivityId("msg");
+        writeActivityLog({ source: "realtime", level: "warn", message: `---> Request WebSocket, id [${messageId}]: type=unauthorized_message`, context: { connectionId } });
+        writeActivityLog({ source: "realtime", level: "warn", message: `<--- Response WebSocket, id [${messageId}]`, context: { connectionId, result: "failed", errorCode: "unauthorized" } });
+        return;
+      }
+      await handleMessage(socket, data, account, deps, connectionId);
     });
 
     void accountPromise.then((account) => {
       if (!account) {
-        writeActivityLog({ source: "realtime", level: "warn", message: "实时连接鉴权失败", context: { ip: request.ip } });
+        writeActivityLog({
+          source: "realtime",
+          level: "warn",
+          message: `<--- Connection WebSocket, id [${connectionId}]: result=unauthorized`,
+          context: { ip: request.ip, result: "unauthorized", errorCode: "unauthorized" },
+        });
         closeUnauthorized(socket);
         return;
       }
@@ -88,11 +136,23 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       authorizationCheck = setInterval(() => {
         void authorizeWebSocket(token, deps).then((currentAccount) => {
           if (!currentAccount || currentAccount.id !== account.id) {
-            writeActivityLog({ source: "realtime", level: "warn", message: "实时连接重新鉴权失败", actor: accountActor(account), context: { ip: request.ip } });
+            writeActivityLog({
+              source: "realtime",
+              level: "warn",
+              message: `<--- Reauthorize WebSocket, id [${connectionId}]: result=failed`,
+              actor: accountActor(account),
+              context: { ip: request.ip, errorCode: "unauthorized" },
+            });
             closeUnauthorized(socket);
           }
-        }).catch((error) => {
-          writeActivityLog({ source: "realtime", level: "error", message: `实时连接重新鉴权异常: ${error instanceof Error ? error.message : String(error)}`, actor: accountActor(account), context: { ip: request.ip } });
+        }).catch(() => {
+          writeActivityLog({
+            source: "realtime",
+            level: "error",
+            message: `<--- Reauthorize WebSocket, id [${connectionId}]: result=failed`,
+            actor: accountActor(account),
+            context: { ip: request.ip, errorCode: "reauthorization_error" },
+          });
           closeUnauthorized(socket);
         });
       }, 5_000);
@@ -100,7 +160,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       registeredAccount = account;
       sendJson(socket, { type: "hello", accountId: account.id, serverTime: now() });
       sendJson(socket, { type: "server_status", status: "online", serverTime: now() });
-      replayEvents(socket, account.id, request.query.lastSeq, deps);
+      replayEvents(socket, account, request.query.lastSeq, deps, connectionId);
       let connectionCount = 1;
       if (deps.presence) {
         registeredAccountId = account.id;
@@ -108,7 +168,13 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
         connectionCount = summary.connectionCount;
         void publishPresenceUpdated("connect", deps, summary);
       }
-      writeActivityLog({ source: "realtime", level: "info", message: "建立实时连接", actor: accountActor(account), context: { ip: request.ip, connectionCount } });
+      writeActivityLog({
+        source: "realtime",
+        level: "info",
+        message: `<--- Connection WebSocket, id [${connectionId}]: state=opened`,
+        actor: accountActor(account),
+        context: { ip: request.ip, connectionCount, result: "ok" },
+      });
     });
   });
 }
@@ -127,18 +193,23 @@ async function authorizeWebSocket(
   return account;
 }
 
-async function handleMessage(socket: WebSocket, data: RawData, account: AccountRecord, deps: WebSocketDeps): Promise<void> {
+async function handleMessage(socket: WebSocket, data: RawData, account: AccountRecord, deps: WebSocketDeps, connectionId: string): Promise<void> {
   let message: unknown;
   try {
     message = JSON.parse(data.toString());
   } catch {
-    writeActivityLog({ source: "realtime", level: "warn", message: "发送了无效的实时消息", actor: accountActor(account) });
+    const messageId = nextActivityId("msg");
+    writeActivityLog({ source: "realtime", level: "warn", message: `---> Request WebSocket, id [${messageId}]: type=invalid_json`, actor: accountActor(account), context: { connectionId } });
     sendJson(socket, { type: "error", code: "invalid_message", message: "Invalid JSON message" });
+    writeActivityLog({ source: "realtime", level: "warn", message: `<--- Response WebSocket, id [${messageId}]`, actor: accountActor(account), context: { connectionId, result: "failed", errorCode: "invalid_message" } });
     return;
   }
 
   if (typeof message === "object" && message !== null && (message as { type?: unknown }).type === "ping") {
+    const messageId = nextActivityId("ping");
+    writeActivityLog({ source: "realtime", level: "info", message: `---> Request WebSocket, id [${messageId}]: type=ping`, actor: accountActor(account), context: { connectionId } });
     sendJson(socket, { type: "pong", serverTime: now() });
+    writeActivityLog({ source: "realtime", level: "info", message: `<--- Response WebSocket, id [${messageId}]: type=pong`, actor: accountActor(account), context: { connectionId, result: "ok" } });
     return;
   }
 
@@ -149,13 +220,15 @@ async function handleMessage(socket: WebSocket, data: RawData, account: AccountR
     sendJson(socket, withCommandServerNow(ack));
     return;
   }
-  writeActivityLog({ source: "realtime", level: "warn", message: "发送了未知的实时命令", actor: accountActor(account) });
+  const messageId = nextActivityId("msg");
+  writeActivityLog({ source: "realtime", level: "warn", message: `---> Request WebSocket, id [${messageId}]: type=unknown_command`, actor: accountActor(account), context: { connectionId } });
+  writeActivityLog({ source: "realtime", level: "warn", message: `<--- Response WebSocket, id [${messageId}]`, actor: accountActor(account), context: { connectionId, result: "ignored", errorCode: "unknown_command" } });
 }
 
-function replayEvents(socket: WebSocket, accountId: string, lastSeq: string | undefined, deps: WebSocketDeps): void {
+function replayEvents(socket: WebSocket, account: AccountRecord, lastSeq: string | undefined, deps: WebSocketDeps, connectionId: string): void {
   const parsedLastSeq = Number(lastSeq);
   if (!deps.events || !Number.isSafeInteger(parsedLastSeq) || parsedLastSeq <= 0) return;
-  const replay = deps.events.getEventsAfter(accountId, parsedLastSeq);
+  const replay = deps.events.getEventsAfter(account.id, parsedLastSeq);
   for (const event of replay.events) {
     sendJson(socket, event);
   }
@@ -165,6 +238,18 @@ function replayEvents(socket: WebSocket, accountId: string, lastSeq: string | un
     gap: replay.gap,
     lastSeq: replay.events.at(-1)?.seq ?? parsedLastSeq,
     serverTime: now(),
+  });
+  writeActivityLog({
+    source: "realtime",
+    level: "info",
+    message: `---> Replay WebSocket, id [${connectionId}]`,
+    actor: accountActor(account),
+    context: {
+      afterSeq: parsedLastSeq,
+      eventCount: replay.events.length,
+      gap: replay.gap,
+      lastSeq: replay.events.at(-1)?.seq ?? parsedLastSeq,
+    },
   });
 }
 

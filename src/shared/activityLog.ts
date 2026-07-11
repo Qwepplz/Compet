@@ -1,7 +1,7 @@
 export const SERVER_ACTIVITY_PREFIX = "@compet-activity ";
 
-const LOG_LEVELS = ["info", "warn", "error", "debug"] as const;
-const LOG_SOURCES = ["manager", "server", "auth", "realtime", "account", "friend", "party", "matchmaking", "match", "game"] as const;
+export const LOG_LEVELS = ["info", "warn", "error", "debug"] as const;
+export const LOG_SOURCES = ["manager", "server", "auth", "realtime", "account", "friend", "party", "matchmaking", "match", "game"] as const;
 
 export type LogLevel = typeof LOG_LEVELS[number];
 export type LogSource = typeof LOG_SOURCES[number];

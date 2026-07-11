@@ -4,158 +4,100 @@ import { SERVER_ACTIVITY_PREFIX, type ActivityLogInput, type LogActor, type LogS
 import type { RealtimeCommand, RealtimeCommandAck } from "../realtime/realtimeCommands.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 
-const ACTION_LABELS = {
-  playerLogin: "玩家登录",
-  managerLogin: "管理员登录",
-  changePassword: "修改密码",
-  logout: "退出登录",
-  createAccount: "创建账号",
-  updateAccount: "修改账号",
-  resetPassword: "重置账号密码",
-  deleteAccount: "删除账号",
-  removeFriend: "删除好友",
-  sendFriendRequest: "发送好友请求",
-  acceptFriendRequest: "接受好友请求",
-  declineFriendRequest: "拒绝好友请求",
-  createParty: "创建队伍",
-  inviteToParty: "邀请玩家加入队伍",
-  acceptPartyInvite: "接受队伍邀请",
-  declinePartyInvite: "拒绝队伍邀请",
-  ignorePartyInvite: "忽略队伍邀请",
-  createMatchRoom: "创建匹配房间",
-  beginMatchmaking: "开始匹配",
-  cancelMatchmaking: "取消匹配",
-  joinParty: "加入队伍",
-  leaveParty: "离开队伍",
-  joinMatchmakingQueue: "加入匹配队列",
-  acceptReady: "确认准备",
-  declineReady: "拒绝准备",
-  enterMatchRoom: "进入匹配房间",
-} as const;
+type LogContext = NonNullable<ActivityLogInput["context"]>;
 
-type ActionName = keyof typeof ACTION_LABELS;
-
-const routeActions: Record<string, ActionName> = {
-  "POST /auth/login": "playerLogin",
-  "POST /auth/manager-login": "managerLogin",
-  "POST /auth/change-password": "changePassword",
-  "POST /auth/logout": "logout",
-  "POST /admin/accounts": "createAccount",
-  "PATCH /admin/accounts/:id": "updateAccount",
-  "POST /admin/accounts/:id/reset-password": "resetPassword",
-  "DELETE /admin/accounts/:id": "deleteAccount",
-  "DELETE /friends/:id": "removeFriend",
-  "POST /friends/requests": "sendFriendRequest",
-  "POST /friends/requests/:id/accept": "acceptFriendRequest",
-  "POST /friends/requests/:id/decline": "declineFriendRequest",
-  "POST /party/create": "createParty",
-  "POST /party/invite": "inviteToParty",
-  "POST /party/invitations/:id/accept": "acceptPartyInvite",
-  "POST /party/invitations/:id/decline": "declinePartyInvite",
-  "POST /party/invitations/:id/ignore": "ignorePartyInvite",
-  "POST /party/matchmaking/start": "createMatchRoom",
-  "POST /party/matchmaking/begin": "beginMatchmaking",
-  "POST /party/matchmaking/cancel": "cancelMatchmaking",
-  "POST /party/join": "joinParty",
-  "POST /party/leave": "leaveParty",
-  "POST /matchmaking/queue": "joinMatchmakingQueue",
-  "POST /matchmaking/ready": "acceptReady",
-  "POST /matchmaking/ready/decline": "declineReady",
-  "POST /matchmaking/cancel": "cancelMatchmaking",
-  "POST /match-room/:id/entered": "enterMatchRoom",
-};
-
-const commandActions: Record<RealtimeCommand["name"], ActionName> = {
-  "friends.sendRequest": "sendFriendRequest",
-  "friends.acceptRequest": "acceptFriendRequest",
-  "friends.declineRequest": "declineFriendRequest",
-  "friends.removeFriend": "removeFriend",
-  "party.create": "createParty",
-  "party.invite": "inviteToParty",
-  "party.acceptInvite": "acceptPartyInvite",
-  "party.declineInvite": "declinePartyInvite",
-  "party.ignoreInvite": "ignorePartyInvite",
-  "party.leave": "leaveParty",
-  "party.beginMatchmaking": "beginMatchmaking",
-  "party.cancelMatchmaking": "cancelMatchmaking",
-  "party.startMatchmaking": "createMatchRoom",
-  "matchmaking.acceptReady": "acceptReady",
-  "matchmaking.declineReady": "declineReady",
-  "matchRoom.entered": "enterMatchRoom",
-};
+const requestStartedAt = new WeakMap<object, number>();
+const requestErrors = new WeakMap<object, LogContext>();
+let activitySequence = 0;
 
 export function writeActivityLog(input: ActivityLogInput): void {
   const entry = { ...input, timestamp: input.timestamp ?? new Date().toISOString() };
   process.stdout.write(`${SERVER_ACTIVITY_PREFIX}${JSON.stringify(entry)}\n`);
 }
 
-export function installHttpActivityLogging(app: FastifyInstance<any, any, any, any, any>): void {
-  app.addHook("onResponse", async (request, reply) => {
-    const route = request.routeOptions.url;
-    if (!route) return;
-    const action = routeActions[`${request.method} ${route}`];
-    if (!action) return;
+export function nextActivityId(prefix: string): string {
+  activitySequence += 1;
+  return `${prefix}-${activitySequence}`;
+}
 
-    const actor = requestActor(request);
-    const failed = reply.statusCode >= 400;
-    const actorName = actor?.username ?? requestUsername(request) ?? "未认证用户";
+export function installHttpActivityLogging(app: FastifyInstance<any, any, any, any, any>): void {
+  app.addHook("onRequest", async (request) => {
+    requestStartedAt.set(request, Date.now());
+    const route = requestRoute(request);
     writeActivityLog({
       source: routeSource(route),
-      level: failed ? "warn" : "info",
-      message: `${ACTION_LABELS[action]}${failed ? "失败" : "成功"}`,
-      actor: actor ?? (actorName === "未认证用户" ? undefined : { username: actorName }),
-      context: requestContext(request, reply.statusCode),
+      level: "info",
+      message: `---> Request HTTP, id [${request.id}]`,
+      context: httpContext(request, route),
     });
+  });
+
+  app.addHook("onResponse", async (request, reply) => {
+    const route = requestRoute(request);
+    const actor = requestActor(request);
+    const source = routeSource(route);
+    const context = httpContext(request, route);
+    const failed = reply.statusCode >= 400;
+    const errorContext = requestErrors.get(request);
+    const startedAt = requestStartedAt.get(request);
+    const durationMs = startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt);
+
+    writeActivityLog({
+      source,
+      level: failed ? "warn" : "info",
+      message: `<--- Response HTTP, id [${request.id}]`,
+      ...(actor ? { actor } : {}),
+      context: {
+        ...context,
+        statusCode: reply.statusCode,
+        result: failed ? "failed" : "ok",
+        durationMs,
+        ...(errorContext ?? {}),
+      },
+    });
+
+    requestStartedAt.delete(request);
+    requestErrors.delete(request);
   });
 }
 
+export function recordHttpActivityError(request: FastifyRequest<any, any, any, any, any>, error: unknown): void {
+  requestErrors.set(request, errorContext(error));
+}
+
 export function logRealtimeCommand(account: AccountRecord, command: RealtimeCommand, ack: RealtimeCommandAck): void {
-  const failed = !ack.ok;
+  const id = command.commandId || nextActivityId("cmd");
+  const context = commandContext(command);
+
   writeActivityLog({
     source: commandSource(command.name),
-    level: failed ? "warn" : "info",
-    message: `${ACTION_LABELS[commandActions[command.name]]}${failed ? `失败: ${ack.error.message}` : "成功"}`,
+    level: "info",
+    message: `---> Request WebSocket, id [${id}]: command=${command.name}`,
     actor: accountActor(account),
-    context: commandContext(command),
+    context,
+  });
+  writeActivityLog({
+    source: commandSource(command.name),
+    level: ack.ok ? "info" : "warn",
+    message: `<--- Response WebSocket, id [${id}]`,
+    actor: accountActor(account),
+    context: {
+      ...context,
+      result: ack.ok ? "ok" : "failed",
+      ...(!ack.ok ? { statusCode: ack.error.statusCode, errorCode: "command_error" } : {}),
+    },
   });
 }
 
 export function logRealtimeEvent(event: RealtimeEvent): void {
-  const context: Record<string, string | number | boolean | null> = {};
-  if ("matchId" in event) context.matchId = event.matchId;
-  if ("roomId" in event) context.roomId = event.roomId;
-
-  switch (event.type) {
-    case "ready_check_started":
-      writeActivityLog({ source: "matchmaking", level: "info", message: "准备确认开始", context: { ...context, players: event.accountIds.length, deadlineAt: event.deadlineAt } });
-      break;
-    case "match_room_created":
-      writeActivityLog({ source: "match", level: "info", message: "匹配房间已创建", context });
-      break;
-    case "teams_assigned":
-      writeActivityLog({ source: "match", level: "info", message: "比赛队伍已分配", context });
-      break;
-    case "map_randomizing_started":
-      writeActivityLog({ source: "match", level: "info", message: "地图随机开始", context });
-      break;
-    case "server_preparing":
-      writeActivityLog({ source: "game", level: "info", message: "游戏服务器准备中", context });
-      break;
-    case "connect_ready":
-      writeActivityLog({ source: "game", level: "info", message: "游戏服务器可连接", context: { ...context, address: event.connect.connectAddress, map: event.connect.map } });
-      break;
-    case "match_live":
-      writeActivityLog({ source: "match", level: "info", message: "比赛已开始", context });
-      break;
-    case "match_completed":
-      writeActivityLog({ source: "match", level: "info", message: "比赛已完成并保存结果", context });
-      break;
-    case "match_failed":
-      writeActivityLog({ source: "match", level: "error", message: `比赛失败: ${errorMessage(event.error)}`, context });
-      break;
-    default:
-      break;
-  }
+  const sequence = (event as { seq?: unknown }).seq;
+  const id = typeof sequence === "number" ? `evt-${sequence}` : nextActivityId("evt");
+  writeActivityLog({
+    source: eventSource(event.type),
+    level: event.type === "match_failed" ? "error" : "info",
+    message: `---> Event Realtime, id [${id}]: type=${event.type}`,
+    context: eventContext(event),
+  });
 }
 
 export function accountActor(account: AccountRecord): LogActor {
@@ -168,7 +110,9 @@ export function accountActor(account: AccountRecord): LogActor {
 }
 
 function requestActor(request: FastifyRequest): LogActor | undefined {
-  return request.auth?.account ? accountActor(request.auth.account) : undefined;
+  if (request.auth?.account) return accountActor(request.auth.account);
+  const username = requestUsername(request);
+  return username ? { username } : undefined;
 }
 
 function requestUsername(request: FastifyRequest): string | undefined {
@@ -178,26 +122,68 @@ function requestUsername(request: FastifyRequest): string | undefined {
   return typeof username === "string" ? username : undefined;
 }
 
-function requestContext(request: FastifyRequest, statusCode: number): Record<string, string | number | boolean | null> {
-  const context: Record<string, string | number | boolean | null> = {
+function requestRoute(request: FastifyRequest): string {
+  if (request.routeOptions.url) return request.routeOptions.url;
+  return request.url.split("?", 1)[0] || "/";
+}
+
+function httpContext(request: FastifyRequest, route: string): LogContext {
+  const context: LogContext = {
     method: request.method,
-    statusCode,
+    route,
     ip: request.ip,
     requestId: request.id,
   };
-  if (request.routeOptions.url) context.route = request.routeOptions.url;
   addSafeFields(context, request.params, ["id", "accountId", "partyId", "roomId"]);
   addSafeFields(context, request.body, ["accountId", "partyId", "roomId", "dev"]);
   return context;
 }
 
-function commandContext(command: RealtimeCommand): Record<string, string | number | boolean | null> {
-  const context: Record<string, string | number | boolean | null> = { command: command.name, commandId: command.commandId };
+function commandContext(command: RealtimeCommand): LogContext {
+  const context: LogContext = { command: command.name, commandId: command.commandId };
   addSafeFields(context, command.payload, ["accountId", "requestId", "friendshipId", "invitationId", "roomId", "dev"]);
   return context;
 }
 
-function addSafeFields(target: Record<string, string | number | boolean | null>, value: unknown, fields: string[]): void {
+function eventContext(event: RealtimeEvent): LogContext {
+  const context: LogContext = {};
+  if ("matchId" in event) context.matchId = event.matchId;
+  if ("roomId" in event) context.roomId = event.roomId;
+  if ("accountId" in event) context.accountId = event.accountId;
+  if ("accountIds" in event && Array.isArray(event.accountIds)) {
+    context.targetCount = event.accountIds.length;
+    if (event.accountIds.length > 0) context.targets = event.accountIds.join(",");
+  }
+
+  switch (event.type) {
+    case "presence_updated":
+      context.online = event.online;
+      context.connectionCount = event.connectionCount;
+      if (event.lastSeenAt) context.lastSeenAt = event.lastSeenAt;
+      break;
+    case "ready_check_started":
+    case "ready_check_updated":
+      context.deadlineAt = event.deadlineAt;
+      context.playerCount = event.accountIds.length;
+      break;
+    case "matchmaking_occupancy_updated":
+      context.activeCount = event.occupancy.activeCount;
+      break;
+    case "connect_ready":
+      context.address = event.connect.connectAddress;
+      context.map = event.connect.map;
+      break;
+    case "match_failed":
+      Object.assign(context, errorContext(event.error));
+      break;
+    default:
+      break;
+  }
+
+  return context;
+}
+
+function addSafeFields(target: LogContext, value: unknown, fields: string[]): void {
   if (!value || typeof value !== "object") return;
   const record = value as Record<string, unknown>;
   for (const field of fields) {
@@ -213,8 +199,10 @@ function routeSource(route: string): LogSource {
   if (route.startsWith("/admin/accounts")) return "account";
   if (route.startsWith("/friends")) return "friend";
   if (route.startsWith("/party")) return "party";
-  if (route.startsWith("/match-room")) return "match";
-  return "matchmaking";
+  if (route.startsWith("/match-room") || route.startsWith("/matches")) return "match";
+  if (route.startsWith("/matchmaking")) return "matchmaking";
+  if (route.startsWith("/realtime") || route.startsWith("/ws")) return "realtime";
+  return "server";
 }
 
 function commandSource(name: RealtimeCommand["name"]): LogSource {
@@ -224,12 +212,23 @@ function commandSource(name: RealtimeCommand["name"]): LogSource {
   return "matchmaking";
 }
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
+function eventSource(type: RealtimeEvent["type"]): LogSource {
+  if (type.startsWith("friend_")) return "friend";
+  if (type.startsWith("party_")) return "party";
+  if (type === "queue_updated" || type === "matchmaking_occupancy_updated" || type.startsWith("ready_check_")) return "matchmaking";
+  if (type === "server_preparing" || type === "connect_ready") return "game";
+  if (type.startsWith("match_") || type === "teams_assigned" || type === "map_randomizing_started") return "match";
+  return "realtime";
+}
+
+function errorContext(error: unknown): LogContext {
+  const candidate = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
+  return {
+    errorCode: typeof candidate === "string" && isSafeToken(candidate) ? candidate : "request_error",
+    errorType: error instanceof Error && isSafeToken(error.name) ? error.name : "unknown_error",
+  };
+}
+
+function isSafeToken(value: string): boolean {
+  return /^[A-Za-z0-9_.-]+$/u.test(value);
 }

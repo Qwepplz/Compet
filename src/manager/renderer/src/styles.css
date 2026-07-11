@@ -36,6 +36,7 @@ body { overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", Arial, sans
 .logs-file-select { width: 164px; }
 .logs-level-select { width: 94px; }
 .logs-source-select { width: 112px; }
+.logs-username { width: 132px; }
 .logs-search { width: 210px; }
 .logs-error { flex: 0 0 auto; margin-bottom: 10px; }
 .logs-viewer { flex: 1; min-height: 0; overflow: auto; border: 1px solid #3c3c3c; border-radius: 4px; background: #1e1e1e; color: #d4d4d4; font: 12px/20px Consolas, "Cascadia Mono", monospace; letter-spacing: 0; }
