@@ -57,6 +57,7 @@ export function FriendsPanel({
   const [searchResults, setSearchResults] = useState<PlayerFriendSearchResultDto[]>([]);
   const [hasSearchedFriends, setHasSearchedFriends] = useState(false);
   const [pendingRequestId, setPendingRequestId] = useState<string | null>(null);
+  const [modal, modalContextHolder] = Modal.useModal();
   const searchResultsRef = useRef<PlayerFriendSearchResultDto[]>([]);
   searchResultsRef.current = searchResults;
 
@@ -143,11 +144,25 @@ export function FriendsPanel({
     onViewMatchHistory(friend);
   }
 
+  function confirmRemoveFriend(friend: PlayerFriendDto) {
+    modal.confirm({
+      centered: true,
+      title: "删除好友",
+      content: `确定要删除好友“${friend.displayName}”吗？`,
+      okText: "删除",
+      cancelText: "取消",
+      autoFocusButton: "cancel",
+      okButtonProps: { danger: true },
+      onOk: () => handleRemoveFriend(friend.friendshipId),
+    });
+  }
+
   const pendingCount = friends.incomingRequests.length;
   const open = expanded || addOpen;
 
   return (
     <section className={`player-social-panel${open ? "" : " player-social-panel--collapsed"}`}>
+      {modalContextHolder}
       <div className="player-social-header">
         <Badge className="player-social-rail" count={open ? 0 : pendingCount} size="small">
           <span className="player-social-rail-icon" aria-label="好友列表">
@@ -230,7 +245,7 @@ export function FriendsPanel({
                     ],
                     onClick: ({ key }) => {
                       if (key === "history") handleViewMatchHistory(friend);
-                      if (key === "remove") void handleRemoveFriend(friend.friendshipId);
+                      if (key === "remove") confirmRemoveFriend(friend);
                     },
                   }}
                 >
