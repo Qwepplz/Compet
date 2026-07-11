@@ -319,8 +319,7 @@ $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\preload\index.js")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\renderer\index.html")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "sourcemod\compet_match_lock.smx")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "run_csgo\de_mirage.bat")),
-  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "run_csgo\de_mirage.ps1")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "run_csgo\run_csgo.ps1")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "run_csgo\csgo\cfg\1.cfg")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "node_modules\zod\package.json"))
 )

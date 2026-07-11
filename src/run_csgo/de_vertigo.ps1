@@ -1,2 +1,0 @@
-# 隐藏 PowerShell 窗口启动 cmd，执行后自动关闭所有窗口
-Start-Process cmd.exe -ArgumentList "/c srcds -language english -game csgo -console -usercon -tickrate 128 -worldwide +game_type 0 +game_mode 1 +mapgroup mg_active +map de_vertigo +maxplayers_override 10 +tv_enable 1 +exec 1.cfg +sv_setsteamaccount $env:COMPET_STEAM_ACCOUNT_TOKEN" -WindowStyle Hidden

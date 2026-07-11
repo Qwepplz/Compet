@@ -88,8 +88,6 @@ export class MatchExecutor {
       map: matchPlan.map,
       port: this.options.config.portRange.start,
       clientPort: this.options.config.portRange.start + 1,
-      serverPassword: matchPlan.connectPassword,
-      startupCfgPath: ACTIVE_MATCH_CFG_PATH,
     });
 
     const launched = await this.options.launcher.launch(spec);
