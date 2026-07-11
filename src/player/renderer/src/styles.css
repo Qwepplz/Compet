@@ -926,9 +926,30 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
+  scrollbar-color: #3a3a3a transparent;
+  scrollbar-width: thin;
   border: 1px solid #242424;
   border-radius: 8px;
   background: #0d0d0d;
+}
+
+.match-history-table-wrap::-webkit-scrollbar {
+  width: 8px;
+}
+
+.match-history-table-wrap::-webkit-scrollbar-track {
+  border: 0;
+  background: transparent;
+}
+
+.match-history-table-wrap::-webkit-scrollbar-thumb {
+  border: 0;
+  border-radius: 999px;
+  background: #3a3a3a;
+}
+
+.match-history-table-wrap::-webkit-scrollbar-thumb:hover {
+  background: #555;
 }
 
 .match-history-loading {
