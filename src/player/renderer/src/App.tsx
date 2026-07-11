@@ -1601,7 +1601,7 @@ export function App() {
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
             <Button
               aria-label="历史战绩"
-              className={`player-app-settings-button player-app-history-button${activeView === "match-history" ? " player-app-history-button--active" : ""}`}
+              className={`player-app-settings-button player-app-history-button${viewingMatchHistory ? " player-app-history-button--active" : ""}`}
               icon={<HistoryChartIcon />}
               type="text"
               onClick={() => void openMatchHistory()}

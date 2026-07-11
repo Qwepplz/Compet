@@ -924,7 +924,8 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   position: relative;
   min-width: 0;
   min-height: 0;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   border: 1px solid #242424;
   border-radius: 8px;
   background: #0d0d0d;
