@@ -22,8 +22,6 @@ export const managerApi = {
   resetPassword: (id: string, password: string) => invoke("accounts:resetPassword", id, password),
   deleteAccount: (id: string) => invoke("accounts:delete", id),
   recentLogs: () => invoke("logs:recent"),
-  listLogFiles: () => invoke("logs:listFiles"),
-  readLogFile: (name: string) => invoke("logs:readFile", name),
   onLogAppended: (callback: (entry: unknown) => void) => {
     ipcRenderer.removeAllListeners("logs:appended");
     const listener = (_event: Electron.IpcRendererEvent, entry: unknown) => callback(entry);

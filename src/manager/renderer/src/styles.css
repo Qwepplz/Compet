@@ -33,7 +33,6 @@ body { overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", Arial, sans
 .logs-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .logs-header .page-title { flex: 0 0 auto; margin: 0; }
 .logs-toolbar { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.logs-file-select { width: 164px; }
 .logs-level-select { width: 94px; }
 .logs-source-select { width: 112px; }
 .logs-username { width: 132px; }

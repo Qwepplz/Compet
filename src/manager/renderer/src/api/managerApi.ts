@@ -31,8 +31,6 @@ export const accountApi = {
 
 export const logApi = {
   recent: () => window.managerApi.recentLogs() as Promise<LogEntry[]>,
-  listFiles: () => window.managerApi.listLogFiles() as Promise<string[]>,
-  readFile: (name: string) => window.managerApi.readLogFile(name) as Promise<LogEntry[]>,
   onAppended: (callback: (entry: LogEntry) => void) => window.managerApi.onLogAppended((entry) => callback(entry as LogEntry)),
   removeAppendedListener: () => window.managerApi.removeLogAppendedListener(),
 };

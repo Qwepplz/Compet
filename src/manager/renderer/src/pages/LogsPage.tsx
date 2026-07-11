@@ -4,13 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogEntry, LogLevel, LogSource } from "../../../shared/types.js";
 import { logApi } from "../api/managerApi.js";
 
-const LIVE_LOG = "__live__";
 const MAX_VISIBLE_LOGS = 2_000;
 
 export function LogsPage() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
-  const [files, setFiles] = useState<string[]>([]);
-  const [selection, setSelection] = useState(LIVE_LOG);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<LogLevel>();
   const [source, setSource] = useState<LogSource>();
@@ -20,20 +17,15 @@ export function LogsPage() {
   const requestIdRef = useRef(0);
   const viewerRef = useRef<HTMLDivElement>(null);
   const followTailRef = useRef(true);
-  const selectionRef = useRef(LIVE_LOG);
 
-  async function load(nextSelection = selection) {
+  async function load() {
     const requestId = ++requestIdRef.current;
     setLoading(true);
     setError(undefined);
     try {
-      const [nextLogs, nextFiles] = await Promise.all([
-        nextSelection === LIVE_LOG ? logApi.recent() : logApi.readFile(nextSelection),
-        logApi.listFiles(),
-      ]);
+      const nextLogs = await logApi.recent();
       if (requestId !== requestIdRef.current) return;
       setLogs(nextLogs.slice(-MAX_VISIBLE_LOGS));
-      setFiles(nextFiles);
       followTailRef.current = true;
     } catch (caught) {
       if (requestId !== requestIdRef.current) return;
@@ -46,9 +38,8 @@ export function LogsPage() {
   }
 
   useEffect(() => {
-    void load(LIVE_LOG);
+    void load();
     logApi.onAppended((entry) => {
-      if (selectionRef.current !== LIVE_LOG) return;
       setLogs((current) => current.some((item) => item.id === entry.id)
         ? current
         : [...current, entry].slice(-MAX_VISIBLE_LOGS));
@@ -80,20 +71,6 @@ export function LogsPage() {
       <div className="logs-header">
         <h1 className="page-title">日志</h1>
         <div className="logs-toolbar">
-          <Select
-            value={selection}
-            options={[
-              { value: LIVE_LOG, label: "实时日志" },
-              ...files.map((name) => ({ value: name, label: name })),
-            ]}
-            loading={loading}
-            className="logs-file-select"
-            onChange={(value) => {
-              selectionRef.current = value;
-              setSelection(value);
-              void load(value);
-            }}
-          />
           <Select<LogLevel>
             allowClear
             placeholder="级别"

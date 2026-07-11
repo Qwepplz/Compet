@@ -200,8 +200,6 @@ export function registerManagerIpc(deps: IpcDeps): void {
   });
   ipcMain.handle("accounts:delete", (_event, id) => deleteAccount(accountIdSchema.parse(id)));
   ipcMain.handle("logs:recent", () => deps.logStore.recent());
-  ipcMain.handle("logs:listFiles", () => deps.logStore.listFiles());
-  ipcMain.handle("logs:readFile", (_event, name: string) => deps.logStore.readFile(name));
   ipcMain.handle("updates:version", () => getCurrentVersion());
   ipcMain.handle("updates:check", () => checkForUpdates("compet-server-manager"));
   ipcMain.handle("updates:install", () => installUpdate("compet-server-manager", "Compet Server Manager.exe"));
