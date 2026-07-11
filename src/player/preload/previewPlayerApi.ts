@@ -179,9 +179,9 @@ export function createPreviewPlayerApi() {
       password: "preview",
     }),
     searchFriends: async (query: string): Promise<PlayerFriendSearchResultDto[]> => {
-      const normalized = query.trim().toLowerCase();
+      const normalized = query.trim();
       return previewFriends.friends
-        .filter((friend) => !normalized || friend.displayName.toLowerCase().includes(normalized))
+        .filter((friend) => !normalized || friend.displayName.includes(normalized))
         .map(({ accountId, displayName, steam64, steamPersonaName, steamAvatarUrl, online, lastSeenAt }) => ({
           accountId,
           displayName,

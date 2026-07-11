@@ -1,6 +1,7 @@
 import { Button, Form, Input, Modal, Space, Switch, Table, message } from "antd";
 import type { TableProps } from "antd";
 import { useEffect, useRef, useState } from "react";
+import { USERNAME_PATTERN } from "../../../../accounts/accountTypes.js";
 import type { AccountView, CreateAccountInput, UpdateAccountInput } from "../../../shared/types.js";
 import { accountApi } from "../api/managerApi.js";
 
@@ -235,7 +236,14 @@ export function AccountsPage() {
       >
         <Form<AccountFormValues> form={form} layout="vertical" onFinish={submit}>
           <Form.Item name="id" hidden><Input /></Form.Item>
-          <Form.Item name="username" label="用户名" rules={[{ required: true, message: "请输入用户名" }]}>
+          <Form.Item
+            name="username"
+            label="用户名"
+            rules={[
+              { required: true, message: "请输入用户名" },
+              { pattern: USERNAME_PATTERN, message: "用户名只能包含大小写字母和数字" },
+            ]}
+          >
             <Input disabled={isEditing} />
           </Form.Item>
           {!isEditing && (

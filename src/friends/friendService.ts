@@ -367,9 +367,9 @@ export class FriendService {
 }
 
 function normalizeFriendSearchQuery(query: string): string {
-  return query.trim().toLowerCase();
+  return query.trim();
 }
 
 function accountMatchesSearch(account: AccountRecord, normalizedQuery: string): boolean {
-  return account.username.trim().toLowerCase().includes(normalizedQuery);
+  return account.username.trim().includes(normalizedQuery);
 }

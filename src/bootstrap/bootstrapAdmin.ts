@@ -1,10 +1,11 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { z } from "zod";
+import { usernameSchema } from "../accounts/accountInputSchemas.js";
 import type { AccountService } from "../accounts/accountService.js";
 import { pathExists } from "../storage/jsonFile.js";
 
 const schema = z.object({
-  username: z.string().min(1),
+  username: usernameSchema,
   password: z.string().min(8),
 });
 

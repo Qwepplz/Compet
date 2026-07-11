@@ -25,8 +25,7 @@ export class JsonAccountRepository {
   }
 
   async findByUsername(username: string): Promise<AccountRecord | undefined> {
-    const normalized = username.toLowerCase();
-    return (await this.list()).find((account) => account.username.toLowerCase() === normalized);
+    return (await this.list()).find((account) => account.username === username);
   }
 
   async upsert(account: AccountRecord): Promise<AccountRecord> {

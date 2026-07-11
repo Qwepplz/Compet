@@ -1,7 +1,10 @@
 import { z } from "zod";
+import { USERNAME_PATTERN } from "./accountTypes.js";
+
+export const usernameSchema = z.string().regex(USERNAME_PATTERN, "Username must contain only letters and numbers");
 
 export const createAccountSchema = z.object({
-  username: z.string().min(1),
+  username: usernameSchema,
   password: z.string().min(8),
   steam64: z.string().default(""),
 });

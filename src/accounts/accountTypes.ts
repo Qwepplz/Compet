@@ -1,5 +1,7 @@
 export type AccountRole = "admin" | "player";
 
+export const USERNAME_PATTERN = /^[A-Za-z0-9]+$/;
+
 export interface AccountRecord {
   id: string;
   username: string;

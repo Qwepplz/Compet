@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { hashPassword } from "../auth/passwordHasher.js";
 import { SerialQueue } from "../storage/serialQueue.js";
+import { USERNAME_PATTERN } from "./accountTypes.js";
 import type { AccountRecord, AccountRole } from "./accountTypes.js";
 import type { JsonAccountRepository } from "./accountRepository.js";
 
@@ -46,6 +47,7 @@ export class AccountService {
 
   async createAccount(input: CreateAccountInput): Promise<AccountRecord> {
     return this.mutationQueue.enqueue(async () => {
+      if (!USERNAME_PATTERN.test(input.username)) throw new Error("invalid username");
       if (await this.repository.findByUsername(input.username)) throw new Error("username already exists");
       const steam64 = normalizeSteam64(input.role, input.steam64);
       await this.assertSteam64Available(steam64);
