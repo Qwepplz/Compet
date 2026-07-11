@@ -30,7 +30,10 @@ export class AccountService {
   constructor(private readonly repository: JsonAccountRepository) {}
 
   listAccounts(): Promise<AccountRecord[]> {
-    return this.repository.list();
+    return this.repository.list().then((accounts) => [...accounts].sort((left, right) => {
+      if (left.role !== right.role) return left.role === "admin" ? -1 : 1;
+      return left.username.localeCompare(right.username);
+    }));
   }
 
   getById(id: string): Promise<AccountRecord | undefined> {
