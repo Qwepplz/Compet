@@ -1,6 +1,5 @@
 import type { AccountView } from "../../manager/shared/types.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
-import { MATCH_HISTORY_PAGE_SIZE } from "../../records/matchHistory.js";
 import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { PlayerLoginResult } from "../main/playerApiClient.js";
 import type {
@@ -208,7 +207,7 @@ export function createPreviewPlayerApi() {
         self: { kills: 21, deaths: 9, assists: 5, damage: 2400, headshots: 10, rating2: 1.46, rankmeScore: 4017, rankmeScoreDelta: 25 },
       }],
       page,
-      pageSize: MATCH_HISTORY_PAGE_SIZE,
+      pageSize: 20,
       total: 1,
     }),
     getMatchHistoryResult: async (_matchId?: string, _accountId?: string): Promise<PlayerMatchResultDto> => previewMatchResult,
