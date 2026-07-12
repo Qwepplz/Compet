@@ -1,4 +1,5 @@
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot "resolve-csharp-compiler.ps1")
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 $artifacts = Join-Path $repo "artifacts"
 $stagingRoot = Join-Path $artifacts "staging"
@@ -84,11 +85,11 @@ function New-CSharpExe {
     [string[]]$References = @()
   )
 
-  $csc = Get-Command "csc.exe" -ErrorAction Stop
+  $csc = Resolve-CSharpCompiler
   $cscArgs = @("/nologo", "/target:winexe", "/optimize+", "/out:$ExePath")
   foreach ($reference in $References) { $cscArgs += "/reference:$reference" }
   $cscArgs += $SourcePath
-  & $csc.Source @cscArgs
+  & $csc @cscArgs
   if ($LASTEXITCODE -ne 0) { throw "C# compilation failed with exit code $LASTEXITCODE" }
 }
 
