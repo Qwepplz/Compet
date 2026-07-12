@@ -685,7 +685,7 @@ export class MatchmakingService {
         const failedRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "failed", terminalStateAt: failedAt };
         await this.deps.store.saveRooms(updatedRooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate)));
         await this.unlockPartyForRoom(failedRoom, failedAt);
-        await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure }, room.id);
+        await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure });
         return this.toPublicRoom(failedRoom);
       }
 
@@ -701,9 +701,8 @@ export class MatchmakingService {
         const failure = error instanceof Error ? error.message : String(error);
         const failedRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "failed", terminalStateAt: failedAt };
         await this.deps.store.saveRooms(updatedRooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate)));
-        await this.deleteFailedMatchArtifacts(room.id);
         await this.unlockPartyForRoom(failedRoom, failedAt);
-        await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure }, room.id);
+        await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure });
         return this.toPublicRoom(failedRoom);
       }
       const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
@@ -793,9 +792,8 @@ export class MatchmakingService {
         await this.restoreMatchDatabase(matchId);
         const failed: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
         await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? failed : candidate)));
-        await this.deleteFailedMatchArtifacts(matchId);
         await this.unlockPartyForRoom(failed, failedAt);
-        await this.emit({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: "比赛异常结束" }, matchId);
+        await this.emitMatchFailure({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: "比赛异常结束" });
         return this.toPublicRoom(failed);
       }
 
@@ -811,9 +809,8 @@ export class MatchmakingService {
         await this.restoreMatchDatabase(matchId);
         const failed: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
         await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === matchId ? failed : candidate)));
-        await this.deleteFailedMatchArtifacts(matchId);
         await this.unlockPartyForRoom(failed, failedAt);
-        await this.emit({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: failure }, matchId);
+        await this.emitMatchFailure({ type: "match_failed", matchId, accountIds: this.roomAudience(failed), error: failure });
         return this.toPublicRoom(failed);
       }
       const result = {
@@ -850,9 +847,8 @@ export class MatchmakingService {
 
       for (const failed of failedById.values()) {
         await this.restoreMatchDatabase(failed.id);
-        await this.deleteFailedMatchArtifacts(failed.id);
         await this.unlockPartyForRoom(failed, failedAt);
-        await this.emit({ type: "match_failed", matchId: failed.id, accountIds: this.roomAudience(failed), error: "比赛异常结束" }, failed.id);
+        await this.emitMatchFailure({ type: "match_failed", matchId: failed.id, accountIds: this.roomAudience(failed), error: "比赛异常结束" });
       }
 
       return [...failedById.values()].map((room) => this.toPublicRoom(room));
@@ -1001,6 +997,11 @@ export class MatchmakingService {
     this.deps.events?.publish(event);
   }
 
+  private async emitMatchFailure(event: Extract<RealtimeEvent, { type: "match_failed" }>): Promise<void> {
+    await this.deleteFailedMatchArtifacts(event.matchId);
+    await this.emit(event);
+  }
+
   private async emitOccupancyUpdated(): Promise<void> {
     await this.emit({ type: "matchmaking_occupancy_updated", occupancy: await this.getOccupancy() });
   }
@@ -1061,9 +1062,8 @@ export class MatchmakingService {
       if (databaseBackupCreated) await this.restoreMatchDatabase(room.id);
       const failed: MatchRoomRecord = { ...preparing, phase: "failed", terminalStateAt: failedAt };
       await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? failed : candidate)));
-      await this.deleteFailedMatchArtifacts(room.id);
       await this.unlockPartyForRoom(failed, failedAt);
-      await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(room), error: failure }, room.id);
+      await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(room), error: failure });
       return failed;
     }
   }
@@ -1434,8 +1434,7 @@ export class MatchmakingService {
     const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
     await this.deps.store.saveRooms(updatedRooms);
     await this.unlockPartyForRoom(failedRoom, failedAt);
-    await this.deleteFailedMatchArtifacts(room.id);
-    await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason }, room.id);
+    await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason });
     return failedRoom;
   }
 
@@ -1458,7 +1457,7 @@ export class MatchmakingService {
     }
 
     await this.emit(this.toReadyEvent("ready_check_updated", failedRoom));
-    await this.emit({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason });
+    await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason });
     return failedRoom;
   }
 
