@@ -105,7 +105,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("friends:reenrich", (_event, results: PlayerFriendSearchResultDto[]) => withSavedAuth(deps, (client) => client.reenrichFriendSearchResults(results)));
   ipcMain.handle("friends:list", () => withSavedAuth(deps, (client) => client.listFriends()));
   ipcMain.handle("rankme:score", () => withSavedAuth(deps, (client) => client.getRankmeScore()));
-  ipcMain.handle("matches:history", (_event, accountId?: string) => withSavedAuth(deps, (client) => client.listMatchHistory(accountId)));
+  ipcMain.handle("matches:history", (_event, accountId?: string, page?: number) => withSavedAuth(deps, (client) => client.listMatchHistory(accountId, page)));
   ipcMain.handle("matches:result", (_event, matchId: string, accountId?: string) => withSavedAuth(deps, (client) => client.getMatchHistoryResult(matchId, accountId)));
   ipcMain.handle("friends:request", (_event, accountId: string) => withSavedAuth(deps, (client) => client.sendFriendRequest(accountId)));
   ipcMain.handle("friends:acceptRequest", (_event, requestId: string) => withSavedAuth(deps, (client) => client.acceptFriendRequest(requestId)));

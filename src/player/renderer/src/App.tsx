@@ -937,10 +937,10 @@ export function App() {
     }
   }
 
-  async function loadMatchHistory(player: MatchHistoryPlayer | null = null) {
+  async function loadMatchHistory(player: MatchHistoryPlayer | null = null, page = 1) {
     setMatchHistoryLoading(true);
     try {
-      const nextHistory = await api.listMatchHistory(player?.accountId);
+      const nextHistory = await api.listMatchHistory(player?.accountId, page);
       setMatchHistory(nextHistory);
       if (!player) setRankmeScore(nextHistory.rankmeScore);
     } catch (error) {
@@ -1421,6 +1421,7 @@ export function App() {
           loading={matchHistoryLoading}
           onBackHome={backFromMatchHistory}
           onOpenMatch={(matchId) => void openMatchHistoryResult(matchId)}
+          onPageChange={(page) => void loadMatchHistory(matchHistoryPlayer, page)}
         />
       );
     }

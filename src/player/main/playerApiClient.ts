@@ -127,8 +127,10 @@ export class PlayerApiClient {
     return this.request<{ score: number | null }>("GET", "/me/rankme-score").then((response) => response.score);
   }
 
-  listMatchHistory(accountId?: string): Promise<PlayerMatchHistoryDto> {
-    return this.request<PlayerMatchHistoryDto>("GET", accountId ? `/matches/history?accountId=${encodeURIComponent(accountId)}` : "/matches/history");
+  listMatchHistory(accountId?: string, page = 1): Promise<PlayerMatchHistoryDto> {
+    const query = new URLSearchParams({ page: String(page) });
+    if (accountId) query.set("accountId", accountId);
+    return this.request<PlayerMatchHistoryDto>("GET", `/matches/history?${query.toString()}`);
   }
 
   async getMatchHistoryResult(matchId: string, accountId?: string): Promise<PlayerMatchResultDto> {

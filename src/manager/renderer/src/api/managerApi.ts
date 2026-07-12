@@ -1,4 +1,4 @@
-import type { AccountView, BootstrapAdminInput, CreateAccountInput, LogEntry, LoginResult, ManagerConfig, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, BootstrapAdminInput, CreateAccountInput, LogEntry, LoginResult, ManagerConfig, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../../../shared/types.js";
 import type { UpdateCheckResult } from "../../../../desktop/updateTypes.js";
 
 export type { UpdateCheckResult };
@@ -23,6 +23,8 @@ export const managerApi = {
 
 export const accountApi = {
   list: () => window.managerApi.listAccounts() as Promise<AccountView[]>,
+  matches: (id: string, page: number) => window.managerApi.accountMatches(id, page) as Promise<AccountMatchHistory>,
+  matchDetail: (id: string, matchId: string) => window.managerApi.accountMatchDetail(id, matchId) as Promise<AccountMatchDetail>,
   create: (input: CreateAccountInput) => window.managerApi.createAccount(input) as Promise<AccountView>,
   update: (id: string, input: UpdateAccountInput) => window.managerApi.updateAccount(id, input) as Promise<AccountView>,
   resetPassword: (id: string, password: string) => window.managerApi.resetPassword(id, password) as Promise<AccountView>,

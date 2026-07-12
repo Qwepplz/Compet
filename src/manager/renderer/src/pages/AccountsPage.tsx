@@ -1,8 +1,8 @@
-import { Button, Form, Input, Modal, Space, Switch, Table, message } from "antd";
+import { Button, Form, Input, Modal, Pagination, Space, Switch, Table, message } from "antd";
 import type { TableProps } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { USERNAME_PATTERN } from "../../../../accounts/accountTypes.js";
-import type { AccountView, CreateAccountInput, UpdateAccountInput } from "../../../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, UpdateAccountInput } from "../../../shared/types.js";
 import { accountApi } from "../api/managerApi.js";
 
 interface AccountFormValues {
@@ -14,6 +14,11 @@ interface AccountFormValues {
 
 export function AccountsPage() {
   const [accounts, setAccounts] = useState<AccountView[]>([]);
+  const [matchHistoryAccount, setMatchHistoryAccount] = useState<AccountView | null>(null);
+  const [matchHistory, setMatchHistory] = useState<AccountMatchHistory | null>(null);
+  const [matchHistoryLoading, setMatchHistoryLoading] = useState(false);
+  const [matchDetail, setMatchDetail] = useState<AccountMatchDetail | null>(null);
+  const [matchDetailLoading, setMatchDetailLoading] = useState(false);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -24,6 +29,8 @@ export function AccountsPage() {
   const updatingIdsRef = useRef<Set<string>>(new Set());
   const resettingIdsRef = useRef<Set<string>>(new Set());
   const deletingIdsRef = useRef<Set<string>>(new Set());
+  const matchHistoryRequestIdRef = useRef(0);
+  const matchDetailRequestIdRef = useRef(0);
   const [form] = Form.useForm<AccountFormValues>();
 
   async function refresh() {
@@ -108,6 +115,7 @@ export function AccountsPage() {
         const deleting = deletingIds.has(row.id);
         return (
           <Space>
+            {row.role === "player" ? <Button onClick={() => void openMatchHistory(row, 1)}>历史战绩</Button> : null}
             {row.role === "player" ? <Button onClick={() => edit(row)}>编辑</Button> : null}
             <Button loading={resetting} disabled={resetting} onClick={() => reset(row)}>重置密码</Button>
             <Button danger loading={deleting} disabled={deleting || row.role === "admin"} onClick={() => remove(row)}>删除账号</Button>
@@ -116,6 +124,54 @@ export function AccountsPage() {
       },
     },
   ];
+
+  async function openMatchHistory(account: AccountView, page: number) {
+    const requestId = ++matchHistoryRequestIdRef.current;
+    setMatchHistoryAccount(account);
+    setMatchHistoryLoading(true);
+    if (page === 1) setMatchHistory(null);
+    try {
+      const history = await accountApi.matches(account.id, page);
+      if (requestId === matchHistoryRequestIdRef.current) setMatchHistory(history);
+    } catch (error) {
+      if (requestId === matchHistoryRequestIdRef.current) {
+        message.error(error instanceof Error ? error.message : "读取历史战绩失败");
+      }
+    } finally {
+      if (requestId === matchHistoryRequestIdRef.current) setMatchHistoryLoading(false);
+    }
+  }
+
+  async function openMatchDetail(matchId: string) {
+    if (!matchHistoryAccount) return;
+    const requestId = ++matchDetailRequestIdRef.current;
+    setMatchDetail(null);
+    setMatchDetailLoading(true);
+    try {
+      const detail = await accountApi.matchDetail(matchHistoryAccount.id, matchId);
+      if (requestId === matchDetailRequestIdRef.current) setMatchDetail(detail);
+    } catch (error) {
+      if (requestId === matchDetailRequestIdRef.current) {
+        message.error(error instanceof Error ? error.message : "读取战绩详情失败");
+      }
+    } finally {
+      if (requestId === matchDetailRequestIdRef.current) setMatchDetailLoading(false);
+    }
+  }
+
+  function closeMatchHistory() {
+    matchHistoryRequestIdRef.current += 1;
+    setMatchHistoryAccount(null);
+    setMatchHistory(null);
+    setMatchHistoryLoading(false);
+    closeMatchDetail();
+  }
+
+  function closeMatchDetail() {
+    matchDetailRequestIdRef.current += 1;
+    setMatchDetail(null);
+    setMatchDetailLoading(false);
+  }
 
   function create() {
     setIsEditing(false);
@@ -226,6 +282,68 @@ export function AccountsPage() {
         <Button type="primary" onClick={create}>创建账号</Button>
       </div>
       <Table rowKey="id" columns={columns} dataSource={accounts} loading={loading} pagination={false} />
+      <Modal
+        title={matchHistoryAccount ? `${matchHistoryAccount.username} 的历史战绩` : "历史战绩"}
+        open={matchHistoryAccount !== null}
+        footer={null}
+        width={1000}
+        onCancel={closeMatchHistory}
+      >
+        <Table
+          rowKey="matchId"
+          loading={matchHistoryLoading}
+          dataSource={matchHistory?.matches ?? []}
+          pagination={false}
+          locale={{ emptyText: "暂无战绩" }}
+          columns={[
+            { title: "日期", dataIndex: "completedAt", render: (value: string) => new Date(value).toLocaleString() },
+            { title: "地图", dataIndex: "mapName" },
+            { title: "结果", render: (_, row) => row.selfWon ? "胜利" : "失败" },
+            { title: "比分", render: (_, row) => row.selfTeam === "teamA" ? `${row.score.team1} : ${row.score.team2}` : `${row.score.team2} : ${row.score.team1}` },
+            { title: "K/D/A", render: (_, row) => `${row.self.kills}/${row.self.deaths}/${row.self.assists}` },
+            { title: "Rating", render: (_, row) => typeof row.self.rating2 === "number" ? row.self.rating2.toFixed(2) : "-" },
+            { title: "操作", render: (_, row) => <Button onClick={() => void openMatchDetail(row.matchId)}>详情</Button> },
+          ]}
+        />
+        {matchHistory && matchHistoryAccount && matchHistory.total > matchHistory.pageSize ? (
+          <Pagination
+            current={matchHistory.page}
+            pageSize={matchHistory.pageSize}
+            total={matchHistory.total}
+            showSizeChanger={false}
+            disabled={matchHistoryLoading}
+            onChange={(page) => void openMatchHistory(matchHistoryAccount, page)}
+          />
+        ) : null}
+      </Modal>
+      <Modal
+        title={matchDetail ? `${matchDetail.account.username} · ${matchDetail.result.mapName}` : "战绩详情"}
+        open={matchDetail !== null || matchDetailLoading}
+        footer={null}
+        width={1000}
+        onCancel={closeMatchDetail}
+      >
+        {matchDetail ? (
+          <>
+            <p>{matchDetail.result.team1Name} {matchDetail.result.team1Score} : {matchDetail.result.team2Score} {matchDetail.result.team2Name}</p>
+            <Table
+              rowKey={(row) => `${row.steam64}-${row.team}`}
+              dataSource={matchDetail.result.players}
+              pagination={false}
+              columns={[
+                { title: "选手", dataIndex: "name" },
+                { title: "队伍", dataIndex: "team" },
+                { title: "击杀", dataIndex: "kills" },
+                { title: "死亡", dataIndex: "deaths" },
+                { title: "助攻", dataIndex: "assists" },
+                { title: "伤害", dataIndex: "damage" },
+                { title: "爆头", dataIndex: "headshots" },
+                { title: "Rating", dataIndex: "rating2", render: (value: number) => value.toFixed(2) },
+              ]}
+            />
+          </>
+        ) : null}
+      </Modal>
       <Modal
         title="账号"
         open={open}

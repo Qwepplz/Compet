@@ -8,10 +8,10 @@ import type { SessionService } from "../auth/sessionService.js";
 import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
-import type { MatchPlan, MatchPlayerResult, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
 import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
-import type { CompletedMatchRecord, MatchRecordStore } from "../records/matchRecordStore.js";
+import type { MatchRecordStore } from "../records/matchRecordStore.js";
+import { MATCH_HISTORY_PAGE_SIZE, matchHistoryMatchIdSchema, matchHistoryPageSchema, toMatchHistoryEntry } from "../records/matchHistory.js";
 import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, tooManyRequests, unauthorized } from "./httpErrors.js";
 
@@ -47,8 +47,8 @@ const queueSchema = z.object({ partyId: z.string().min(1).optional() }).default(
 const friendSearchQuerySchema = z.object({ q: z.string().default("") }).default({ q: "" });
 const friendRequestSchema = z.object({ accountId: z.string().min(1) });
 const matchRoomParamsSchema = z.object({ id: z.string().min(1) });
-const matchHistoryQuerySchema = z.object({ accountId: z.string().min(1).optional() }).default({});
-const matchHistoryLimit = 20;
+const matchHistoryAccountQuerySchema = z.object({ accountId: z.string().min(1).optional() });
+const matchHistoryQuerySchema = matchHistoryAccountQuerySchema.extend({ page: matchHistoryPageSchema }).default({ page: 1 });
 const realtimeEventsQuerySchema = z.object({
   afterSeq: z.coerce.number().int().min(0).default(0),
   timeoutMs: z.coerce.number().int().min(0).max(30_000).default(25_000),
@@ -103,54 +103,6 @@ function requireRecords(deps: RouteDeps): Pick<MatchRecordStore, "listPlayerComp
 
 function withServerNow<T extends object>(payload: T): T & { serverNow: string } {
   return { ...payload, serverNow: new Date().toISOString() };
-}
-
-function accountTeam(plan: MatchPlan, steam64: string): TeamSide | null {
-  if (plan.teamA.participants.some((participant) => participant.kind === "human" && participant.steam64?.trim() === steam64)) return "teamA";
-  if (plan.teamB.participants.some((participant) => participant.kind === "human" && participant.steam64?.trim() === steam64)) return "teamB";
-  return null;
-}
-
-function resultPlayer(result: MatchSeriesResult, steam64: string): MatchPlayerResult | null {
-  if (!steam64) return null;
-  return result.players.find((player) => player.steam64.trim() === steam64) ?? null;
-}
-
-function finiteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function matchHistoryRankmeScore(plan: MatchPlan, self: MatchPlayerResult): number | undefined {
-  const before = plan.rankmeScoresBefore?.[self.steam64.trim()];
-  if (finiteNumber(before)) return before;
-  return finiteNumber(self.rankmeScore) && finiteNumber(self.rankmeScoreDelta) ? self.rankmeScore - self.rankmeScoreDelta : undefined;
-}
-
-function toMatchHistoryEntry(record: CompletedMatchRecord, account: AccountRecord) {
-  const steam64 = account.steam64.trim();
-  const selfTeam = accountTeam(record.plan, steam64);
-  if (!selfTeam) return null;
-  const self = resultPlayer(record.result, steam64);
-  if (!self) return null;
-  return {
-    matchId: record.matchId,
-    completedAt: record.result.completedAt,
-    mapName: record.result.mapName,
-    winner: record.result.winner,
-    score: { team1: record.result.team1Score, team2: record.result.team2Score },
-    selfTeam,
-    selfWon: record.result.winner === selfTeam,
-    self: {
-      kills: self.kills,
-      deaths: self.deaths,
-      assists: self.assists,
-      damage: self.damage,
-      headshots: self.headshots,
-      rating2: self.rating2,
-      rankmeScore: matchHistoryRankmeScore(record.plan, self),
-      rankmeScoreDelta: self.rankmeScoreDelta,
-    },
-  };
 }
 
 async function rankmeScoreFor(deps: RouteDeps, account: AccountRecord, hasCompletedMatches: boolean | undefined): Promise<number | null> {
@@ -342,6 +294,33 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     return { ok: true };
   });
 
+  app.get("/admin/accounts/:id/matches", async (request) => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    const records = requireRecords(deps);
+    const { id } = accountIdParamsSchema.parse(request.params);
+    const { page } = matchHistoryQuerySchema.parse(request.query ?? {});
+    const account = await deps.accounts.getById(id);
+    if (!account || account.role !== "player") throw notFound();
+    const completedRecords = await records.listPlayerCompletedMatches(account.steam64, { page, pageSize: MATCH_HISTORY_PAGE_SIZE });
+    const matches = completedRecords.matches
+      .map((record) => toMatchHistoryEntry(record, account))
+      .filter((record): record is NonNullable<typeof record> => Boolean(record));
+    return { account: publicAccount(account), matches, page, pageSize: MATCH_HISTORY_PAGE_SIZE, total: completedRecords.total };
+  });
+
+  app.get("/admin/accounts/:id/matches/:matchId", async (request) => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    const records = requireRecords(deps);
+    const { id, matchId } = z.object({ id: accountIdSchema, matchId: matchHistoryMatchIdSchema }).parse(request.params);
+    const account = await deps.accounts.getById(id);
+    if (!account || account.role !== "player") throw notFound();
+    const match = await records.readPlayerCompletedMatch(account.steam64, matchId);
+    if (!match) throw notFound();
+    return { account: publicAccount(account), result: match.result };
+  });
+
   app.get("/admin/matchmaking/occupancy", async (request) => {
     await authenticateRequest(request, deps);
     requireAdmin(request);
@@ -358,22 +337,24 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
   app.get("/me/rankme-score", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
-    const completedMatches = deps.records ? await deps.records.listPlayerCompletedMatches(auth.account.steam64, 1) : undefined;
-    return { score: await rankmeScoreFor(deps, auth.account, completedMatches ? completedMatches.length > 0 : undefined) };
+    const completedMatches = deps.records
+      ? await deps.records.listPlayerCompletedMatches(auth.account.steam64, { page: 1, pageSize: 1 })
+      : undefined;
+    return { score: await rankmeScoreFor(deps, auth.account, completedMatches ? completedMatches.total > 0 : undefined) };
   });
 
   app.get("/matches/history", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const records = requireRecords(deps);
-    const { accountId } = matchHistoryQuerySchema.parse(request.query ?? {});
+    const { accountId, page } = matchHistoryQuerySchema.parse(request.query ?? {});
     const historyAccount = await resolveMatchHistoryAccount(deps, auth.account, accountId);
-    const completedRecords = await records.listPlayerCompletedMatches(historyAccount.steam64, matchHistoryLimit);
-    const matches = completedRecords
+    const completedRecords = await records.listPlayerCompletedMatches(historyAccount.steam64, { page, pageSize: MATCH_HISTORY_PAGE_SIZE });
+    const matches = completedRecords.matches
       .map((record) => toMatchHistoryEntry(record, historyAccount))
       .filter((record): record is NonNullable<typeof record> => Boolean(record));
-    const rankmeScore = await rankmeScoreFor(deps, historyAccount, completedRecords.length > 0);
-    return { rankmeScore, matches };
+    const rankmeScore = await rankmeScoreFor(deps, historyAccount, completedRecords.total > 0);
+    return { rankmeScore, matches, page, pageSize: MATCH_HISTORY_PAGE_SIZE, total: completedRecords.total };
   });
 
   app.get("/matches/:id/result", async (request) => {
@@ -381,7 +362,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const records = requireRecords(deps);
     const { id } = matchRoomParamsSchema.parse(request.params);
-    const { accountId } = matchHistoryQuerySchema.parse(request.query ?? {});
+    const { accountId } = matchHistoryAccountQuerySchema.parse(request.query ?? {});
     const historyAccount = await resolveMatchHistoryAccount(deps, auth.account, accountId);
     const match = await records.readPlayerCompletedMatch(historyAccount.steam64, id);
     if (!match) throw notFound();

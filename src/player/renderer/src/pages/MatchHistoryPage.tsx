@@ -1,5 +1,5 @@
 import { ArrowLeftOutlined } from "@ant-design/icons";
-import { Button, Spin } from "antd";
+import { Button, Pagination, Spin } from "antd";
 import type { CSSProperties } from "react";
 import type { PlayerMatchHistoryDto, PlayerMatchHistoryEntryDto } from "../../../shared/types.js";
 
@@ -8,6 +8,7 @@ interface MatchHistoryPageProps {
   loading: boolean;
   onBackHome: () => void;
   onOpenMatch: (matchId: string) => void;
+  onPageChange: (page: number) => void;
 }
 
 const MIN_RATING2_PROGRESS = 8;
@@ -147,7 +148,7 @@ function MatchHistoryRow({
   );
 }
 
-export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch }: MatchHistoryPageProps) {
+export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch, onPageChange }: MatchHistoryPageProps) {
   const matches = history?.matches ?? [];
   return (
     <div className="match-history-page">
@@ -181,6 +182,16 @@ export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch }: 
             </tbody>
           </table>
         </div>
+        {history && history.total > history.pageSize ? (
+          <Pagination
+            current={history.page}
+            pageSize={history.pageSize}
+            total={history.total}
+            showSizeChanger={false}
+            disabled={loading}
+            onChange={onPageChange}
+          />
+        ) : null}
       </section>
     </div>
   );

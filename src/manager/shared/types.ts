@@ -1,5 +1,7 @@
 import type { AccountRole } from "../../accounts/accountTypes.js";
 import type { ActivityLogInput } from "../../shared/activityLog.js";
+import type { MatchSeriesResult } from "../../matchmaking/types.js";
+import type { MatchHistoryEntry } from "../../records/matchHistory.js";
 
 export type { AccountRole } from "../../accounts/accountTypes.js";
 export type { LogLevel, LogSource } from "../../shared/activityLog.js";
@@ -64,6 +66,19 @@ export interface AccountView {
   createdAt: string;
   updatedAt: string;
 }
+export interface AccountMatchHistory {
+  account: AccountView;
+  matches: MatchHistoryEntry[];
+  page: number;
+  pageSize: number;
+  total: number;
+}
+
+export interface AccountMatchDetail {
+  account: AccountView;
+  result: MatchSeriesResult;
+}
+
 export interface CreateAccountInput {
   username: string;
   password: string;

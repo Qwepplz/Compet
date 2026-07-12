@@ -1,5 +1,5 @@
 import { requestJson } from "../../shared/httpJsonClient.js";
-import type { AccountView, CreateAccountInput, LoginResult, MatchmakingOccupancy, UpdateAccountInput } from "../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, LoginResult, MatchmakingOccupancy, UpdateAccountInput } from "../shared/types.js";
 
 export class ServiceApiClient {
   private token?: string;
@@ -37,6 +37,14 @@ export class ServiceApiClient {
   async accounts(): Promise<AccountView[]> {
     const response = await this.request<{ accounts: AccountView[] }>("GET", "/admin/accounts");
     return response.accounts;
+  }
+
+  accountMatchHistory(id: string, page: number): Promise<AccountMatchHistory> {
+    return this.request("GET", `/admin/accounts/${encodeURIComponent(id)}/matches?page=${page}`);
+  }
+
+  accountMatchDetail(id: string, matchId: string): Promise<AccountMatchDetail> {
+    return this.request("GET", `/admin/accounts/${encodeURIComponent(id)}/matches/${encodeURIComponent(matchId)}`);
   }
 
   async createAccount(input: CreateAccountInput): Promise<AccountView> {

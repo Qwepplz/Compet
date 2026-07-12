@@ -3,7 +3,7 @@ import path from "node:path";
 import type { FileConfigStore } from "./configStore.js";
 import type { FileLogStore } from "./logStore.js";
 import type { ManagedServiceProcess } from "./serviceProcess.js";
-import type { AccountView, CreateAccountInput, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../shared/types.js";
 import { ServiceApiClient } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
 import { delay } from "../../shared/async.js";
@@ -15,6 +15,8 @@ import type { AccountRecord } from "../../accounts/accountTypes.js";
 import { JsonSessionRepository } from "../../auth/sessionRepository.js";
 import { SessionService } from "../../auth/sessionService.js";
 import type { ActivityLogInput, LogActor } from "../../shared/activityLog.js";
+import { MatchRecordStore } from "../../records/matchRecordStore.js";
+import { MATCH_HISTORY_PAGE_SIZE, matchHistoryMatchIdSchema, matchHistoryPageSchema, toMatchHistoryEntry } from "../../records/matchHistory.js";
 
 export interface IpcDeps {
   configStore: FileConfigStore;
@@ -31,7 +33,7 @@ const STARTUP_TIMEOUT_MS = 15_000;
 const STARTUP_POLL_INTERVAL_MS = 250;
 
 export function registerManagerIpc(deps: IpcDeps): void {
-  let offlineAccounts: { filePath: string; accounts: AccountService; sessions: SessionService } | undefined;
+  let offlineAccounts: { filePath: string; accounts: AccountService; sessions: SessionService; records: MatchRecordStore } | undefined;
   let managerActor: LogActor | undefined;
 
   async function logActivity(input: ActivityLogInput): Promise<void> {
@@ -62,6 +64,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
         await JsonSessionRepository.create(path.join(config.dataDir, "records", "sessions.json")),
         config.tokenTtlMinutes,
       ),
+      records: new MatchRecordStore(path.join(config.dataDir, "records")),
     };
     return offlineAccounts;
   }
@@ -81,6 +84,35 @@ export function registerManagerIpc(deps: IpcDeps): void {
     if (!offline) return deps.getApiClient().accounts();
     await requireOfflineAdmin(offline);
     return (await offline.accounts.listAccounts()).map(toAccountView);
+  }
+
+  async function accountMatchHistory(id: string, page: number): Promise<AccountMatchHistory> {
+    const offline = await getOfflineAccounts();
+    if (!offline) return deps.getApiClient().accountMatchHistory(id, page);
+    await requireOfflineAdmin(offline);
+    const account = await offline.accounts.getById(id);
+    if (!account || account.role !== "player") throw new Error("Account not found");
+    const completedRecords = await offline.records.listPlayerCompletedMatches(account.steam64, { page, pageSize: MATCH_HISTORY_PAGE_SIZE });
+    return {
+      account: toAccountView(account),
+      matches: completedRecords.matches
+        .map((record) => toMatchHistoryEntry(record, account))
+        .filter((record): record is NonNullable<typeof record> => Boolean(record)),
+      page,
+      pageSize: MATCH_HISTORY_PAGE_SIZE,
+      total: completedRecords.total,
+    };
+  }
+
+  async function accountMatchDetail(id: string, matchId: string): Promise<AccountMatchDetail> {
+    const offline = await getOfflineAccounts();
+    if (!offline) return deps.getApiClient().accountMatchDetail(id, matchId);
+    await requireOfflineAdmin(offline);
+    const account = await offline.accounts.getById(id);
+    if (!account || account.role !== "player") throw new Error("Account not found");
+    const match = await offline.records.readPlayerCompletedMatch(account.steam64, matchId);
+    if (!match) throw new Error("Match not found");
+    return { account: toAccountView(account), result: match.result };
   }
 
   async function createAccount(input: CreateAccountInput): Promise<AccountView> {
@@ -192,6 +224,8 @@ export function registerManagerIpc(deps: IpcDeps): void {
   ipcMain.handle("credentials:load", () => deps.loadSavedLogin());
   ipcMain.handle("matchmaking:occupancy", () => deps.getApiClient().matchmakingOccupancy());
   ipcMain.handle("accounts:list", () => listAccounts());
+  ipcMain.handle("accounts:matches", (_event, id, page) => accountMatchHistory(accountIdSchema.parse(id), matchHistoryPageSchema.parse(page)));
+  ipcMain.handle("accounts:matchDetail", (_event, id, matchId) => accountMatchDetail(accountIdSchema.parse(id), matchHistoryMatchIdSchema.parse(matchId)));
   ipcMain.handle("accounts:create", (_event, input) => createAccount(createAccountSchema.parse(input)));
   ipcMain.handle("accounts:update", (_event, id, input) => updateAccount(accountIdSchema.parse(id), patchAccountSchema.parse(input)));
   ipcMain.handle("accounts:resetPassword", (_event, id, password) => {

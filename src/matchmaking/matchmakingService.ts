@@ -1105,8 +1105,8 @@ export class MatchmakingService {
   private async isFirstCompletedMatch(participant: MatchParticipant): Promise<boolean> {
     const steam64 = participant.steam64?.trim();
     if (!steam64 || !this.deps.records?.listPlayerCompletedMatches) return false;
-    const matches = await this.deps.records.listPlayerCompletedMatches(steam64, 1);
-    return matches.length === 0;
+    const matches = await this.deps.records.listPlayerCompletedMatches(steam64, { page: 1, pageSize: 1 });
+    return matches.total === 0;
   }
 
   private async applyRankmeScoreDeltas(

@@ -1,5 +1,6 @@
 import type { AccountView } from "../../manager/shared/types.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
+import { MATCH_HISTORY_PAGE_SIZE } from "../../records/matchHistory.js";
 import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { PlayerLoginResult } from "../main/playerApiClient.js";
 import type {
@@ -194,7 +195,7 @@ export function createPreviewPlayerApi() {
     },
     listFriends: async (): Promise<PlayerFriendListDto> => previewFriends,
     getRankmeScore: async (): Promise<number> => 4017,
-    listMatchHistory: async (_accountId?: string): Promise<PlayerMatchHistoryDto> => ({
+    listMatchHistory: async (_accountId?: string, page = 1): Promise<PlayerMatchHistoryDto> => ({
       rankmeScore: 4017,
       matches: [{
         matchId: "preview-match",
@@ -206,6 +207,9 @@ export function createPreviewPlayerApi() {
         selfWon: true,
         self: { kills: 21, deaths: 9, assists: 5, damage: 2400, headshots: 10, rating2: 1.46, rankmeScore: 4017, rankmeScoreDelta: 25 },
       }],
+      page,
+      pageSize: MATCH_HISTORY_PAGE_SIZE,
+      total: 1,
     }),
     getMatchHistoryResult: async (_matchId?: string, _accountId?: string): Promise<PlayerMatchResultDto> => previewMatchResult,
     reenrichFriends: async (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => results,

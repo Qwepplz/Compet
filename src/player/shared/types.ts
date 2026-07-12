@@ -8,6 +8,7 @@ import type { MatchConnectInfo } from "../../game/matchExecutor.js";
 import type { PublicMatchRoomRecord, PartyInvitationDto } from "../../matchmaking/matchmakingService.js";
 import type { MatchMapSelectionState, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
 import type { MatchParticipant, MatchPlayerResult, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
+import type { MatchHistoryEntry } from "../../records/matchHistory.js";
 
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
 export type PlayerRealtimeSnapshotReason = "manual" | "reconnected";
@@ -30,20 +31,14 @@ export type PlayerMatchResultDto = MatchSeriesResult;
 export type PlayerMatchPlayerResultDto = MatchPlayerResult;
 export type PlayerServerTimedDto<T> = T & { serverNow?: string };
 
-export interface PlayerMatchHistoryEntryDto {
-  matchId: string;
-  completedAt: string;
-  mapName: string;
-  winner: "teamA" | "teamB";
-  score: { team1: number; team2: number };
-  selfTeam: "teamA" | "teamB";
-  selfWon: boolean;
-  self: Pick<MatchPlayerResult, "kills" | "deaths" | "assists" | "damage" | "headshots" | "rating2" | "rankmeScore" | "rankmeScoreDelta">;
-}
+export type PlayerMatchHistoryEntryDto = MatchHistoryEntry;
 
 export interface PlayerMatchHistoryDto {
   rankmeScore: number | null;
   matches: PlayerMatchHistoryEntryDto[];
+  page: number;
+  pageSize: number;
+  total: number;
 }
 
 export interface PlayerRealtimeStatusDto {

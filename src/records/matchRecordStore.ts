@@ -28,27 +28,35 @@ export class MatchRecordStore {
     return readJsonFile<MatchPlan>(this.matchFile(matchId, "plan.json"));
   }
 
-  async listPlayerCompletedMatches(steam64: string, limit: number): Promise<CompletedMatchRecord[]> {
+  async listPlayerCompletedMatches(
+    steam64: string,
+    pagination: { page: number; pageSize: number },
+  ): Promise<{ matches: CompletedMatchRecord[]; total: number }> {
     const normalizedSteam64 = steam64.trim();
-    if (limit <= 0 || !normalizedSteam64) return [];
+    if (pagination.page <= 0 || pagination.pageSize <= 0 || !normalizedSteam64) {
+      return { matches: [], total: 0 };
+    }
     let entries: Dirent[];
     try {
       entries = await readdir(path.join(this.recordsDir, "matches"), { withFileTypes: true });
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { matches: [], total: 0 };
       throw error;
     }
 
-    const matches = await Promise.all(
+    const completedMatches = (await Promise.all(
       entries
         .filter((entry) => entry.isDirectory())
         .map((entry) => this.readPlayerCompletedMatch(normalizedSteam64, entry.name)),
-    );
-
-    return matches
+    ))
       .filter((match): match is CompletedMatchRecord => Boolean(match))
-      .sort((a, b) => this.timestampOf(b.result.completedAt) - this.timestampOf(a.result.completedAt))
-      .slice(0, limit);
+      .sort((a, b) => this.timestampOf(b.result.completedAt) - this.timestampOf(a.result.completedAt));
+    const start = (pagination.page - 1) * pagination.pageSize;
+
+    return {
+      matches: completedMatches.slice(start, start + pagination.pageSize),
+      total: completedMatches.length,
+    };
   }
 
   async readPlayerCompletedMatch(steam64: string, matchId: string): Promise<CompletedMatchRecord | null> {
