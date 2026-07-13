@@ -12,6 +12,16 @@ interface AccountFormValues {
   steam64?: string;
 }
 
+type MatchDetailPlayer = AccountMatchDetail["result"]["players"][number];
+
+function rating2SortValue(player: MatchDetailPlayer): number {
+  return typeof player.rating2 === "number" && Number.isFinite(player.rating2) ? player.rating2 : Number.NEGATIVE_INFINITY;
+}
+
+function sortPlayersByRating2(players: MatchDetailPlayer[]): MatchDetailPlayer[] {
+  return [...players].sort((left, right) => rating2SortValue(right) - rating2SortValue(left));
+}
+
 export function AccountsPage() {
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [matchHistoryAccount, setMatchHistoryAccount] = useState<AccountView | null>(null);
@@ -275,6 +285,25 @@ export function AccountsPage() {
     }
   }
 
+  const matchDetailTeamSections = matchDetail ? [
+    {
+      team: "teamA" as const,
+      name: matchDetail.result.team1Name,
+      score: matchDetail.result.team1Score,
+      firstHalfScore: matchDetail.result.firstHalfScore?.team1Score,
+      secondHalfScore: matchDetail.result.secondHalfScore?.team1Score,
+      players: sortPlayersByRating2(matchDetail.result.players.filter((player) => player.team === "teamA")),
+    },
+    {
+      team: "teamB" as const,
+      name: matchDetail.result.team2Name,
+      score: matchDetail.result.team2Score,
+      firstHalfScore: matchDetail.result.firstHalfScore?.team2Score,
+      secondHalfScore: matchDetail.result.secondHalfScore?.team2Score,
+      players: sortPlayersByRating2(matchDetail.result.players.filter((player) => player.team === "teamB")),
+    },
+  ] : [];
+
   return (
     <>
       <div className="status-row">
@@ -324,24 +353,49 @@ export function AccountsPage() {
         onCancel={closeMatchDetail}
       >
         {matchDetail ? (
-          <>
-            <p>{matchDetail.result.team1Name} {matchDetail.result.team1Score} : {matchDetail.result.team2Score} {matchDetail.result.team2Name}</p>
-            <Table
-              rowKey={(row) => `${row.steam64}-${row.team}`}
-              dataSource={matchDetail.result.players}
-              pagination={false}
-              columns={[
-                { title: "选手", dataIndex: "name" },
-                { title: "队伍", dataIndex: "team" },
-                { title: "击杀", dataIndex: "kills" },
-                { title: "死亡", dataIndex: "deaths" },
-                { title: "助攻", dataIndex: "assists" },
-                { title: "伤害", dataIndex: "damage" },
-                { title: "爆头", dataIndex: "headshots" },
-                { title: "Rating", dataIndex: "rating2", render: (value: number) => value.toFixed(2) },
-              ]}
-            />
-          </>
+          <div className="manager-match-detail-teams">
+            {matchDetailTeamSections.map((section) => (
+              <section className="manager-match-detail-team" key={section.team}>
+                <header className="manager-match-detail-team-header">
+                  <strong className="manager-match-detail-team-name">{section.name}</strong>
+                  {section.firstHalfScore !== undefined || section.secondHalfScore !== undefined ? (
+                    <div className="manager-match-detail-halves">
+                      <span>上半场 <strong>{section.firstHalfScore ?? "-"}</strong></span>
+                      <span>下半场 <strong>{section.secondHalfScore ?? "-"}</strong></span>
+                    </div>
+                  ) : null}
+                  <strong
+                    className={
+                      section.team === matchDetail.result.winner
+                        ? "manager-match-detail-score manager-match-detail-score--winner"
+                        : "manager-match-detail-score manager-match-detail-score--loser"
+                    }
+                  >
+                    {section.score}
+                  </strong>
+                </header>
+                <Table
+                  rowKey={(row) => row.steam64 || `${row.team}-${row.name}`}
+                  dataSource={section.players}
+                  pagination={false}
+                  size="small"
+                  columns={[
+                    { title: "选手", dataIndex: "name" },
+                    { title: "击杀", dataIndex: "kills" },
+                    { title: "死亡", dataIndex: "deaths" },
+                    { title: "助攻", dataIndex: "assists" },
+                    { title: "伤害", dataIndex: "damage" },
+                    { title: "爆头", dataIndex: "headshots" },
+                    {
+                      title: "Rating",
+                      dataIndex: "rating2",
+                      render: (value?: number) => typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "-",
+                    },
+                  ]}
+                />
+              </section>
+            ))}
+          </div>
         ) : null}
       </Modal>
       <Modal

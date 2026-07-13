@@ -29,6 +29,15 @@ body { overflow: hidden; font-family: "Segoe UI", "Microsoft YaHei", Arial, sans
 .manager-status-tag { margin-inline-end: 0; display: inline-flex; align-items: center; height: 22px; line-height: 20px; }
 .status-url { display: inline-flex; align-items: center; max-width: min(42vw, 520px); height: 22px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 22px; }
 .error-text { padding: 10px 12px; border-radius: 6px; background: #fef2f2; color: #991b1b; overflow-wrap: anywhere; }
+.manager-match-detail-teams { display: grid; gap: 16px; }
+.manager-match-detail-team { display: grid; gap: 6px; }
+.manager-match-detail-team-header { display: flex; min-height: 32px; padding: 0 8px; align-items: center; gap: 16px; }
+.manager-match-detail-team-name { min-width: 0; overflow: hidden; flex: 1 1 auto; font-size: 16px; text-overflow: ellipsis; white-space: nowrap; }
+.manager-match-detail-halves { display: flex; flex: 0 0 auto; gap: 12px; color: #6b7280; font-size: 12px; }
+.manager-match-detail-halves strong { color: #172033; font-size: 14px; }
+.manager-match-detail-score { flex: 0 0 auto; font-size: 24px; line-height: 1; }
+.manager-match-detail-score--winner { color: #16a34a; }
+.manager-match-detail-score--loser { color: #dc2626; }
 .logs-page { height: calc(100vh - 84px); min-height: 0; display: flex; flex-direction: column; }
 .logs-header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .logs-header .page-title { flex: 0 0 auto; margin: 0; }
