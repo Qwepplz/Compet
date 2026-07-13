@@ -206,10 +206,7 @@ async function handleMessage(socket: WebSocket, data: RawData, account: AccountR
   }
 
   if (typeof message === "object" && message !== null && (message as { type?: unknown }).type === "ping") {
-    const messageId = nextActivityId("ping");
-    writeActivityLog({ source: "realtime", level: "info", message: `---> Request WebSocket, id [${messageId}]: type=ping`, actor: accountActor(account), context: { connectionId } });
     sendJson(socket, { type: "pong", serverTime: now() });
-    writeActivityLog({ source: "realtime", level: "info", message: `<--- Response WebSocket, id [${messageId}]: type=pong`, actor: accountActor(account), context: { connectionId, result: "ok" } });
     return;
   }
 

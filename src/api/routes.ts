@@ -181,9 +181,9 @@ function mapFriendServiceError(error: unknown): never {
 }
 
 export async function registerRoutes(app: FastifyInstance<any, any, any, any, any>, deps: RouteDeps): Promise<void> {
-  app.get("/health", async () => ({ ok: true, serverTime: new Date().toISOString() }));
+  app.get("/health", { config: { logSuccessfulActivity: false } }, async () => ({ ok: true, serverTime: new Date().toISOString() }));
 
-  app.get("/realtime/events", async (request) => {
+  app.get("/realtime/events", { config: { logSuccessfulActivity: false } }, async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const events = requireRealtimeEvents(deps);
@@ -321,7 +321,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     return { account: publicAccount(account), result: match.result };
   });
 
-  app.get("/admin/matchmaking/occupancy", async (request) => {
+  app.get("/admin/matchmaking/occupancy", { config: { logSuccessfulActivity: false } }, async (request) => {
     await authenticateRequest(request, deps);
     requireAdmin(request);
     const matchmaking = requireMatchmaking(deps);
@@ -619,7 +619,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     }
   });
 
-  app.get("/matchmaking/state", async (request) => {
+  app.get("/matchmaking/state", { config: { logSuccessfulActivity: false } }, async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);

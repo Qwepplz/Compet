@@ -4,6 +4,12 @@ import { SERVER_ACTIVITY_PREFIX, type ActivityLogInput, type LogActor, type LogS
 import type { RealtimeCommand, RealtimeCommandAck } from "../realtime/realtimeCommands.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 
+declare module "fastify" {
+  interface FastifyContextConfig {
+    logSuccessfulActivity?: boolean;
+  }
+}
+
 type LogContext = NonNullable<ActivityLogInput["context"]>;
 
 const requestStartedAt = new WeakMap<object, number>();
@@ -24,6 +30,7 @@ export function installHttpActivityLogging(app: FastifyInstance<any, any, any, a
   app.addHook("onRequest", async (request) => {
     requestStartedAt.set(request, Date.now());
     const route = requestRoute(request);
+    if (request.routeOptions.config.logSuccessfulActivity === false) return;
     writeActivityLog({
       source: routeSource(route),
       level: "info",
@@ -33,11 +40,17 @@ export function installHttpActivityLogging(app: FastifyInstance<any, any, any, a
   });
 
   app.addHook("onResponse", async (request, reply) => {
+    const failed = reply.statusCode >= 400;
+    if (!failed && request.routeOptions.config.logSuccessfulActivity === false) {
+      requestStartedAt.delete(request);
+      requestErrors.delete(request);
+      return;
+    }
+
     const route = requestRoute(request);
     const actor = requestActor(request);
     const source = routeSource(route);
     const context = httpContext(request, route);
-    const failed = reply.statusCode >= 400;
     const errorContext = requestErrors.get(request);
     const startedAt = requestStartedAt.get(request);
     const durationMs = startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt);
