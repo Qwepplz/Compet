@@ -187,6 +187,7 @@ export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch, on
             current={history.page}
             pageSize={history.pageSize}
             total={history.total}
+            showLessItems
             showSizeChanger={false}
             disabled={loading}
             onChange={onPageChange}

@@ -339,6 +339,7 @@ export function AccountsPage() {
             current={matchHistory.page}
             pageSize={matchHistory.pageSize}
             total={matchHistory.total}
+            showLessItems
             showSizeChanger={false}
             disabled={matchHistoryLoading}
             onChange={(page) => void openMatchHistory(matchHistoryAccount, page)}
