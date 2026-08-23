@@ -390,14 +390,18 @@ realtimeClient.onStatus((connection) => {
 });
 
 function publishEnrichedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion: number): void {
+  const publishedBeforeEnrich = shouldPublishRealtimeEventBeforeEnrich(event);
   realtimeDeliveryQueue = realtimeDeliveryQueue
     .then(() => deliverRealtimeEvent(event, sessionVersion, (next) => currentApiClient().enrichRealtimeEvent(next), {
       getSessionVersion: () => realtimeSessionVersion,
       isPaused: () => pauseRealtimeEvents,
+      isSuperseded: (next) => publishedBeforeEnrich
+        && typeof next.seq === "number"
+        && next.seq < lastDeliveredRealtimeSeq,
       queue: queueRealtimeEvent,
       publish: publishRealtimeEvent,
       enrichTimeoutMs: REALTIME_EVENT_ENRICH_TIMEOUT_MS,
-      publishFallback: !shouldPublishRealtimeEventBeforeEnrich(event),
+      publishFallback: !publishedBeforeEnrich,
     }))
     .catch(() => undefined);
 }

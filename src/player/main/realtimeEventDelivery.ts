@@ -3,6 +3,7 @@ import type { PlayerRealtimeEvent } from "../shared/types.js";
 export interface RealtimeEventDeliveryOptions {
   getSessionVersion: () => number;
   isPaused: () => boolean;
+  isSuperseded?: (event: PlayerRealtimeEvent) => boolean;
   queue: (event: PlayerRealtimeEvent) => void;
   publish: (event: PlayerRealtimeEvent) => void;
   enrichTimeoutMs?: number;
@@ -57,6 +58,7 @@ function publishOrQueue(
   options: RealtimeEventDeliveryOptions,
 ): void {
   if (sessionVersion !== options.getSessionVersion()) return;
+  if (options.isSuperseded?.(event)) return;
   if (options.isPaused()) {
     options.queue(event);
     return;
