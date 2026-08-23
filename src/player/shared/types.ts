@@ -6,13 +6,11 @@ import type {
 } from "../../friends/friendService.js";
 import type { MatchConnectInfo } from "../../game/matchExecutor.js";
 import type { PublicMatchRoomRecord, PartyInvitationDto } from "../../matchmaking/matchmakingService.js";
-import type { MatchMapSelectionState, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
+import type { MatchClientStage, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
 import type { MatchParticipant, MatchPlayerResult, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
 import type { MatchHistoryEntry } from "../../records/matchHistory.js";
 
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
-export type PlayerRealtimeSnapshotReason = "manual" | "reconnected";
-export type PlayerRealtimeSnapshotScope = "full" | "matchmaking";
 
 export type PlayerFriendSearchResultDto = FriendSearchResult;
 export type PlayerFriendDto = FriendDto;
@@ -25,7 +23,7 @@ export type PlayerReadyStateDto = MatchRoomReadyState;
 export type PlayerMatchParticipantDto = MatchParticipant;
 export type PlayerMatchTeamDto = MatchTeam;
 export type PlayerConnectDto = MatchConnectInfo;
-export type PlayerMapSelectionStateDto = MatchMapSelectionState;
+export type PlayerMatchStageDto = MatchClientStage;
 export type PlayerLiveMatchStateDto = PublicMatchRoomRecord;
 export type PlayerMatchResultDto = MatchSeriesResult;
 export type PlayerMatchPlayerResultDto = MatchPlayerResult;
@@ -58,13 +56,11 @@ export interface PlayerMatchmakingStateDto {
   room: PlayerLiveMatchStateDto | null;
   occupancy: PlayerMatchmakingOccupancyDto;
   serverNow?: string;
+  baseSeq: number;
 }
 
 export interface PlayerRealtimeSnapshotDto {
-  reason: PlayerRealtimeSnapshotReason;
-  serverNow?: string;
-  friends?: PlayerFriendListDto;
-  party?: PlayerPartyDto | null;
+  friends: PlayerFriendListDto;
   matchmaking: PlayerMatchmakingStateDto;
 }
 
@@ -103,8 +99,7 @@ export type PlayerRealtimeEvent =
       humanParticipants: PlayerMatchParticipantDto[];
     }>
   | PlayerRealtimeEventWithSeq<{ type: "match_room_created"; matchId: string; room: PlayerLiveMatchStateDto }>
-  | PlayerRealtimeEventWithSeq<{ type: "teams_assigned"; matchId: string; teamA: PlayerMatchTeamDto; teamB: PlayerMatchTeamDto }>
-  | PlayerRealtimeEventWithSeq<{ type: "map_randomizing_started"; matchId: string; mapSelection: PlayerMapSelectionStateDto }>
+  | PlayerRealtimeEventWithSeq<{ type: "match_room_updated"; matchId: string; room: PlayerLiveMatchStateDto }>
   | PlayerRealtimeEventWithSeq<{ type: "server_preparing"; matchId: string }>
   | PlayerRealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; connect: PlayerConnectDto }>
   | PlayerRealtimeEventWithSeq<{ type: "match_live"; matchId: string }>

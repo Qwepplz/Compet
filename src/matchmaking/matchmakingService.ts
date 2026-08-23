@@ -15,6 +15,7 @@ import { assignDevTeams, assignTeams } from "./teamAssignment.js";
 import type { GameSide, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayerResult, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
+  type MatchClientStage,
   type MatchMapSelectionState,
   type MatchRoomReadyState,
   type MatchRoomRecord,
@@ -30,6 +31,7 @@ const RECENT_MAP_EXCLUSION_COUNT = 3;
 const MAX_PARTY_HUMANS = 5;
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 45_000;
+const STAGE_BARRIER_TIMEOUT_MS = 45_000;
 
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 
@@ -233,6 +235,10 @@ export interface PublicMatchRoomRecord {
   botParticipantIds?: string[];
   ready?: MatchRoomReadyState[];
   readyDeadlineAt?: string;
+  stageBarrier?: {
+    stage: MatchClientStage;
+    acknowledgedAccountIds: string[];
+  };
   partyId?: string;
   mapSelection?: MatchMapSelectionState;
   connect?: MatchConnectInfo;
@@ -252,7 +258,7 @@ export class MatchmakingService {
   private readonly unrefReadyTimeouts: boolean;
   private readonly partyInviteTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
-  private readonly mapSelectionTimeouts = new Map<string, ReadyTimeoutHandle>();
+  private readonly stageBarrierTimeouts = new Map<string, ReadyTimeoutHandle>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
 
   constructor(private readonly deps: MatchmakingServiceDeps) {
@@ -262,6 +268,29 @@ export class MatchmakingService {
     this.setTimeoutFn = deps.setTimeout ?? setTimeout;
     this.clearTimeoutFn = deps.clearTimeout ?? clearTimeout;
     this.unrefReadyTimeouts = deps.unrefReadyTimeouts ?? true;
+  }
+
+  async resumePendingTimeouts(): Promise<void> {
+    const rooms = await this.deps.store.listRooms();
+    const resumedRooms = rooms.map((room) => (
+      room.stageBarrier?.acknowledgements.length
+        ? {
+            ...room,
+            stageBarrier: { ...room.stageBarrier, acknowledgements: [] },
+          }
+        : room
+    ));
+    if (resumedRooms.some((room, index) => room !== rooms[index])) {
+      await this.deps.store.saveRooms(resumedRooms);
+    }
+
+    for (const room of resumedRooms) {
+      if (room.stageBarrier) {
+        this.scheduleStageBarrierTimeout(room);
+      } else {
+        this.scheduleReadyTimeout(room);
+      }
+    }
   }
   createParty(ownerAccountId: string): Promise<PartyRecord> {
     return this.enqueueMutation(async () => {
@@ -357,12 +386,6 @@ export class MatchmakingService {
   handleAccountOffline(accountId: string): Promise<void> {
     return this.enqueueMutation(async () => {
       await this.expirePendingInvitationsForAccount(accountId);
-      const rooms = await this.deps.store.listRooms();
-      const readyRoom = this.findReadyRoomForAccount(rooms, accountId);
-      if (readyRoom) {
-        await this.failReadyRoom(rooms, readyRoom, "player offline");
-      }
-
       const parties = await this.deps.store.listParties();
       const party = parties.find((candidate) => (
         candidate.memberAccountIds.includes(accountId)
@@ -552,16 +575,16 @@ export class MatchmakingService {
         ? assignDevTeams({ humans, botCandidates: this.deps.botCatalog.candidates, random: this.random })
         : assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
       const participants = [...teams.teamA.participants, ...teams.teamB.participants];
+      const humanAccountIds = humans.map((participant) => participant.accountId ?? participant.id);
       const room: MatchRoomRecord = {
         id: this.idFactory(),
         phase: "ready",
         teamA: teams.teamA,
         teamB: teams.teamB,
-        humanAccountIds: humans.map((participant) => participant.accountId ?? participant.id),
+        humanAccountIds,
         botParticipantIds: participants.filter((participant) => participant.kind === "bot").map((participant) => participant.id),
         ready: this.buildReadyStates(humans),
-        readyDeadlineAt: this.buildReadyDeadlineAt(startedAt),
-        readyEnteredAccountIds: [],
+        stageBarrier: this.buildStageBarrier("room_entered", humanAccountIds, startedAt),
         partyId: party.id,
         createdAt: startedAt,
       };
@@ -571,12 +594,10 @@ export class MatchmakingService {
       await this.deps.store.saveRooms(rooms);
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
       await this.expirePendingInvitationsForParty(party.id);
-      this.scheduleReadyTimeout(room);
+      this.scheduleStageBarrierTimeout(room);
       await this.emitPartyUpdated(updatedParty);
       await this.emitOccupancyUpdated();
       await this.emitReadyRoomCreatedPerAccount(room);
-      await this.emit(this.toReadyEvent("ready_check_started", room));
-      await this.emit(this.toReadyEvent("ready_check_updated", room));
       return this.toPlayerPublicRoom(room, ownerAccountId);
     });
   }
@@ -613,41 +634,97 @@ export class MatchmakingService {
     });
   }
 
-  ackReadyRoomEntered(roomId: string, accountId: string): Promise<PublicMatchRoomRecord> {
+  ackMatchStage(roomId: string, stage: MatchClientStage, accountId: string, connectionId: string): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
       const rooms = await this.deps.store.listRooms();
-      const room = rooms.find((candidate) => candidate.id === roomId && candidate.phase === "ready");
-      if (!room) throw new Error(`ready room not found: ${roomId}`);
+      const room = rooms.find((candidate) => candidate.id === roomId);
+      if (!room) throw new Error(`match room not found: ${roomId}`);
 
       const audience = this.roomAudience(room);
       if (!audience.includes(accountId)) throw new Error("account is not in match room");
+      const barrier = room.stageBarrier;
+      if (!barrier || barrier.stage !== stage) throw new Error(`match stage is not active: ${stage}`);
 
-      const enteredAccountIds = room.readyEnteredAccountIds ?? [];
-      const nextEnteredAccountIds = enteredAccountIds.includes(accountId)
-        ? enteredAccountIds
-        : [...enteredAccountIds, accountId];
-      const shouldStartCountdown = !room.readyDeadlineAt && audience.every((id) => nextEnteredAccountIds.includes(id));
-      const updatedReadyRoom: MatchRoomRecord = {
-        ...room,
-        readyEnteredAccountIds: nextEnteredAccountIds,
-        readyDeadlineAt: room.readyDeadlineAt ?? (shouldStartCountdown ? this.buildReadyDeadlineAt(this.now()) : undefined),
-      };
-
-      if (updatedReadyRoom.readyEnteredAccountIds === room.readyEnteredAccountIds && updatedReadyRoom.readyDeadlineAt === room.readyDeadlineAt) {
+      const currentAcknowledgement = barrier.acknowledgements.find((entry) => entry.accountId === accountId);
+      if (currentAcknowledgement?.connectionId === connectionId) {
         return this.toPlayerPublicRoom(room, accountId);
       }
 
-      const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? updatedReadyRoom : candidate));
-      await this.deps.store.saveRooms(updatedRooms);
-
-      if (shouldStartCountdown) {
-        this.scheduleReadyTimeout(updatedReadyRoom);
-        await this.emit(this.toReadyEvent("ready_check_started", updatedReadyRoom));
-        await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
+      const acknowledgements = [
+        ...barrier.acknowledgements.filter((entry) => entry.accountId !== accountId),
+        { accountId, connectionId },
+      ];
+      const acknowledgedRoom: MatchRoomRecord = {
+        ...room,
+        stageBarrier: { ...barrier, acknowledgements },
+      };
+      const allAcknowledged = barrier.requiredAccountIds.every((id) =>
+        acknowledgements.some((entry) => entry.accountId === id));
+      if (!allAcknowledged) {
+        await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? acknowledgedRoom : candidate)));
+        await this.emitRoomUpdated(acknowledgedRoom);
+        return this.toPlayerPublicRoom(acknowledgedRoom, accountId);
       }
 
-      return this.toPlayerPublicRoom(updatedReadyRoom, accountId);
+      if (stage === "room_entered") {
+        const readyRoom: MatchRoomRecord = {
+          ...acknowledgedRoom,
+          stageBarrier: undefined,
+          readyDeadlineAt: this.buildReadyDeadlineAt(this.now()),
+        };
+        await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? readyRoom : candidate)));
+        this.clearStageBarrierTimeout(room.id);
+        this.scheduleReadyTimeout(readyRoom);
+        await this.emit(this.toReadyEvent("ready_check_started", readyRoom));
+        return this.toPlayerPublicRoom(readyRoom, accountId);
+      }
+
+      if (stage === "map_stage_entered") {
+        try {
+          const mapStartedAt = this.now();
+          const mapSelection = await this.buildMapSelection(mapStartedAt);
+          const randomizingRoom: MatchRoomRecord = {
+            ...acknowledgedRoom,
+            mapSelection,
+            stageBarrier: this.buildStageBarrier("map_revealed", audience, mapStartedAt),
+          };
+          await this.deps.records?.saveMatchPlan(await this.buildMatchPlan(randomizingRoom, mapSelection.finalMap));
+          await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate)));
+          this.clearStageBarrierTimeout(room.id);
+          this.scheduleStageBarrierTimeout(randomizingRoom);
+          await this.emitRoomUpdated(randomizingRoom);
+          return this.toPublicRoom(randomizingRoom);
+        } catch (error) {
+          const failure = error instanceof Error ? error.message : String(error);
+          return this.toPublicRoom(await this.failMatchRoom(rooms, acknowledgedRoom, failure));
+        }
+      }
+
+      if (!acknowledgedRoom.mapSelection) throw new Error("map selection not found");
+      const revealedRoom: MatchRoomRecord = { ...acknowledgedRoom, stageBarrier: undefined };
+      return this.toPublicRoom(await this.saveRoomAfterMapSelected(rooms, revealedRoom, acknowledgedRoom.mapSelection.finalMap));
+    });
+  }
+
+  invalidateStageAcknowledgement(accountId: string, connectionId?: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((candidate) => candidate.stageBarrier?.acknowledgements.some((entry) => (
+        entry.accountId === accountId && (connectionId === undefined || entry.connectionId === connectionId)
+      )));
+      if (!room?.stageBarrier) return;
+      const updatedRoom: MatchRoomRecord = {
+        ...room,
+        stageBarrier: {
+          ...room.stageBarrier,
+          acknowledgements: room.stageBarrier.acknowledgements.filter((entry) => (
+            entry.accountId !== accountId || (connectionId !== undefined && entry.connectionId !== connectionId)
+          )),
+        },
+      };
+      await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? updatedRoom : candidate)));
+      await this.emitRoomUpdated(updatedRoom);
     });
   }
 
@@ -674,46 +751,20 @@ export class MatchmakingService {
         return this.toPlayerPublicRoom(updatedReadyRoom, accountId);
       }
 
-      this.clearReadyTimeout(room.id);
-
-      let mapSelection: MatchMapSelectionState;
-      try {
-        mapSelection = await this.buildMapSelection(acceptedAt);
-      } catch (error) {
-        const failedAt = this.now();
-        const failure = error instanceof Error ? error.message : String(error);
-        const failedRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "failed", terminalStateAt: failedAt };
-        await this.deps.store.saveRooms(updatedRooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate)));
-        await this.unlockPartyForRoom(failedRoom, failedAt);
-        await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure });
-        return this.toPublicRoom(failedRoom);
-      }
-
+      const audience = this.roomAudience(updatedReadyRoom);
       const randomizingRoom: MatchRoomRecord = {
         ...updatedReadyRoom,
         phase: "map_randomizing",
-        mapSelection,
+        readyDeadlineAt: undefined,
+        stageBarrier: this.buildStageBarrier("map_stage_entered", audience, acceptedAt),
       };
-      try {
-        await this.deps.records?.saveMatchPlan(await this.buildMatchPlan(randomizingRoom, mapSelection.finalMap));
-      } catch (error) {
-        const failedAt = this.now();
-        const failure = error instanceof Error ? error.message : String(error);
-        const failedRoom: MatchRoomRecord = { ...updatedReadyRoom, phase: "failed", terminalStateAt: failedAt };
-        await this.deps.store.saveRooms(updatedRooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate)));
-        await this.unlockPartyForRoom(failedRoom, failedAt);
-        await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: failure });
-        return this.toPublicRoom(failedRoom);
-      }
       const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
-      const audience = this.roomAudience(randomizingRoom);
 
       await this.deps.store.saveRooms(finalizedRooms);
-      this.scheduleMapSelectionReveal(randomizingRoom);
+      this.clearReadyTimeout(room.id);
+      this.scheduleStageBarrierTimeout(randomizingRoom);
 
-      await this.emit({ type: "match_room_created", matchId: randomizingRoom.id, accountIds: audience, room: this.toPublicRoom(randomizingRoom) }, randomizingRoom.id);
-      await this.emit({ type: "teams_assigned", matchId: randomizingRoom.id, accountIds: audience, teamA: randomizingRoom.teamA, teamB: randomizingRoom.teamB }, randomizingRoom.id);
-      await this.emit({ type: "map_randomizing_started", matchId: randomizingRoom.id, accountIds: audience, mapSelection }, randomizingRoom.id);
+      await this.emitRoomUpdated(randomizingRoom);
       return this.toPublicRoom(randomizingRoom);
     });
   }
@@ -725,7 +776,7 @@ export class MatchmakingService {
       const room = this.findReadyRoomForAccount(rooms, accountId);
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
       if (!room.readyDeadlineAt) throw new Error("ready check has not started");
-      return this.toPublicRoom(await this.failReadyRoom(rooms, room, "ready declined"));
+      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "ready declined"));
     });
   }
 
@@ -734,7 +785,7 @@ export class MatchmakingService {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId && candidate.phase === "ready");
       if (!room) throw new Error(`ready room not found: ${roomId}`);
-      return this.toPublicRoom(await this.failReadyRoom(rooms, room, "ready timed out"));
+      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "ready timed out"));
     });
   }
 
@@ -1015,6 +1066,23 @@ export class MatchmakingService {
     }
   }
 
+  private async emitRoomUpdated(room: MatchRoomRecord): Promise<void> {
+    const audience = this.roomAudience(room);
+    if (room.phase === "ready") {
+      for (const accountId of audience) {
+        await this.emit(
+          { type: "match_room_updated", matchId: room.id, accountIds: [accountId], room: this.toPlayerPublicRoom(room, accountId) },
+          room.id,
+        );
+      }
+      return;
+    }
+    await this.emit(
+      { type: "match_room_updated", matchId: room.id, accountIds: audience, room: this.toPublicRoom(room) },
+      room.id,
+    );
+  }
+
   
 
   
@@ -1024,9 +1092,9 @@ export class MatchmakingService {
       return this.failRoomBecauseGameServerActive(rooms, room);
     }
 
-    this.clearMapSelectionTimeout(room.id);
     const preparing: MatchRoomRecord = { ...room, phase: "server_prepare", connect: undefined };
     await this.deps.store.saveRooms(rooms.map((candidate) => (candidate.id === room.id ? preparing : candidate)));
+    this.clearStageBarrierTimeout(room.id);
     await this.emit({ type: "server_preparing", matchId: room.id, accountIds: this.roomAudience(preparing) }, room.id);
 
     const savedPlan = await this.readSavedMatchPlan(room.id);
@@ -1051,7 +1119,11 @@ export class MatchmakingService {
       if (!isServerManagedPhase(latestRoom.phase)) return latestRoom;
 
       const roomsToSave = latestRooms.some((candidate) => candidate.id === room.id) ? latestRooms : rooms;
-      const connected: MatchRoomRecord = { ...latestRoom, phase: "connect", connect };
+      const connected: MatchRoomRecord = {
+        ...latestRoom,
+        phase: "connect",
+        connect,
+      };
       await this.deps.store.saveRooms(roomsToSave.map((candidate) => (candidate.id === room.id ? connected : candidate)));
       await this.deps.records?.saveStatus(room.id, { phase: "connect", connect });
       await this.emit({ type: "connect_ready", matchId: room.id, accountIds: this.roomAudience(connected), connect }, room.id);
@@ -1206,6 +1278,15 @@ export class MatchmakingService {
     return new Date(Date.parse(createdAt) + READY_TIMEOUT_MS).toISOString();
   }
 
+  private buildStageBarrier(stage: MatchClientStage, requiredAccountIds: string[], startedAt: string) {
+    return {
+      stage,
+      requiredAccountIds: requiredAccountIds.slice(),
+      acknowledgements: [],
+      deadlineAt: new Date(Date.parse(startedAt) + STAGE_BARRIER_TIMEOUT_MS).toISOString(),
+    };
+  }
+
   private scheduleReadyTimeout(room: MatchRoomRecord): void {
     if (room.phase !== "ready" || !room.readyDeadlineAt) return;
 
@@ -1291,36 +1372,36 @@ export class MatchmakingService {
     return this.deps.records?.listRecentMatchMaps(RECENT_MAP_EXCLUSION_COUNT) ?? [];
   }
 
-  private scheduleMapSelectionReveal(room: MatchRoomRecord): void {
-    const revealAt = room.mapSelection?.revealAt;
-    if (room.phase !== "map_randomizing" || !revealAt) return;
+  private scheduleStageBarrierTimeout(room: MatchRoomRecord): void {
+    const barrier = room.stageBarrier;
+    if (!barrier) return;
 
-    const revealMs = Date.parse(revealAt);
+    const deadlineMs = Date.parse(barrier.deadlineAt);
     const nowMs = Date.parse(this.now());
-    if (!Number.isFinite(revealMs) || !Number.isFinite(nowMs)) return;
+    if (!Number.isFinite(deadlineMs) || !Number.isFinite(nowMs)) return;
 
-    this.clearMapSelectionTimeout(room.id);
+    this.clearStageBarrierTimeout(room.id);
     const timeout = this.setTimeoutFn(() => {
-      void this.revealSelectedMap(room.id, revealAt).catch(() => undefined);
-    }, Math.max(0, revealMs - nowMs));
+      void this.expireStageBarrier(room.id, barrier.stage, barrier.deadlineAt).catch(() => undefined);
+    }, Math.max(0, deadlineMs - nowMs));
     if (this.unrefReadyTimeouts) timeout.unref?.();
-    this.mapSelectionTimeouts.set(room.id, timeout);
+    this.stageBarrierTimeouts.set(room.id, timeout);
   }
 
-  private clearMapSelectionTimeout(roomId: string): void {
-    const timeout = this.mapSelectionTimeouts.get(roomId);
+  private clearStageBarrierTimeout(roomId: string): void {
+    const timeout = this.stageBarrierTimeouts.get(roomId);
     if (!timeout) return;
     this.clearTimeoutFn(timeout);
-    this.mapSelectionTimeouts.delete(roomId);
+    this.stageBarrierTimeouts.delete(roomId);
   }
 
-  private revealSelectedMap(roomId: string, expectedRevealAt: string): Promise<PublicMatchRoomRecord> {
+  private expireStageBarrier(roomId: string, expectedStage: MatchClientStage, expectedDeadlineAt: string): Promise<void> {
     return this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId);
-      if (!room || room.phase !== "map_randomizing" || !room.mapSelection) throw new Error(`map randomizing room not found: ${roomId}`);
-      if (room.mapSelection.revealAt !== expectedRevealAt) return this.toPublicRoom(room);
-      return this.toPublicRoom(await this.saveRoomAfterMapSelected(rooms, room, room.mapSelection.finalMap));
+      if (!room?.stageBarrier) return;
+      if (room.stageBarrier.stage !== expectedStage || room.stageBarrier.deadlineAt !== expectedDeadlineAt) return;
+      await this.failMatchRoom(rooms, room, `client stage timed out: ${expectedStage}`);
     });
   }
 
@@ -1349,6 +1430,12 @@ export class MatchmakingService {
       botParticipantIds: room.botParticipantIds?.slice(),
       ready: room.ready?.map((entry) => ({ ...entry })),
       readyDeadlineAt: room.readyDeadlineAt,
+      stageBarrier: room.stageBarrier
+          ? {
+            stage: room.stageBarrier.stage,
+            acknowledgedAccountIds: room.stageBarrier.acknowledgements.map((entry) => entry.accountId),
+          }
+        : undefined,
       partyId: room.partyId,
       mapSelection: room.mapSelection
         ? {
@@ -1425,38 +1512,17 @@ export class MatchmakingService {
   }
 
   private async failRoomBecauseGameServerActive(rooms: MatchRoomRecord[], room: MatchRoomRecord): Promise<MatchRoomRecord> {
-    const failedAt = this.now();
-    const reason = "game server is already active";
-    const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
-    this.clearReadyTimeout(room.id);
-    this.clearMapSelectionTimeout(room.id);
+    return this.failMatchRoom(rooms, room, "game server is already active");
+  }
 
+  private async failMatchRoom(rooms: MatchRoomRecord[], room: MatchRoomRecord, reason: string): Promise<MatchRoomRecord> {
+    const failedAt = this.now();
+    const failedRoom: MatchRoomRecord = { ...room, phase: "failed", stageBarrier: undefined, terminalStateAt: failedAt };
+    this.clearReadyTimeout(room.id);
+    this.clearStageBarrierTimeout(room.id);
     const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
     await this.deps.store.saveRooms(updatedRooms);
     await this.unlockPartyForRoom(failedRoom, failedAt);
-    await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason });
-    return failedRoom;
-  }
-
-  private async failReadyRoom(rooms: MatchRoomRecord[], room: MatchRoomRecord, reason: string): Promise<MatchRoomRecord> {
-    const failedAt = this.now();
-    const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
-    this.clearReadyTimeout(room.id);
-    const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
-    await this.deps.store.saveRooms(updatedRooms);
-
-    if (room.partyId) {
-      const parties = await this.deps.store.listParties();
-      const party = parties.find((candidate) => candidate.id === room.partyId);
-      if (party) {
-        const updatedParty: PartyRecord = { ...party, status: "open", lockedMatchId: undefined, updatedAt: failedAt };
-        await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
-        await this.emitPartyUpdated(updatedParty);
-        await this.emitOccupancyUpdated();
-      }
-    }
-
-    await this.emit(this.toReadyEvent("ready_check_updated", failedRoom));
     await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason });
     return failedRoom;
   }

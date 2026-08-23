@@ -624,19 +624,8 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return withServerNow(await matchmaking.getState(auth.account.id));
-    } catch (error) {
-      mapMatchmakingServiceError(error);
-    }
-  });
-
-  app.post("/match-room/:id/entered", async (request) => {
-    const auth = await authenticateRequest(request, deps);
-    requirePlayer(request);
-    const matchmaking = requireMatchmaking(deps);
-    const { id } = matchRoomParamsSchema.parse(request.params);
-    try {
-      return withServerNow({ room: await matchmaking.ackReadyRoomEntered(id, auth.account.id) });
+      const baseSeq = deps.events?.latestSeq() ?? 0;
+      return withServerNow({ ...(await matchmaking.getState(auth.account.id)), baseSeq });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

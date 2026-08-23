@@ -16,7 +16,6 @@ import type {
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
-  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../../shared/types.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
@@ -24,11 +23,9 @@ import { SteamAvatar } from "./components/SteamAvatar.js";
 import {
   getActiveMatchRoom,
   getDisplayedMatchRoom,
-  isAccountInReadyRoom,
   isTerminalMatchPhase,
   mergeMatchmakingSnapshotRooms,
   mergeReadyRoomProgress,
-  mergeTeamsAssignedRoom,
   upsertRoom,
 } from "./matchRoomState.js";
 import { HomePage } from "./pages/HomePage.js";
@@ -63,10 +60,9 @@ type PasswordChangeValues = { currentPassword: string; newPassword: string; conf
 type KnownPlayerProfile = Pick<PlayerMatchParticipantDto, "displayName" | "steamPersonaName" | "steamAvatarUrl">;
 type MatchHistoryPlayer = Pick<AccountView, "steam64" | "steamPersonaName" | "steamAvatarUrl"> & { accountId: string };
 const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], outgoingRequests: [] };
-const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 } };
+const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 }, baseSeq: 0 };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
-const READY_ROOM_SNAPSHOT_REFRESH_MS = 1_500;
 const STARTUP_UPDATE_RETRY_COUNT = 5;
 const STARTUP_UPDATE_RETRY_DELAY_MS = 1_000;
 let startupInitializationStarted = false;
@@ -324,7 +320,6 @@ export function App() {
   const [matchSoundEnabled, setMatchSoundEnabled] = useState(() => loadMatchSoundEnabled());
   const [devModeEnabled, setDevModeEnabled] = useState(() => loadDevModeEnabled());
   const [realtimeStatus, setRealtimeStatus] = useState<PlayerRealtimeStatusDto>(emptyRealtimeStatus);
-  const [, setStale] = useState(false);
   const [currentPassword, setCurrentPassword] = useState("");
   const [savedLogin, setSavedLogin] = useState<SavedPlayerLogin | null>(null);
   const [loginPending, setLoginPending] = useState(false);
@@ -336,12 +331,12 @@ export function App() {
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState<number | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
+  const [settledMapBarrierKey, setSettledMapBarrierKey] = useState<string | null>(null);
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
   const partyInviteAutoIgnoreTimeouts = useRef(new Map<string, number>());
   const acceptedInviteJoinMessageAccountIds = useRef(new Set<string>());
-  const enteredReadyRoomIds = useRef(new Set<string>());
   const playedMatchSoundRoomIds = useRef(new Set<string>());
   const pendingMatchSoundRoomIds = useRef(new Set<string>());
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -349,6 +344,13 @@ export function App() {
 
   const api = window.playerApi;
   const currentRoom = getCurrentRoom(matchmaking);
+  const currentStageBarrier = currentRoom?.stageBarrier;
+  const currentStageBarrierKey = currentRoom && currentStageBarrier
+    ? `${currentRoom.id}:${currentStageBarrier.stage}`
+    : null;
+  const currentAccountStageAcknowledged = Boolean(
+    account?.id && currentStageBarrier?.acknowledgedAccountIds.includes(account.id),
+  );
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
   const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
   const syncedMatchmakingPendingAt = party?.status === "open" ? party.matchmakingPendingAt ?? null : null;
@@ -441,10 +443,9 @@ export function App() {
 
     const unsubscribeStatus = api.onRealtimeStatus((status) => {
       setRealtimeStatus(status);
-      setStale(status.stale);
     });
     const unsubscribeSnapshot = api.onRealtimeSnapshot((snapshot) => {
-      updateServerClock(snapshot.serverNow ?? snapshot.matchmaking.serverNow);
+      updateServerClock(snapshot.matchmaking.serverNow);
       applyRealtimeSnapshot(snapshot);
     });
     const unsubscribeEvent = api.onRealtimeEvent((event) => {
@@ -489,90 +490,72 @@ export function App() {
   }, [account, hasVisibleMatchResult, matchResultBackView, matchResultMatchId, matchHistoryPlayer?.accountId]);
 
   useEffect(() => {
-    if (!account || activeView !== "match-room" || currentRoom?.phase !== "ready") return;
-
-    let cancelled = false;
-    const refreshReadyRoom = () => {
-      if (cancelled) return;
-      void hydrateRealtimeState("matchmaking");
-    };
-
-    const refreshTimer = window.setInterval(refreshReadyRoom, READY_ROOM_SNAPSHOT_REFRESH_MS);
-    return () => {
-      cancelled = true;
-      window.clearInterval(refreshTimer);
-    };
-  }, [account, activeView, currentRoom?.id, currentRoom?.phase]);
-
-  useEffect(() => {
-    const readyRoom = currentRoom;
-    if (activeView !== "match-room" || !account?.id || !readyRoom || !isAccountInReadyRoom(readyRoom, account.id)) return;
-
-    const entryKey = `${readyRoom.id}:${account.id}`;
-    if (enteredReadyRoomIds.current.has(entryKey)) return;
+    const room = currentRoom;
+    const barrier = currentStageBarrier;
+    const acknowledgementKey = currentStageBarrierKey;
+    if (
+      activeView !== "match-room"
+      || !room
+      || !barrier
+      || !acknowledgementKey
+      || !account?.id
+      || currentAccountStageAcknowledged
+      || (barrier.stage === "map_revealed" && settledMapBarrierKey !== acknowledgementKey)
+    ) return;
 
     let cancelled = false;
     let retryTimer: number | undefined;
-    const markReadyRoomEntered = async (attempt = 0) => {
-      enteredReadyRoomIds.current.add(entryKey);
+    const acknowledgeStage = async () => {
       try {
-        const nextRoom = await api.ackMatchRoomEntered(readyRoom.id);
-        if (!cancelled) {
-          updateServerClock(nextRoom.serverNow);
-          updateCurrentRoom(nextRoom.id, () => nextRoom);
-        }
+        const nextRoom = await api.ackMatchStage(room.id, barrier.stage);
+        if (!cancelled) updateServerClock(nextRoom.serverNow);
       } catch {
-        if (cancelled) return;
-        enteredReadyRoomIds.current.delete(entryKey);
-        if (attempt < 2) {
-          retryTimer = window.setTimeout(() => void markReadyRoomEntered(attempt + 1), 1500);
-        }
+        // The active stage barrier remains authoritative while the client retries.
       }
+      if (cancelled) return;
+      retryTimer = window.setTimeout(() => void acknowledgeStage(), 1_500);
     };
+    void acknowledgeStage();
 
-    const enterTimer = window.setTimeout(() => void markReadyRoomEntered(), 0);
     return () => {
       cancelled = true;
-      window.clearTimeout(enterTimer);
-      if (retryTimer !== undefined) {
-        window.clearTimeout(retryTimer);
-      }
+      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
     };
-  }, [account?.id, activeView, currentRoom?.id, currentRoom?.phase]);
+  }, [
+    account?.id,
+    activeView,
+    currentAccountStageAcknowledged,
+    currentStageBarrierKey,
+    settledMapBarrierKey,
+  ]);
 
-  async function hydrateRealtimeState(scope: PlayerRealtimeSnapshotScope = "full") {
+  async function hydrateRealtimeState() {
     try {
-      const snapshot = await api.refreshRealtimeSnapshot(scope);
-      updateServerClock(snapshot.serverNow ?? snapshot.matchmaking.serverNow);
-      applyRealtimeSnapshot(snapshot);
+      await api.refreshRealtimeSnapshot();
     } catch {
       // 保持恢复后的基础状态，不把实时快照失败当成登录失败。
     }
   }
 
   function applyRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto) {
-    const partySnapshot = snapshot.party !== undefined ? snapshot.party : snapshot.matchmaking.party;
-    if (snapshot.friends) {
-      setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends!, resolvedFriendRequestIds.current));
-    }
-    setParty((current) => mergePartySnapshot(current, partySnapshot ?? null));
-    setStale(false);
-    setRealtimeStatus({ connection: "connected", stale: false });
+    setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends, resolvedFriendRequestIds.current));
+    setParty((current) => mergePartySnapshot(current, snapshot.matchmaking.party));
     const snapshotActiveRoom = getActiveMatchRoom(snapshot.matchmaking);
     setMatchmaking((current) => {
       const { rooms: nextRooms, room: nextRoom } = mergeMatchmakingSnapshotRooms(current, snapshot.matchmaking);
-      const nextParty = mergePartySnapshot(current.party, partySnapshot ?? null);
+      const nextParty = mergePartySnapshot(current.party, snapshot.matchmaking.party);
       return {
         queue: snapshot.matchmaking.queue,
         rooms: nextRooms,
         party: nextParty,
         partyInvitations: mergePartyInvitationsSnapshot(
           current.partyInvitations,
-          snapshot.matchmaking.partyInvitations ?? [],
+          snapshot.matchmaking.partyInvitations,
           resolvedPartyInvitationIds.current,
         ),
         room: nextRoom,
         occupancy: snapshot.matchmaking.occupancy,
+        baseSeq: snapshot.matchmaking.baseSeq,
       };
     });
     if (snapshotActiveRoom) {
@@ -630,7 +613,6 @@ export function App() {
   function updateCurrentRoom(
     matchId: string,
     updater: (room: PlayerLiveMatchStateDto) => PlayerLiveMatchStateDto,
-    options: { activate?: boolean } = {},
   ) {
     setMatchmaking((current) => {
       const sourceRoom = current.room?.id === matchId ? current.room : current.rooms.find((room) => room.id === matchId);
@@ -650,9 +632,6 @@ export function App() {
         rooms: nextRooms,
       };
     });
-    if (options.activate ?? true) {
-      setActiveView((current) => (current === "home" ? "match-room" : current));
-    }
   }
 
   function applyRealtimeEvent(event: PlayerRealtimeEvent) {
@@ -743,7 +722,7 @@ export function App() {
           event.invitation.status === "accepted"
           && (event.invitation.fromAccountId === account?.id || event.invitation.toAccountId === account?.id)
         ) {
-          void hydrateRealtimeState("matchmaking");
+          void hydrateRealtimeState();
         }
         return;
       case "queue_updated":
@@ -765,6 +744,7 @@ export function App() {
           phase: "ready",
           readyDeadlineAt: event.deadlineAt,
           ready: event.ready,
+          stageBarrier: undefined,
           humanAccountIds: event.humanParticipants.flatMap((participant) => (participant.accountId ? [participant.accountId] : [])),
         }));
         return;
@@ -784,26 +764,26 @@ export function App() {
         });
         setActiveView((current) => (current === "home" ? "match-room" : current));
         return;
-      case "teams_assigned":
-        updateCurrentRoom(event.matchId, (room) => mergeTeamsAssignedRoom(room, event.teamA, event.teamB));
-        return;
-      case "map_randomizing_started":
-        updateCurrentRoom(event.matchId, (room) => ({
-          ...room,
-          phase: "map_randomizing",
-          mapSelection: event.mapSelection,
+      case "match_room_updated":
+        setMatchmaking((current) => ({
+          ...current,
+          room: current.room?.id === event.matchId || !current.room ? event.room : current.room,
+          rooms: upsertRoom(current.rooms, event.room),
         }));
+        setActiveView((current) => (current === "home" && !isTerminalMatchPhase(event.room.phase) ? "match-room" : current));
         return;
       case "server_preparing":
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "server_prepare",
+          stageBarrier: undefined,
         }));
         return;
       case "connect_ready":
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "connect",
+          stageBarrier: undefined,
           connect: event.connect,
         }));
         return;
@@ -817,7 +797,7 @@ export function App() {
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "completed",
-        }), { activate: false });
+        }));
         if (event.result) {
           setMatchResult(event.result);
           setMatchResultMatchId(event.matchId);
@@ -840,7 +820,8 @@ export function App() {
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "failed",
-        }), { activate: false });
+          stageBarrier: undefined,
+        }));
         setMatchResult(null);
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
@@ -996,7 +977,6 @@ export function App() {
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
       acceptedInviteJoinMessageAccountIds.current.clear();
-      enteredReadyRoomIds.current.clear();
       setAccount(restored.account);
       setFriends(emptyFriends);
       setParty(restored.matchmaking.party ?? null);
@@ -1007,7 +987,6 @@ export function App() {
       setMatchResultBackView("home");
       setMatchHistoryPlayer(null);
       setRealtimeStatus(emptyRealtimeStatus);
-      setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
       void hydrateRealtimeState();
       void refreshRankmeScore();
@@ -1050,7 +1029,6 @@ export function App() {
         resolvedFriendRequestIds.current.clear();
         resolvedPartyInvitationIds.current.clear();
         acceptedInviteJoinMessageAccountIds.current.clear();
-        enteredReadyRoomIds.current.clear();
         setFriends(emptyFriends);
         setParty(null);
         setMatchmaking(emptyMatchmaking);
@@ -1061,7 +1039,6 @@ export function App() {
         setMatchHistoryPlayer(null);
         setRankmeScore(null);
         setRealtimeStatus(emptyRealtimeStatus);
-        setStale(false);
         setActiveView("change-password");
         return;
       }
@@ -1080,7 +1057,6 @@ export function App() {
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
       acceptedInviteJoinMessageAccountIds.current.clear();
-      enteredReadyRoomIds.current.clear();
       setFriends(emptyFriends);
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
@@ -1090,7 +1066,6 @@ export function App() {
       setMatchResultBackView("home");
       setMatchHistoryPlayer(null);
       setRealtimeStatus(emptyRealtimeStatus);
-      setStale(false);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
       void hydrateRealtimeState();
       void refreshRankmeScore();
@@ -1128,7 +1103,6 @@ export function App() {
         resolvedFriendRequestIds.current.clear();
         resolvedPartyInvitationIds.current.clear();
         acceptedInviteJoinMessageAccountIds.current.clear();
-        enteredReadyRoomIds.current.clear();
         setFriends(emptyFriends);
         setParty(restored.matchmaking.party ?? null);
         setMatchmaking(restored.matchmaking);
@@ -1138,7 +1112,6 @@ export function App() {
         setMatchResultBackView("home");
         setMatchHistoryPlayer(null);
         setRealtimeStatus(emptyRealtimeStatus);
-        setStale(false);
         setActiveView(viewFromSession(restored.account, restored.matchmaking));
         void hydrateRealtimeState();
         void refreshRankmeScore();
@@ -1161,7 +1134,6 @@ export function App() {
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
       acceptedInviteJoinMessageAccountIds.current.clear();
-      enteredReadyRoomIds.current.clear();
       setFriends(emptyFriends);
       setParty(null);
       setMatchmaking(emptyMatchmaking);
@@ -1173,7 +1145,6 @@ export function App() {
       setMatchResultBackView("home");
       setRankmeScore(null);
       setRealtimeStatus(emptyRealtimeStatus);
-      setStale(false);
       setCurrentPassword("");
       setSettingsModalOpen(false);
       setPasswordModalOpen(false);
@@ -1335,12 +1306,7 @@ export function App() {
   async function startPartyMatchmaking(options?: { dev?: boolean }) {
     const nextRoom = await api.startPartyMatchmaking(options);
     updateServerClock(nextRoom.serverNow);
-    setMatchmaking((current) => ({
-      ...current,
-      room: nextRoom,
-      rooms: upsertRoom(current.rooms, nextRoom),
-      occupancy: { activeCount: 1 },
-    }));
+    await hydrateRealtimeState();
     playMatchFoundSound(nextRoom.id);
     setActiveView("match-room");
     setMatchmakingFeedbackPending(false);
@@ -1389,19 +1355,17 @@ export function App() {
     if (!currentRoom) return;
     const nextRoom = await api.acceptReady();
     updateServerClock(nextRoom.serverNow);
-    updateCurrentRoom(nextRoom.id, () => nextRoom);
-    await hydrateRealtimeState("matchmaking");
+    await hydrateRealtimeState();
   }
 
   async function declineReady() {
     if (!currentRoom) return;
     const nextRoom = await api.declineReady();
     updateServerClock(nextRoom.serverNow);
-    updateCurrentRoom(nextRoom.id, () => nextRoom);
     if (isTerminalMatchPhase(nextRoom.phase)) {
       setActiveView("home");
     }
-    await hydrateRealtimeState("matchmaking");
+    await hydrateRealtimeState();
   }
 
   async function copyText(text: string) {
@@ -1436,6 +1400,11 @@ export function App() {
           nowMs={syncedNowMs}
           onAcceptReady={() => acceptReady()}
           onDeclineReady={() => declineReady()}
+          onMapRevealComplete={() => {
+            if (currentStageBarrier?.stage === "map_revealed" && currentStageBarrierKey) {
+              setSettledMapBarrierKey(currentStageBarrierKey);
+            }
+          }}
           onCopyText={(text) => copyText(text)}
         />
       );

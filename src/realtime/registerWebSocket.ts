@@ -76,6 +76,9 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       if (cleanedUp) return;
       cleanedUp = true;
       sockets.unregister(socket);
+      if (registeredAccount) {
+        void deps.matchmaking?.invalidateStageAcknowledgement(registeredAccount.id, connectionId).catch(() => undefined);
+      }
       let connectionCount: number | null = null;
       if (registeredAccountId && deps.presence) {
         const summary = deps.presence.unregister(registeredAccountId);
@@ -120,7 +123,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       await handleMessage(socket, data, account, deps, connectionId);
     });
 
-    void accountPromise.then((account) => {
+    void accountPromise.then(async (account) => {
       if (!account) {
         writeActivityLog({
           source: "realtime",
@@ -132,6 +135,20 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
         return;
       }
 
+      if (socket.readyState !== SOCKET_OPEN) return;
+      try {
+        await deps.matchmaking?.invalidateStageAcknowledgement(account.id);
+      } catch {
+        writeActivityLog({
+          source: "realtime",
+          level: "error",
+          message: `<--- Connection WebSocket, id [${connectionId}]: result=failed`,
+          actor: accountActor(account),
+          context: { ip: request.ip, errorCode: "stage_ack_reset_failed" },
+        });
+        socket.close(1011, "stage state unavailable");
+        return;
+      }
       if (socket.readyState !== SOCKET_OPEN) return;
       authorizationCheck = setInterval(() => {
         void authorizeWebSocket(token, deps).then((currentAccount) => {
@@ -212,7 +229,7 @@ async function handleMessage(socket: WebSocket, data: RawData, account: AccountR
 
   const command = parseRealtimeCommand(message);
   if (command) {
-    const ack = await executeRealtimeCommand(command, account.id, deps);
+    const ack = await executeRealtimeCommand(command, account.id, deps, connectionId);
     logRealtimeCommand(account, command, ack);
     sendJson(socket, withCommandServerNow(ack));
     return;

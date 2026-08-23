@@ -1,5 +1,5 @@
 import { clipboard, ipcMain, shell } from "electron";
-import type { PlayerFriendSearchResultDto, PlayerMatchmakingStateDto, PlayerRealtimeSnapshotDto, PlayerRealtimeSnapshotReason, PlayerRealtimeSnapshotScope } from "../shared/types.js";
+import type { PlayerFriendSearchResultDto, PlayerMatchmakingStateDto, PlayerMatchStageDto } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { RemoteProfileService } from "./remoteProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
@@ -16,7 +16,7 @@ interface PersistedSession extends SavedPlayerLogin {
   token?: string;
 }
 
-const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 } };
+const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 }, baseSeq: 0 };
 
 export function isSafeSteamConnectUrl(connectUrl: string): boolean {
   if (typeof connectUrl !== "string" || /[\r\n]/.test(connectUrl)) return false;
@@ -34,7 +34,7 @@ interface IpcDeps {
   disconnectRealtime: () => void;
   getApiClient: () => PlayerApiClient;
   loadSession: () => Promise<PersistedSession | null>;
-  refreshRealtimeSnapshot: (reason: PlayerRealtimeSnapshotReason, scope?: PlayerRealtimeSnapshotScope) => Promise<PlayerRealtimeSnapshotDto>;
+  refreshRealtimeSnapshot: () => Promise<void>;
   saveSession: (session: PersistedSession) => Promise<void>;
   sendRealtimeCommand: <T>(name: string, payload: unknown) => Promise<T>;
   setApiClient: (client: PlayerApiClient | undefined) => void;
@@ -124,11 +124,12 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth(deps, (client) => client.startPartyMatchmaking(options ?? {})));
 
   ipcMain.handle("matchmaking:getState", () => withSavedAuth(deps, (client) => client.getMatchmakingState()));
-  ipcMain.handle("matchmaking:roomEntered", (_event, roomId: string) => withSavedAuth(deps, (client) => client.ackMatchRoomEntered(roomId)));
+  ipcMain.handle("matchmaking:stageAck", (_event, roomId: string, stage: PlayerMatchStageDto) =>
+    withSavedAuth(deps, (client) => client.ackMatchStage(roomId, stage)));
   ipcMain.handle("matchmaking:acceptReady", () => withSavedAuth(deps, (client) => client.acceptReady()));
   ipcMain.handle("matchmaking:declineReady", () => withSavedAuth(deps, (client) => client.declineReady()));
-  ipcMain.handle("matchmaking:refreshSnapshot", (_event, scope?: PlayerRealtimeSnapshotScope) =>
-    withSavedAuth(deps, () => deps.refreshRealtimeSnapshot("manual", scope)));
+  ipcMain.handle("matchmaking:refreshSnapshot", () =>
+    withSavedAuth(deps, () => deps.refreshRealtimeSnapshot()));
 
   ipcMain.handle("player:copyText", (_event, text: string) => {
     clipboard.writeText(text);

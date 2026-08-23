@@ -99,6 +99,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     rankme,
     events,
   });
+  await matchmakingService.resumePendingTimeouts();
   matchmaking = matchmakingService;
   await completeRoomsIfGameServerUnavailable(matchmakingService, config.gameServer.portRange.start);
   const offlineCleanupGraceMs = resolveOfflineCleanupGraceMs();

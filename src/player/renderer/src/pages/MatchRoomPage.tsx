@@ -16,6 +16,7 @@ interface MatchRoomPageProps {
   nowMs: number;
   onAcceptReady?: () => Promise<void>;
   onDeclineReady?: () => Promise<void>;
+  onMapRevealComplete?: () => void;
   onCopyText?: (text: string) => Promise<void>;
 }
 
@@ -112,6 +113,7 @@ export function MatchRoomPage({
   nowMs,
   onAcceptReady,
   onDeclineReady,
+  onMapRevealComplete,
   onCopyText,
 }: MatchRoomPageProps) {
   const connect = room?.connect;
@@ -223,8 +225,16 @@ export function MatchRoomPage({
               </section>
             ) : null}
 
-            {room.phase === "map_randomizing" && room.mapSelection ? (
-              <RandomMapReel mapSelection={room.mapSelection} />
+            {room.phase === "map_randomizing" ? (
+              room.mapSelection
+                ? <RandomMapReel mapSelection={room.mapSelection} onSettled={onMapRevealComplete} />
+                : (
+                    <section className="faceit-connect-panel" aria-live="polite">
+                      <span>地图阶段</span>
+                      <strong>等待所有玩家进入</strong>
+                      <small>所有客户端完成页面切换后，服务器会同步启动随机地图。</small>
+                    </section>
+                  )
             ) : null}
 
             {room.phase === "match_room" || room.phase === "server_prepare" ? (

@@ -230,7 +230,7 @@ function eventSource(type: RealtimeEvent["type"]): LogSource {
   if (type.startsWith("party_")) return "party";
   if (type === "queue_updated" || type === "matchmaking_occupancy_updated" || type.startsWith("ready_check_")) return "matchmaking";
   if (type === "server_preparing" || type === "connect_ready") return "game";
-  if (type.startsWith("match_") || type === "teams_assigned" || type === "map_randomizing_started") return "match";
+  if (type.startsWith("match_")) return "match";
   return "realtime";
 }
 

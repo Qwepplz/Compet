@@ -11,11 +11,11 @@ import type {
   PlayerLiveMatchStateDto,
   PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
+  PlayerMatchStageDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
-  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
   PlayerServerTimedDto,
 } from "../shared/types.js";
@@ -59,11 +59,11 @@ export const playerApi = {
   cancelPartyMatchmaking: (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => invoke("party:cancelMatchmaking"),
   startPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("party:startMatchmaking", options),
   getMatchmakingState: (): Promise<PlayerMatchmakingStateDto> => invoke("matchmaking:getState"),
-  ackMatchRoomEntered: (roomId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:roomEntered", roomId),
+  ackMatchStage: (roomId: string, stage: PlayerMatchStageDto): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> =>
+    invoke("matchmaking:stageAck", roomId, stage),
   acceptReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:acceptReady"),
   declineReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:declineReady"),
-  refreshRealtimeSnapshot: (scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto> =>
-    invoke("matchmaking:refreshSnapshot", scope),
+  refreshRealtimeSnapshot: (): Promise<void> => invoke("matchmaking:refreshSnapshot"),
   onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) =>
     subscribe("player:realtime:event", listener),
   onRealtimeStatus: (listener: (status: PlayerRealtimeStatusDto) => void): (() => void) =>

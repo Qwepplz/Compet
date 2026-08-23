@@ -8,8 +8,6 @@ import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main
 import type {
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
-  PlayerRealtimeSnapshotReason,
-  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
 import type { AccountView } from "../../manager/shared/types.js";
@@ -36,7 +34,6 @@ const realtimeSnapshotChannel = "player:realtime:snapshot";
 const accountUpdatedChannel = "player:account:updated";
 const profilesUpdatedChannel = "player:profiles:updated";
 const PROFILES_UPDATED_DEBOUNCE_MS = 300;
-const MAX_QUEUED_REALTIME_EVENTS = 200;
 const REALTIME_EVENT_ENRICH_TIMEOUT_MS = 1_500;
 const REALTIME_EVENT_POLL_TIMEOUT_MS = 25_000;
 const REALTIME_EVENT_POLL_RETRY_MS = 1_000;
@@ -52,6 +49,10 @@ let lastDeliveredRealtimeSeq = 0;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 let realtimeStatusRevision = 0;
+let realtimeWebSocketConnected = false;
+let activeRealtimePollSession: number | undefined;
+let realtimePollGeneration = 0;
+let realtimeSnapshotQueue: Promise<unknown> = Promise.resolve();
 let profilesUpdatedTimer: ReturnType<typeof setTimeout> | undefined;
 
 function currentMainWindow(): BrowserWindow | undefined {
@@ -70,9 +71,6 @@ function registerWindowIpc(): void {
 
 function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
   queuedRealtimeEvents.push(nextEvent);
-  if (queuedRealtimeEvents.length > MAX_QUEUED_REALTIME_EVENTS) {
-    queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length - MAX_QUEUED_REALTIME_EVENTS);
-  }
 }
 
 function acceptRealtimeEvent(event: PlayerRealtimeEvent): boolean {
@@ -159,7 +157,7 @@ function publishRealtimeEvent(event: PlayerRealtimeEvent): void {
 
 function publishRealtimeEventNowOrQueue(event: PlayerRealtimeEvent, sessionVersion: number): void {
   if (sessionVersion !== realtimeSessionVersion) return;
-  if (pauseRealtimeEvents && !canPublishRealtimeEventWhileSnapshotting(event)) {
+  if (pauseRealtimeEvents) {
     queueRealtimeEvent(event);
     return;
   }
@@ -188,24 +186,9 @@ function handleProfilesUpdated(): void {
     if (!apiClient) return;
     void refreshAccount().catch(() => undefined);
     if (realtimeSessionVersion > 0) {
-      void refreshRealtimeSnapshot("manual").catch(() => undefined);
+      void refreshRealtimeSnapshot().catch(() => undefined);
     }
   }, PROFILES_UPDATED_DEBOUNCE_MS);
-}
-
-function canPublishRealtimeEventWhileSnapshotting(event: PlayerRealtimeEvent): boolean {
-  switch (event.type) {
-    case "friend_request_received":
-    case "friend_request_resolved":
-    case "friend_list_refresh":
-    case "party_updated":
-    case "party_invite_received":
-    case "party_invite_resolved":
-    case "match_room_created":
-      return true;
-    default:
-      return false;
-  }
 }
 
 function currentApiClient(): PlayerApiClient {
@@ -215,23 +198,27 @@ function currentApiClient(): PlayerApiClient {
   return apiClient;
 }
 
-async function refreshRealtimeSnapshot(
-  reason: PlayerRealtimeSnapshotReason,
-  scope: PlayerRealtimeSnapshotScope = "full",
-): Promise<PlayerRealtimeSnapshotDto> {
+async function refreshRealtimeSnapshot(): Promise<void> {
+  const refresh = realtimeSnapshotQueue.then(() => performRealtimeSnapshotRefresh());
+  realtimeSnapshotQueue = refresh.catch(() => undefined);
+  return refresh;
+}
+
+async function performRealtimeSnapshotRefresh(): Promise<void> {
   const sessionVersion = realtimeSessionVersion;
   pauseRealtimeEvents = true;
   try {
-    const snapshot = await currentApiClient().fetchRealtimeSnapshot(reason, scope);
+    const snapshot = await currentApiClient().fetchRealtimeSnapshot();
     if (sessionVersion !== realtimeSessionVersion) {
-      return snapshot;
+      return;
     }
 
+    realtimeClient.setLastSeq(snapshot.matchmaking.baseSeq);
+    lastDeliveredRealtimeSeq = snapshot.matchmaking.baseSeq;
     publishRealtimeSnapshot(snapshot);
     if (realtimeStatus.connection === "connected") {
       publishRealtimeStatus({ connection: "connected", stale: false });
     }
-    return snapshot;
   } finally {
     if (sessionVersion === realtimeSessionVersion) {
       pauseRealtimeEvents = realtimeStatus.connection !== "connected";
@@ -245,12 +232,14 @@ async function refreshRealtimeSnapshot(
 function connectRealtime(baseUrl: string, token: string): void {
   realtimeSessionVersion += 1;
   connectedInCurrentSession = false;
+  realtimeWebSocketConnected = false;
+  activeRealtimePollSession = undefined;
+  realtimePollGeneration += 1;
   pauseRealtimeEvents = false;
   realtimeDeliveryQueue = Promise.resolve();
   lastDeliveredRealtimeSeq = 0;
   queuedRealtimeEvents.length = 0;
   realtimeClient.connect(baseUrl, token);
-  void pollRealtimeEvents(realtimeSessionVersion);
 }
 
 function sendRealtimeCommand<T>(name: string, payload: unknown): Promise<T> {
@@ -260,6 +249,9 @@ function sendRealtimeCommand<T>(name: string, payload: unknown): Promise<T> {
 function disconnectRealtime(): void {
   realtimeSessionVersion += 1;
   connectedInCurrentSession = false;
+  realtimeWebSocketConnected = false;
+  activeRealtimePollSession = undefined;
+  realtimePollGeneration += 1;
   pauseRealtimeEvents = false;
   realtimeDeliveryQueue = Promise.resolve();
   lastDeliveredRealtimeSeq = 0;
@@ -269,15 +261,16 @@ function disconnectRealtime(): void {
 }
 
 function receiveRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion: number): void {
-  if (sessionVersion !== realtimeSessionVersion || !acceptRealtimeEvent(event)) return;
+  if (sessionVersion !== realtimeSessionVersion) return;
+  if (pauseRealtimeEvents) {
+    queueRealtimeEvent(event);
+    return;
+  }
+  if (!acceptRealtimeEvent(event)) return;
   deliverAcceptedRealtimeEvent(event, sessionVersion);
 }
 
 function deliverAcceptedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion: number): void {
-  if (pauseRealtimeEvents && !canPublishRealtimeEventWhileSnapshotting(event)) {
-    queueRealtimeEvent(event);
-    return;
-  }
   if (!doesRealtimeEventNeedEnrich(event)) {
     publishRealtimeEventNowOrQueue(event, sessionVersion);
     return;
@@ -288,15 +281,34 @@ function deliverAcceptedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion
   publishEnrichedRealtimeEvent(event, sessionVersion);
 }
 
-async function pollRealtimeEvents(sessionVersion: number): Promise<void> {
-  while (sessionVersion === realtimeSessionVersion) {
+function startRealtimeEventPolling(sessionVersion: number): void {
+  if (activeRealtimePollSession === sessionVersion) return;
+  activeRealtimePollSession = sessionVersion;
+  const pollGeneration = ++realtimePollGeneration;
+  void pollRealtimeEvents(sessionVersion, pollGeneration).finally(() => {
+    if (activeRealtimePollSession === sessionVersion && realtimePollGeneration === pollGeneration) {
+      activeRealtimePollSession = undefined;
+    }
+  });
+}
+
+async function pollRealtimeEvents(sessionVersion: number, pollGeneration: number): Promise<void> {
+  while (
+    sessionVersion === realtimeSessionVersion
+    && pollGeneration === realtimePollGeneration
+    && !realtimeWebSocketConnected
+  ) {
     const pollStartedStatusRevision = realtimeStatusRevision;
     try {
       const result = await currentApiClient().fetchRealtimeEvents(lastDeliveredRealtimeSeq, REALTIME_EVENT_POLL_TIMEOUT_MS);
-      if (sessionVersion !== realtimeSessionVersion) return;
+      if (
+        sessionVersion !== realtimeSessionVersion
+        || pollGeneration !== realtimePollGeneration
+        || realtimeWebSocketConnected
+      ) return;
       if (result.gap) {
-        await refreshRealtimeSnapshot("reconnected");
-        if (sessionVersion !== realtimeSessionVersion) return;
+        await refreshRealtimeSnapshot();
+        if (sessionVersion !== realtimeSessionVersion || pollGeneration !== realtimePollGeneration) return;
       }
       if (!connectedInCurrentSession) connectedInCurrentSession = true;
       pauseRealtimeEvents = false;
@@ -309,7 +321,7 @@ async function pollRealtimeEvents(sessionVersion: number): Promise<void> {
         lastDeliveredRealtimeSeq = result.latestSeq;
       }
     } catch {
-      if (sessionVersion !== realtimeSessionVersion) return;
+      if (sessionVersion !== realtimeSessionVersion || pollGeneration !== realtimePollGeneration) return;
       if (!shouldApplyRealtimePollFailure(pollStartedStatusRevision, realtimeStatusRevision)) {
         await delay(REALTIME_EVENT_POLL_RETRY_MS);
         continue;
@@ -329,9 +341,11 @@ realtimeClient.onEvent((event) => {
 realtimeClient.onStatus((connection) => {
   const sessionVersion = realtimeSessionVersion;
   if (connection === "connecting") {
+    realtimeWebSocketConnected = false;
     if (connectedInCurrentSession) {
       pauseRealtimeEvents = true;
       publishRealtimeStatus({ connection, stale: true });
+      startRealtimeEventPolling(sessionVersion);
     } else {
       publishRealtimeStatus({ connection, stale: false });
     }
@@ -339,20 +353,26 @@ realtimeClient.onStatus((connection) => {
   }
 
   if (connection === "disconnected") {
+    realtimeWebSocketConnected = false;
     if (connectedInCurrentSession) {
       pauseRealtimeEvents = true;
       publishRealtimeStatus({ connection, stale: true });
     } else {
       publishRealtimeStatus({ connection, stale: false });
     }
+    startRealtimeEventPolling(sessionVersion);
     return;
   }
+
+  realtimeWebSocketConnected = true;
+  activeRealtimePollSession = undefined;
+  realtimePollGeneration += 1;
 
   if (!connectedInCurrentSession) {
     connectedInCurrentSession = true;
     pauseRealtimeEvents = true;
     publishRealtimeStatus({ connection, stale: true });
-    void refreshRealtimeSnapshot("manual").catch(() => {
+    void refreshRealtimeSnapshot().catch(() => {
       if (sessionVersion === realtimeSessionVersion) {
         publishRealtimeStatus({ connection: "connected", stale: true });
       }
@@ -362,7 +382,7 @@ realtimeClient.onStatus((connection) => {
 
   pauseRealtimeEvents = true;
   publishRealtimeStatus({ connection, stale: true });
-  void refreshRealtimeSnapshot("reconnected", "matchmaking").catch(() => {
+  void refreshRealtimeSnapshot().catch(() => {
     if (sessionVersion === realtimeSessionVersion) {
       publishRealtimeStatus({ connection: "connected", stale: true });
     }
@@ -386,16 +406,14 @@ function flushQueuedRealtimeEvents(sessionVersion: number): void {
   if (pauseRealtimeEvents || sessionVersion !== realtimeSessionVersion || queuedRealtimeEvents.length === 0) {
     return;
   }
-  const queued = queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length);
+  const queued = queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length).sort((left, right) => {
+    if (typeof left.seq !== "number") return 1;
+    if (typeof right.seq !== "number") return -1;
+    return left.seq - right.seq;
+  });
   for (const event of queued) {
-    if (!doesRealtimeEventNeedEnrich(event)) {
-      publishRealtimeEventNowOrQueue(event, sessionVersion);
-      continue;
-    }
-    if (shouldPublishRealtimeEventBeforeEnrich(event)) {
-      publishRealtimeEventNowOrQueue(event, sessionVersion);
-    }
-    publishEnrichedRealtimeEvent(event, sessionVersion);
+    if (!acceptRealtimeEvent(event)) continue;
+    deliverAcceptedRealtimeEvent(event, sessionVersion);
   }
 }
 
@@ -403,7 +421,7 @@ function doesRealtimeEventNeedEnrich(event: PlayerRealtimeEvent): boolean {
   return event.type === "friend_request_received"
     || event.type === "friend_request_resolved"
     || event.type === "match_room_created"
-    || event.type === "teams_assigned"
+    || event.type === "match_room_updated"
     || event.type === "match_completed";
 }
 

@@ -1,4 +1,4 @@
-import type { PlayerLiveMatchStateDto, PlayerMatchmakingStateDto, PlayerMatchTeamDto } from "../../shared/types.js";
+import type { PlayerLiveMatchStateDto, PlayerMatchmakingStateDto } from "../../shared/types.js";
 
 export function isTerminalMatchPhase(phase: PlayerLiveMatchStateDto["phase"] | undefined): boolean {
   return phase === "completed" || phase === "failed";
@@ -44,16 +44,6 @@ export function mergeMatchmakingSnapshotRooms(
     rooms: preservedCurrentRoom ? upsertRoom(snapshotRooms, preservedCurrentRoom) : snapshotRooms,
     room: snapshotRoom ?? preservedCurrentRoom,
   };
-}
-
-export function mergeTeamsAssignedRoom(
-  room: PlayerLiveMatchStateDto,
-  teamA: PlayerMatchTeamDto,
-  teamB: PlayerMatchTeamDto,
-): PlayerLiveMatchStateDto {
-  if (room.phase === "ready") return room;
-  const phase = room.phase === "match_room" ? "match_room" : room.phase;
-  return { ...room, phase, teamA, teamB };
 }
 
 export function mergeReadyRoomProgress(

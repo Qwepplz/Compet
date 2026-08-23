@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PlayerLiveMatchStateDto } from "../../../shared/types.js";
 import { formatMapName, mapImageUrl } from "../mapAssets.js";
 import { isMapRandomizingRevealed, mapReelDurationMs, mapReelOffset } from "../randomMapAnimation.js";
@@ -7,7 +7,7 @@ type MapSelection = NonNullable<PlayerLiveMatchStateDto["mapSelection"]>;
 
 const TRAILING_PAD = 2;
 
-export function RandomMapReel({ mapSelection }: { mapSelection: MapSelection }) {
+export function RandomMapReel({ mapSelection, onSettled }: { mapSelection: MapSelection; onSettled?: () => void }) {
   const { reel, finalMap } = mapSelection;
   const winnerIndex = reel.length - 1;
   const tiles = [...reel, ...reel.slice(0, TRAILING_PAD)];
@@ -44,6 +44,10 @@ export function RandomMapReel({ mapSelection }: { mapSelection: MapSelection }) 
       strip.removeEventListener("transitionend", onEnd);
     };
   }, [mapSelection.revealAt, winnerIndex]);
+
+  useEffect(() => {
+    if (settled) onSettled?.();
+  }, [settled]);
 
   return (
     <section className="faceit-connect-panel faceit-reel-panel" aria-live="polite">

@@ -10,13 +10,12 @@ import type {
   PlayerMatchParticipantDto,
   PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
+  PlayerMatchStageDto,
   PlayerMatchTeamDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
-  PlayerRealtimeSnapshotReason,
-  PlayerRealtimeSnapshotScope,
   PlayerServerTimedDto,
 } from "../shared/types.js";
 import { isRealtimeCommandServiceError } from "./playerRealtimeClient.js";
@@ -271,11 +270,11 @@ export class PlayerApiClient {
     return this.getMatchmakingState();
   }
 
-  async ackMatchRoomEntered(roomId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
-      "matchRoom.entered",
-      { roomId },
-      () => this.request("POST", `/match-room/${encodeURIComponent(roomId)}/entered`, {}),
+  async ackMatchStage(roomId: string, stage: PlayerMatchStageDto): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
+    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503);
+    const response = await this.realtimeCommandSender<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
+      "matchRoom.stageAck",
+      { roomId, stage },
     );
     return attachServerNow(response.room, response);
   }
@@ -298,17 +297,10 @@ export class PlayerApiClient {
     return attachServerNow(response.room, response);
   }
 
-  async fetchRealtimeSnapshot(reason: PlayerRealtimeSnapshotReason, scope: PlayerRealtimeSnapshotScope = "full"): Promise<PlayerRealtimeSnapshotDto> {
-    if (scope === "matchmaking") {
-      const matchmaking = await this.getMatchmakingState();
-      return { reason, serverNow: matchmaking.serverNow, matchmaking };
-    }
-    const [friends, party, matchmaking] = await Promise.all([
-      this.listFriends(),
-      this.getParty(),
-      this.getMatchmakingState(),
-    ]);
-    return { reason, serverNow: matchmaking.serverNow, friends, party, matchmaking };
+  async fetchRealtimeSnapshot(): Promise<PlayerRealtimeSnapshotDto> {
+    const matchmaking = await this.getMatchmakingState();
+    const friends = await this.listFriends();
+    return { friends, matchmaking };
   }
 
   async fetchRealtimeEvents(afterSeq: number, timeoutMs: number): Promise<PlayerRealtimeEventsResult> {
@@ -333,11 +325,8 @@ export class PlayerApiClient {
       case "friend_request_resolved":
         return { ...event, request: await this.enrichFriendRequest(event.request) };
       case "match_room_created":
+      case "match_room_updated":
         return { ...event, room: await this.enrichRoom(event.room) };
-      case "teams_assigned": {
-        const { teamA, teamB } = await this.enrichTeams(event.teamA, event.teamB);
-        return { ...event, teamA, teamB };
-      }
       case "match_completed":
         return event.result ? { ...event, result: await this.enrichMatchResult(event.result) } : event;
       default:
@@ -415,13 +404,11 @@ export class PlayerApiClient {
   }
 
   private async enrichMatchmakingState(state: PlayerMatchmakingStateDto): Promise<PlayerMatchmakingStateDto> {
-    const roomIds = new Set<string>();
-    const rooms = await Promise.all((state.rooms ?? []).map(async (room) => {
-      roomIds.add(room.id);
-      return this.enrichRoom(room);
-    }));
-    const room = state.room ? (roomIds.has(state.room.id) ? rooms.find((item) => item.id === state.room?.id) ?? state.room : await this.enrichRoom(state.room)) : null;
-    return { ...state, rooms, partyInvitations: state.partyInvitations ?? [], room, occupancy: state.occupancy ?? { activeCount: 0 } };
+    const rooms = await Promise.all(state.rooms.map((room) => this.enrichRoom(room)));
+    const room = state.room
+      ? rooms.find((item) => item.id === state.room?.id) ?? await this.enrichRoom(state.room)
+      : null;
+    return { ...state, rooms, room };
   }
 
   private async enrichRoom(room: PlayerLiveMatchStateDto): Promise<PlayerLiveMatchStateDto> {
@@ -433,17 +420,6 @@ export class PlayerApiClient {
       ...room,
       teamA: room.teamA ? enrichTeam(room.teamA, profiles) : room.teamA,
       teamB: room.teamB ? enrichTeam(room.teamB, profiles) : room.teamB,
-    };
-  }
-
-  private async enrichTeams(teamA: PlayerMatchTeamDto, teamB: PlayerMatchTeamDto): Promise<{ teamA: PlayerMatchTeamDto; teamB: PlayerMatchTeamDto }> {
-    const steam64s = collectParticipantSteam64s([...teamA.participants, ...teamB.participants]);
-    if (steam64s.length === 0) return { teamA, teamB };
-    const profiles = await this.resolveSteamProfiles(steam64s);
-    if (profiles.size === 0) return { teamA, teamB };
-    return {
-      teamA: enrichTeam(teamA, profiles),
-      teamB: enrichTeam(teamB, profiles),
     };
   }
 

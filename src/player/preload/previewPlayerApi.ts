@@ -10,11 +10,11 @@ import type {
   PlayerMatchHistoryDto,
   PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
+  PlayerMatchStageDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
   PlayerRealtimeSnapshotDto,
-  PlayerRealtimeSnapshotScope,
   PlayerRealtimeStatusDto,
   PlayerServerTimedDto,
 } from "../shared/types.js";
@@ -96,6 +96,10 @@ function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
     humanAccountIds: [previewAccount.id],
     botParticipantIds: ["preview-bot-1", "preview-bot-2"],
     ready: [{ accountId: previewAccount.id, ready: false }],
+    stageBarrier: {
+      stage: "room_entered",
+      acknowledgedAccountIds: [],
+    },
     teamA: {
       id: "teamA",
       gameSide: "t",
@@ -139,20 +143,13 @@ export function createPreviewPlayerApi() {
     partyInvitations: [],
     room,
     occupancy: { activeCount: room || party?.matchmakingPendingAt ? 1 : 0 },
+    baseSeq: 0,
   });
 
-  const snapshot = (scope: PlayerRealtimeSnapshotScope = "full"): PlayerRealtimeSnapshotDto =>
-    scope === "matchmaking"
-      ? {
-          reason: "manual",
-          matchmaking: matchmaking(),
-        }
-      : {
-          reason: "manual",
-          friends: previewFriends,
-          party,
-          matchmaking: matchmaking(),
-        };
+  const snapshot = (): PlayerRealtimeSnapshotDto => ({
+    friends: previewFriends,
+    matchmaking: matchmaking(),
+  });
 
   const publishSnapshot = () => {
     const next = snapshot();
@@ -272,17 +269,46 @@ export function createPreviewPlayerApi() {
       return room;
     },
     getMatchmakingState: async (): Promise<PlayerMatchmakingStateDto> => matchmaking(),
-    ackMatchRoomEntered: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
+    ackMatchStage: async (_roomId: string, stage: PlayerMatchStageDto): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);
-      room = { ...room, readyDeadlineAt: room.readyDeadlineAt ?? new Date(Date.now() + 60_000).toISOString() };
+      if (stage === "room_entered") {
+        room = { ...room, stageBarrier: undefined, readyDeadlineAt: new Date(Date.now() + 45_000).toISOString() };
+      } else if (stage === "map_stage_entered") {
+        const startedAt = new Date().toISOString();
+        room = {
+          ...room,
+          mapSelection: {
+            mapPool: ["de_mirage", "de_inferno", "de_nuke"],
+            reel: ["de_inferno", "de_nuke", "de_mirage"],
+            finalMap: "de_mirage",
+            startedAt,
+            revealAt: new Date(Date.now() + 7_000).toISOString(),
+          },
+          stageBarrier: {
+            stage: "map_revealed",
+            acknowledgedAccountIds: [],
+          },
+        };
+      } else {
+        room = { ...room, stageBarrier: undefined, phase: "server_prepare" };
+      }
       publishSnapshot();
       return room;
     },
     acceptReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);
-      room = { ...room, phase: "match_room", ready: [{ accountId: previewAccount.id, ready: true }] };
+      room = {
+        ...room,
+        phase: "map_randomizing",
+        ready: [{ accountId: previewAccount.id, ready: true }],
+        readyDeadlineAt: undefined,
+        stageBarrier: {
+          stage: "map_stage_entered",
+          acknowledgedAccountIds: [],
+        },
+      };
       publishSnapshot();
       return room;
     },
@@ -292,8 +318,7 @@ export function createPreviewPlayerApi() {
       publishSnapshot();
       return room;
     },
-    refreshRealtimeSnapshot: async (scope?: PlayerRealtimeSnapshotScope): Promise<PlayerRealtimeSnapshotDto> =>
-      snapshot(scope),
+    refreshRealtimeSnapshot: async (): Promise<void> => publishSnapshot(),
     onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) => {
       eventListeners.add(listener);
       return () => eventListeners.delete(listener);

@@ -99,6 +99,11 @@ export class PlayerRealtimeClient {
     this.emitStatus("disconnected");
   }
 
+  setLastSeq(seq: number): void {
+    if (!Number.isSafeInteger(seq) || seq < 0) throw new Error("Invalid realtime sequence");
+    this.lastSeq = seq;
+  }
+
   sendCommand<T>(name: string, payload: unknown): Promise<T> {
     if (!this.socket || this.socket.readyState !== 1) {
       return Promise.reject(new Error("Realtime command unavailable"));
@@ -206,14 +211,15 @@ export class PlayerRealtimeClient {
       return;
     }
 
-    const delay = this.reconnectDelaysMs[this.reconnectAttempt];
-    if (delay === undefined) {
+    if (this.reconnectDelaysMs.length === 0) {
       this.emitStatus("disconnected");
       return;
     }
 
+    const delay = this.reconnectDelaysMs[Math.min(this.reconnectAttempt, this.reconnectDelaysMs.length - 1)]!;
+    const fallbackActive = this.reconnectAttempt >= this.reconnectDelaysMs.length;
     this.reconnectAttempt += 1;
-    this.emitStatus("connecting");
+    this.emitStatus(fallbackActive ? "disconnected" : "connecting");
     this.reconnectTimer = this.setTimeoutFn(() => {
       this.reconnectTimer = undefined;
       this.openSocket(false);
@@ -410,8 +416,7 @@ function sanitizeRealtimeEvent(message: unknown): PlayerRealtimeEvent | undefine
     case "ready_check_started":
     case "ready_check_updated":
     case "match_room_created":
-    case "teams_assigned":
-    case "map_randomizing_started":
+    case "match_room_updated":
     case "server_preparing":
     case "connect_ready":
     case "match_live":

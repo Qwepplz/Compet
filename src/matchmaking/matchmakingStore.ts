@@ -39,6 +39,15 @@ export interface MatchRoomReadyState {
   respondedAt?: string;
 }
 
+export type MatchClientStage = "room_entered" | "map_stage_entered" | "map_revealed";
+
+interface MatchStageBarrier {
+  stage: MatchClientStage;
+  requiredAccountIds: string[];
+  acknowledgements: Array<{ accountId: string; connectionId: string }>;
+  deadlineAt: string;
+}
+
 
 export interface MatchMapSelectionState {
   mapPool: string[];
@@ -57,7 +66,7 @@ export interface MatchRoomRecord {
   botParticipantIds?: string[];
   ready?: MatchRoomReadyState[];
   readyDeadlineAt?: string;
-  readyEnteredAccountIds?: string[];
+  stageBarrier?: MatchStageBarrier;
   partyId?: string;
   mapSelection?: MatchMapSelectionState;
   connect?: MatchConnectInfo;

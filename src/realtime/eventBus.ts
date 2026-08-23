@@ -15,6 +15,10 @@ export class RealtimeEventBus {
   private readonly history: SequencedRealtimeEvent[] = [];
   private nextSeq = 1;
 
+  latestSeq(): number {
+    return this.nextSeq - 1;
+  }
+
   publish(event: RealtimeEvent): void {
     const sequencedEvent: SequencedRealtimeEvent = {
       ...event,
@@ -37,10 +41,11 @@ export class RealtimeEventBus {
 
   getEventsAfter(accountId: string, afterSeq: number): RealtimeReplayResult {
     const firstSeq = this.history[0]?.seq;
-    const gap = firstSeq !== undefined && afterSeq < firstSeq - 1;
+    const latestSeq = this.latestSeq();
+    const gap = afterSeq > latestSeq || (firstSeq !== undefined && afterSeq < firstSeq - 1);
     return {
       gap,
-      latestSeq: this.history.at(-1)?.seq ?? 0,
+      latestSeq,
       events: this.history.filter((event) => event.seq > afterSeq && eventIncludesAccount(event, accountId)),
     };
   }
