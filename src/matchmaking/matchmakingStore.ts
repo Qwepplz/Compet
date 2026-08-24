@@ -21,6 +21,8 @@ export interface PartyRecord {
   status?: PartyStatus;
   lockedMatchId?: string;
   matchmakingPendingAt?: string;
+  matchmakingStartAt?: string;
+  matchmakingDev?: boolean;
 }
 
 export interface PartyInvitationRecord {

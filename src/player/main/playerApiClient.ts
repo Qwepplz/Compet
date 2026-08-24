@@ -229,11 +229,12 @@ export class PlayerApiClient {
     return this.commandOrRequest("party.leave", {}, () => this.request("POST", "/party/leave", {}));
   }
 
-  async beginPartyMatchmaking(): Promise<PlayerServerTimedDto<PlayerPartyDto>> {
+  async beginPartyMatchmaking(options: { dev?: boolean } = {}): Promise<PlayerServerTimedDto<PlayerPartyDto>> {
+    const payload = options.dev ? { dev: true } : {};
     const response = await this.commandOrRequest<{ party: PlayerPartyDto } & ServerTimedResponse>(
       "party.beginMatchmaking",
-      {},
-      () => this.request("POST", "/party/matchmaking/begin", {}),
+      payload,
+      () => this.request("POST", "/party/matchmaking/begin", payload),
     );
     return attachServerNow(response.party, response);
   }

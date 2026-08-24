@@ -1322,7 +1322,7 @@ export function App() {
       if (!party) {
         await createParty();
       }
-      const pendingParty = await api.beginPartyMatchmaking();
+      const pendingParty = await api.beginPartyMatchmaking(options);
       updateServerClock(pendingParty.serverNow);
       matchmakingPendingSynced = true;
       setParty(pendingParty);

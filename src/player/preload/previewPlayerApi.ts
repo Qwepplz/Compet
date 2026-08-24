@@ -249,7 +249,7 @@ export function createPreviewPlayerApi() {
       room = null;
       publishSnapshot();
     },
-    beginPartyMatchmaking: async (): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
+    beginPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
       const now = new Date().toISOString();
       const nextParty = { ...ensureParty(), matchmakingPendingAt: now, updatedAt: now };
       party = nextParty;

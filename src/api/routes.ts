@@ -530,8 +530,9 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
+    const { dev } = matchmakingStartSchema.parse(request.body ?? {});
     try {
-      return withServerNow({ party: await matchmaking.beginPartyMatchmaking(auth.account.id) });
+      return withServerNow({ party: await matchmaking.beginPartyMatchmaking(auth.account.id, { dev }) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

@@ -29,6 +29,7 @@ const MAP_RANDOMIZATION_MS = 7_000;
 const MAP_RANDOMIZATION_REEL_LENGTH = 20;
 const RECENT_MAP_EXCLUSION_COUNT = 3;
 const MAX_PARTY_HUMANS = 5;
+const MATCHMAKING_START_FALLBACK_DELAY_MS = 9_000;
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 45_000;
 const STAGE_BARRIER_TIMEOUT_MS = 45_000;
@@ -257,6 +258,7 @@ export class MatchmakingService {
   private readonly clearTimeoutFn: ReadyTimeoutCanceler;
   private readonly unrefReadyTimeouts: boolean;
   private readonly partyInviteTimeouts = new Map<string, ReadyTimeoutHandle>();
+  private readonly partyMatchmakingTimeouts = new Map<string, { startAt: string; timeout: ReadyTimeoutHandle }>();
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly stageBarrierTimeouts = new Map<string, ReadyTimeoutHandle>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
@@ -271,7 +273,22 @@ export class MatchmakingService {
   }
 
   async resumePendingTimeouts(): Promise<void> {
-    const rooms = await this.deps.store.listRooms();
+    const [rooms, parties] = await Promise.all([
+      this.deps.store.listRooms(),
+      this.deps.store.listParties(),
+    ]);
+    const resumedParties = parties.map((party) => {
+      if ((party.status ?? "open") !== "open" || !party.matchmakingPendingAt || party.matchmakingStartAt) return party;
+      return {
+        ...party,
+        matchmakingStartAt: this.buildPendingMatchmakingStartAt(party.matchmakingPendingAt),
+        updatedAt: this.now(),
+      };
+    });
+    if (resumedParties.some((party, index) => party !== parties[index])) {
+      await this.deps.store.saveParties(resumedParties);
+    }
+
     const resumedRooms = rooms.map((room) => (
       room.stageBarrier?.acknowledgements.length
         ? {
@@ -290,6 +307,9 @@ export class MatchmakingService {
       } else {
         this.scheduleReadyTimeout(room);
       }
+    }
+    for (const party of resumedParties) {
+      this.schedulePartyMatchmakingStart(party);
     }
   }
   createParty(ownerAccountId: string): Promise<PartyRecord> {
@@ -369,6 +389,8 @@ export class MatchmakingService {
             ownerAccountId: ownerLeft ? remainingMemberIds[0]! : party.ownerAccountId,
             memberAccountIds: remainingMemberIds,
             matchmakingPendingAt: undefined,
+            matchmakingStartAt: undefined,
+            matchmakingDev: undefined,
             updatedAt: this.now(),
           }
         : undefined;
@@ -377,6 +399,7 @@ export class MatchmakingService {
         : parties.filter((candidate) => candidate.id !== party.id);
 
       await this.deps.store.saveParties(updated);
+      this.clearPartyMatchmakingTimeout(party.id);
       if (ownerLeft) await this.expirePendingInvitationsForParty(party.id);
       await this.emit({ type: "party_updated", accountIds: [accountId, ...remainingMemberIds], party: nextParty ?? null });
       if (party.matchmakingPendingAt) await this.emitOccupancyUpdated();
@@ -401,6 +424,8 @@ export class MatchmakingService {
             ownerAccountId: ownerLeft ? remainingMemberIds[0]! : party.ownerAccountId,
             memberAccountIds: remainingMemberIds,
             matchmakingPendingAt: undefined,
+            matchmakingStartAt: undefined,
+            matchmakingDev: undefined,
             updatedAt: this.now(),
           }
         : undefined;
@@ -409,6 +434,7 @@ export class MatchmakingService {
         : parties.filter((candidate) => candidate.id !== party.id);
 
       await this.deps.store.saveParties(updated);
+      this.clearPartyMatchmakingTimeout(party.id);
       if (ownerLeft) await this.expirePendingInvitationsForParty(party.id);
       await this.emit({ type: "party_updated", accountIds: [accountId, ...remainingMemberIds], party: nextParty ?? null });
       if (party.matchmakingPendingAt) await this.emitOccupancyUpdated();
@@ -516,8 +542,9 @@ export class MatchmakingService {
     });
   }
 
-  beginPartyMatchmaking(ownerAccountId: string): Promise<PartyRecord> {
+  beginPartyMatchmaking(ownerAccountId: string, options: { dev?: boolean } = {}): Promise<PartyRecord> {
     return this.enqueueMutation(async () => {
+      const ownerAccount = await this.requireMatchmakingAccount(ownerAccountId);
       const parties = await this.deps.store.listParties();
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
@@ -529,8 +556,15 @@ export class MatchmakingService {
       }
 
       const now = this.now();
-      const updatedParty: PartyRecord = { ...party, matchmakingPendingAt: now, updatedAt: now };
+      const updatedParty: PartyRecord = {
+        ...party,
+        matchmakingPendingAt: now,
+        matchmakingStartAt: this.buildPendingMatchmakingStartAt(now),
+        matchmakingDev: options.dev === true && ownerAccount.dev === true ? true : undefined,
+        updatedAt: now,
+      };
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+      this.schedulePartyMatchmakingStart(updatedParty);
       await this.emitPartyUpdated(updatedParty);
       await this.emitOccupancyUpdated();
       return updatedParty;
@@ -545,8 +579,15 @@ export class MatchmakingService {
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
       if ((party.status ?? "open") !== "open" || !party.matchmakingPendingAt) return party;
 
-      const updatedParty: PartyRecord = { ...party, matchmakingPendingAt: undefined, updatedAt: this.now() };
+      const updatedParty: PartyRecord = {
+        ...party,
+        matchmakingPendingAt: undefined,
+        matchmakingStartAt: undefined,
+        matchmakingDev: undefined,
+        updatedAt: this.now(),
+      };
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+      this.clearPartyMatchmakingTimeout(party.id);
       await this.emitPartyUpdated(updatedParty);
       await this.emitOccupancyUpdated();
       return updatedParty;
@@ -588,11 +629,20 @@ export class MatchmakingService {
         partyId: party.id,
         createdAt: startedAt,
       };
-      const updatedParty: PartyRecord = { ...party, status: "matchmaking", lockedMatchId: room.id, matchmakingPendingAt: undefined, updatedAt: startedAt };
+      const updatedParty: PartyRecord = {
+        ...party,
+        status: "matchmaking",
+        lockedMatchId: room.id,
+        matchmakingPendingAt: undefined,
+        matchmakingStartAt: undefined,
+        matchmakingDev: undefined,
+        updatedAt: startedAt,
+      };
       const rooms = [...existingRooms, room];
 
       await this.deps.store.saveRooms(rooms);
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+      this.clearPartyMatchmakingTimeout(party.id);
       await this.expirePendingInvitationsForParty(party.id);
       this.scheduleStageBarrierTimeout(room);
       await this.emitPartyUpdated(updatedParty);
@@ -973,6 +1023,78 @@ export class MatchmakingService {
       this.clearPartyInviteTimeout(invitation.id);
       await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation });
     }
+  }
+
+  private buildPendingMatchmakingStartAt(pendingAt: string): string {
+    const pendingAtMs = Date.parse(pendingAt);
+    const nowMs = Date.parse(this.now());
+    const baseMs = Number.isFinite(pendingAtMs) ? pendingAtMs : Number.isFinite(nowMs) ? nowMs : Date.now();
+    return new Date(baseMs + MATCHMAKING_START_FALLBACK_DELAY_MS).toISOString();
+  }
+
+  private schedulePartyMatchmakingStart(party: PartyRecord): void {
+    if ((party.status ?? "open") !== "open" || !party.matchmakingPendingAt || !party.matchmakingStartAt) return;
+
+    const startAtMs = Date.parse(party.matchmakingStartAt);
+    const nowMs = Date.parse(this.now());
+    if (!Number.isFinite(startAtMs) || !Number.isFinite(nowMs)) return;
+
+    const scheduledStartAt = party.matchmakingStartAt;
+    this.clearPartyMatchmakingTimeout(party.id);
+    const timeout = this.setTimeoutFn(() => {
+      const activeTimeout = this.partyMatchmakingTimeouts.get(party.id);
+      if (!activeTimeout || activeTimeout.startAt !== scheduledStartAt) return;
+      this.partyMatchmakingTimeouts.delete(party.id);
+      void this.startScheduledPartyMatchmaking(party.id, scheduledStartAt).catch(() => undefined);
+    }, Math.max(0, startAtMs - nowMs));
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.partyMatchmakingTimeouts.set(party.id, { startAt: scheduledStartAt, timeout });
+  }
+
+  private async startScheduledPartyMatchmaking(partyId: string, scheduledStartAt: string): Promise<void> {
+    const party = (await this.deps.store.listParties()).find((candidate) => candidate.id === partyId);
+    if (
+      !party
+      || (party.status ?? "open") !== "open"
+      || !party.matchmakingPendingAt
+      || party.matchmakingStartAt !== scheduledStartAt
+    ) return;
+
+    try {
+      await this.startPartyMatchmaking(party.ownerAccountId, { dev: party.matchmakingDev === true });
+    } catch {
+      await this.cancelScheduledPartyMatchmaking(partyId);
+    }
+  }
+
+  private cancelScheduledPartyMatchmaking(partyId: string): Promise<void> {
+    return this.enqueueMutation(async () => {
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((candidate) => candidate.id === partyId);
+      if (!party || (party.status ?? "open") !== "open" || !party.matchmakingPendingAt) {
+        this.clearPartyMatchmakingTimeout(partyId);
+        return;
+      }
+
+      const updatedParty: PartyRecord = {
+        ...party,
+        matchmakingPendingAt: undefined,
+        matchmakingStartAt: undefined,
+        matchmakingDev: undefined,
+        updatedAt: this.now(),
+      };
+      await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
+      this.clearPartyMatchmakingTimeout(party.id);
+      await this.emitPartyUpdated(updatedParty);
+      await this.emitOccupancyUpdated();
+    });
+  }
+
+  private clearPartyMatchmakingTimeout(partyId: string): void {
+    const entry = this.partyMatchmakingTimeouts.get(partyId);
+    if (!entry) return;
+    this.clearTimeoutFn(entry.timeout);
+    this.partyMatchmakingTimeouts.delete(partyId);
   }
 
   private schedulePartyInviteTimeout(invitation: PartyInvitationRecord): void {
