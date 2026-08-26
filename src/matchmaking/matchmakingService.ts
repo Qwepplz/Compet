@@ -826,7 +826,15 @@ export class MatchmakingService {
       const room = this.findReadyRoomForAccount(rooms, accountId);
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
       if (!room.readyDeadlineAt) throw new Error("ready check has not started");
-      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "ready declined"));
+      const readyEntry = room.ready?.find((entry) => entry.accountId === accountId);
+      if (!readyEntry) throw new Error("ready state not found for account");
+      if (readyEntry.ready) throw new Error("ready response is already accepted");
+      const declinedParticipant = this.humanParticipantsForRoom(room).find(
+        (participant) => participant.accountId === accountId,
+      );
+      if (!declinedParticipant) throw new Error("ready participant not found for account");
+      const readyDeclinedByDisplayName = declinedParticipant.displayName;
+      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "ready declined", readyDeclinedByDisplayName));
     });
   }
 
@@ -1637,7 +1645,12 @@ export class MatchmakingService {
     return this.failMatchRoom(rooms, room, "game server is already active");
   }
 
-  private async failMatchRoom(rooms: MatchRoomRecord[], room: MatchRoomRecord, reason: string): Promise<MatchRoomRecord> {
+  private async failMatchRoom(
+    rooms: MatchRoomRecord[],
+    room: MatchRoomRecord,
+    reason: string,
+    readyDeclinedByDisplayName?: string,
+  ): Promise<MatchRoomRecord> {
     const failedAt = this.now();
     const failedRoom: MatchRoomRecord = { ...room, phase: "failed", stageBarrier: undefined, terminalStateAt: failedAt };
     this.clearReadyTimeout(room.id);
@@ -1645,7 +1658,13 @@ export class MatchmakingService {
     const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
     await this.deps.store.saveRooms(updatedRooms);
     await this.unlockPartyForRoom(failedRoom, failedAt);
-    await this.emitMatchFailure({ type: "match_failed", matchId: room.id, accountIds: this.roomAudience(failedRoom), error: reason });
+    await this.emitMatchFailure({
+      type: "match_failed",
+      matchId: room.id,
+      accountIds: this.roomAudience(failedRoom),
+      error: reason,
+      ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
+    });
     return failedRoom;
   }
 

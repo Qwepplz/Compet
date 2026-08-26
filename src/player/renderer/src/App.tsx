@@ -826,7 +826,11 @@ export function App() {
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchResultBackView("home");
-        void message.error("比赛异常结束");
+        if (event.readyDeclinedByDisplayName) {
+          void message.info(`${event.readyDeclinedByDisplayName}拒绝了比赛`);
+        } else {
+          void message.error("比赛异常结束");
+        }
         setActiveView("home");
         return;
     }

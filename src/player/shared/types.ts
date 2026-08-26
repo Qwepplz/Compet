@@ -104,4 +104,9 @@ export type PlayerRealtimeEvent =
   | PlayerRealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; connect: PlayerConnectDto }>
   | PlayerRealtimeEventWithSeq<{ type: "match_live"; matchId: string }>
   | PlayerRealtimeEventWithSeq<{ type: "match_completed"; matchId: string; result?: MatchSeriesResult }>
-  | PlayerRealtimeEventWithSeq<{ type: "match_failed"; matchId: string; error: string }>;
+  | PlayerRealtimeEventWithSeq<{
+      type: "match_failed";
+      matchId: string;
+      error: string;
+      readyDeclinedByDisplayName?: string;
+    }>;

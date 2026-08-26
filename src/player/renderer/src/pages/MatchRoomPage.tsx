@@ -121,6 +121,7 @@ export function MatchRoomPage({
   const roomPhase = phaseLabel(room?.phase);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
+  const selfReady = room?.ready?.find((entry) => entry.accountId === account?.id)?.ready === true;
   const [readyActionPending, setReadyActionPending] = useState<"accept" | "decline" | null>(null);
   const participantNames = new Map(
     [...(room?.teamA?.participants ?? []), ...(room?.teamB?.participants ?? [])]
@@ -128,7 +129,7 @@ export function MatchRoomPage({
   );
 
   async function handleAcceptReady() {
-    if (!onAcceptReady || !readyCountdownStarted || readyActionPending) return;
+    if (!onAcceptReady || !readyCountdownStarted || selfReady || readyActionPending) return;
     setReadyActionPending("accept");
     try {
       await onAcceptReady();
@@ -138,7 +139,7 @@ export function MatchRoomPage({
   }
 
   async function handleDeclineReady() {
-    if (!onDeclineReady || !readyCountdownStarted || readyActionPending) return;
+    if (!onDeclineReady || !readyCountdownStarted || selfReady || readyActionPending) return;
     setReadyActionPending("decline");
     try {
       await onDeclineReady();
@@ -207,7 +208,7 @@ export function MatchRoomPage({
                       aria-label="准备"
                       type="primary"
                       onClick={() => void handleAcceptReady()}
-                      disabled={!onAcceptReady || !readyCountdownStarted || Boolean(readyActionPending)}
+                      disabled={!onAcceptReady || !readyCountdownStarted || selfReady || Boolean(readyActionPending)}
                       loading={readyActionPending === "accept"}
                     >
                       准备
@@ -215,7 +216,7 @@ export function MatchRoomPage({
                     <Button
                       aria-label="拒绝本场"
                       onClick={() => void handleDeclineReady()}
-                      disabled={!onDeclineReady || !readyCountdownStarted || Boolean(readyActionPending)}
+                      disabled={!onDeclineReady || !readyCountdownStarted || selfReady || Boolean(readyActionPending)}
                       loading={readyActionPending === "decline"}
                     >
                       拒绝本场

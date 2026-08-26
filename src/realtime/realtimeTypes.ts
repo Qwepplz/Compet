@@ -43,6 +43,12 @@ export type RealtimeEvent =
   | RealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; accountIds?: string[]; connect: MatchConnectInfo }>
   | RealtimeEventWithSeq<{ type: "match_live"; matchId: string; accountIds?: string[] }>
   | RealtimeEventWithSeq<{ type: "match_completed"; matchId: string; accountIds?: string[]; result?: unknown }>
-  | RealtimeEventWithSeq<{ type: "match_failed"; matchId: string; accountIds?: string[]; error: unknown }>;
+  | RealtimeEventWithSeq<{
+      type: "match_failed";
+      matchId: string;
+      accountIds?: string[];
+      error: unknown;
+      readyDeclinedByDisplayName?: string;
+    }>;
 
 export type SequencedRealtimeEvent = RealtimeEvent & { seq: number };
