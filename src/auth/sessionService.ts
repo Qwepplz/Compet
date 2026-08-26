@@ -43,7 +43,10 @@ export class SessionService {
 
   async verifyToken(token: string): Promise<VerifiedSession | undefined> {
     const tokenHash = this.hashToken(token);
-    const session = await this.repository.updateActiveUniqueByTokenHash(tokenHash, new Date().toISOString());
+    const now = new Date();
+    const seenAt = now.toISOString();
+    const expiresAt = new Date(now.getTime() + this.ttlMinutes * 60_000).toISOString();
+    const session = await this.repository.updateActiveUniqueByTokenHash(tokenHash, seenAt, expiresAt);
     if (!session) return undefined;
     return { sessionId: session.id, accountId: session.accountId, expiresAt: session.expiresAt };
   }

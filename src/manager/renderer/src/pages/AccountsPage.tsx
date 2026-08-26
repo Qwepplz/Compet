@@ -3,7 +3,7 @@ import type { TableProps } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { USERNAME_PATTERN } from "../../../../accounts/accountTypes.js";
 import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, UpdateAccountInput } from "../../../shared/types.js";
-import { accountApi } from "../api/managerApi.js";
+import { accountApi, isManagerAuthRequired } from "../api/managerApi.js";
 
 interface AccountFormValues {
   id?: string;
@@ -20,6 +20,11 @@ function rating2SortValue(player: MatchDetailPlayer): number {
 
 function sortPlayersByRating2(players: MatchDetailPlayer[]): MatchDetailPlayer[] {
   return [...players].sort((left, right) => rating2SortValue(right) - rating2SortValue(left));
+}
+
+function showAccountError(error: unknown, fallback: string): void {
+  if (isManagerAuthRequired()) return;
+  message.error(error instanceof Error ? error.message : fallback);
 }
 
 export function AccountsPage() {
@@ -48,7 +53,7 @@ export function AccountsPage() {
     try {
       setAccounts(await accountApi.list());
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "读取账号失败");
+      showAccountError(error, "读取账号失败");
     } finally {
       setLoading(false);
     }
@@ -145,7 +150,7 @@ export function AccountsPage() {
       if (requestId === matchHistoryRequestIdRef.current) setMatchHistory(history);
     } catch (error) {
       if (requestId === matchHistoryRequestIdRef.current) {
-        message.error(error instanceof Error ? error.message : "读取历史战绩失败");
+        showAccountError(error, "读取历史战绩失败");
       }
     } finally {
       if (requestId === matchHistoryRequestIdRef.current) setMatchHistoryLoading(false);
@@ -162,7 +167,7 @@ export function AccountsPage() {
       if (requestId === matchDetailRequestIdRef.current) setMatchDetail(detail);
     } catch (error) {
       if (requestId === matchDetailRequestIdRef.current) {
-        message.error(error instanceof Error ? error.message : "读取战绩详情失败");
+        showAccountError(error, "读取战绩详情失败");
       }
     } finally {
       if (requestId === matchDetailRequestIdRef.current) setMatchDetailLoading(false);
@@ -206,7 +211,7 @@ export function AccountsPage() {
     try {
       await accountApi.update(row.id, { enabled });
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "更新账号失败");
+      showAccountError(error, "更新账号失败");
     } finally {
       await refresh();
       endUpdating(row.id);
@@ -218,7 +223,7 @@ export function AccountsPage() {
     try {
       await accountApi.update(row.id, { dev });
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "更新账号失败");
+      showAccountError(error, "更新账号失败");
     } finally {
       await refresh();
       endUpdating(row.id);
@@ -232,7 +237,7 @@ export function AccountsPage() {
       await accountApi.resetPassword(row.id, password);
       Modal.info({ title: "临时密码", content: password });
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "重置密码失败");
+      showAccountError(error, "重置密码失败");
     } finally {
       endResetting(row.id);
     }
@@ -252,7 +257,7 @@ export function AccountsPage() {
           message.success("账号已删除");
           await refresh();
         } catch (error) {
-          message.error(error instanceof Error ? error.message : "删除账号失败");
+          showAccountError(error, "删除账号失败");
         } finally {
           endDeleting(row.id);
         }
@@ -279,7 +284,7 @@ export function AccountsPage() {
       setOpen(false);
       await refresh();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "保存账号失败");
+      showAccountError(error, "保存账号失败");
     } finally {
       setSubmitting(false);
     }

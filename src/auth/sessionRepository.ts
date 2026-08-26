@@ -94,7 +94,7 @@ export class JsonSessionRepository {
     });
   }
 
-  async updateActiveUniqueByTokenHash(tokenHash: string, seenAt: string): Promise<SessionRecord | undefined> {
+  async updateActiveUniqueByTokenHash(tokenHash: string, seenAt: string, expiresAt: string): Promise<SessionRecord | undefined> {
     return this.writeQueue.enqueue(async () => {
       const sessions = await this.list();
       const index = sessions.findIndex((item) => item.tokenHash === tokenHash);
@@ -115,7 +115,7 @@ export class JsonSessionRepository {
         return undefined;
       }
 
-      const next = { ...current, lastSeenAt: seenAt };
+      const next = { ...current, expiresAt, lastSeenAt: seenAt };
       sessions[index] = next;
       await writeJsonFileAtomic(this.filePath, { sessions });
       return next;

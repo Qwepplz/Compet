@@ -4,7 +4,7 @@ import type { FileConfigStore } from "./configStore.js";
 import type { FileLogStore } from "./logStore.js";
 import type { ManagedServiceProcess } from "./serviceProcess.js";
 import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../shared/types.js";
-import { ServiceApiClient } from "./serviceApiClient.js";
+import { ServiceApiClient, ServiceApiError } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
 import { delay } from "../../shared/async.js";
 import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
@@ -27,6 +27,7 @@ export interface IpcDeps {
   saveSavedLogin: (credentials: SavedLoginCredentials) => Promise<void>;
   clearSavedLogin: () => Promise<void>;
   setApiClient: (client: ServiceApiClient) => void;
+  onAuthRequired?: () => void;
 }
 
 const STARTUP_TIMEOUT_MS = 15_000;
@@ -35,6 +36,33 @@ const STARTUP_POLL_INTERVAL_MS = 250;
 export function registerManagerIpc(deps: IpcDeps): void {
   let offlineAccounts: { filePath: string; accounts: AccountService; sessions: SessionService; records: MatchRecordStore } | undefined;
   let managerActor: LogActor | undefined;
+  let authRequiredNotified = false;
+
+  function notifyAuthRequired(): void {
+    managerActor = undefined;
+    if (authRequiredNotified) return;
+    authRequiredNotified = true;
+    deps.onAuthRequired?.();
+  }
+
+  async function withAuthBoundary<T>(operation: () => Promise<T>): Promise<T> {
+    const client = deps.getApiClient();
+    const token = client.sessionToken();
+    try {
+      return await operation();
+    } catch (error) {
+      if (
+        error instanceof ServiceApiError
+        && error.statusCode === 401
+        && deps.getApiClient() === client
+        && client.sessionToken() === token
+      ) {
+        client.logout();
+        notifyAuthRequired();
+      }
+      throw error;
+    }
+  }
 
   async function logActivity(input: ActivityLogInput): Promise<void> {
     try {
@@ -71,11 +99,11 @@ export function registerManagerIpc(deps: IpcDeps): void {
 
   async function requireOfflineAdmin(offline: NonNullable<typeof offlineAccounts>): Promise<AccountRecord> {
     const token = deps.getApiClient().sessionToken();
-    if (!token) throw new Error("Manager login required");
+    if (!token) throw new ServiceApiError("Manager login required", 401);
     const session = await offline.sessions.verifyToken(token);
-    if (!session) throw new Error("Manager login required");
+    if (!session) throw new ServiceApiError("Manager login required", 401);
     const admin = await offline.accounts.getById(session.accountId);
-    if (!admin || admin.role !== "admin" || !admin.enabled) throw new Error("Manager login required");
+    if (!admin || admin.role !== "admin" || !admin.enabled) throw new ServiceApiError("Manager login required", 401);
     return admin;
   }
 
@@ -204,6 +232,7 @@ export function registerManagerIpc(deps: IpcDeps): void {
       const result = await deps.getApiClient().login(username, password);
       managerActor = { accountId: result.account.id, username: result.account.username, role: result.account.role, ...(result.account.steam64 ? { steam64: result.account.steam64 } : {}) };
       await deps.saveSavedLogin({ username, password });
+      authRequiredNotified = false;
       return result;
     } catch (error) {
       await deps.clearSavedLogin();
@@ -213,26 +242,27 @@ export function registerManagerIpc(deps: IpcDeps): void {
   ipcMain.handle("auth:logout", async () => {
     await deps.getApiClient().logout();
     managerActor = undefined;
+    authRequiredNotified = false;
   });
-  ipcMain.handle("auth:changePassword", async (_event, currentPassword: string, newPassword: string) => {
+  ipcMain.handle("auth:changePassword", (_event, currentPassword: string, newPassword: string) => withAuthBoundary(async () => {
     await deps.getApiClient().changePassword(currentPassword, newPassword);
     const savedLogin = await deps.loadSavedLogin();
     if (savedLogin) {
       await deps.saveSavedLogin({ ...savedLogin, password: newPassword });
     }
-  });
+  }));
   ipcMain.handle("credentials:load", () => deps.loadSavedLogin());
-  ipcMain.handle("matchmaking:occupancy", () => deps.getApiClient().matchmakingOccupancy());
-  ipcMain.handle("accounts:list", () => listAccounts());
-  ipcMain.handle("accounts:matches", (_event, id, page) => accountMatchHistory(accountIdSchema.parse(id), matchHistoryPageSchema.parse(page)));
-  ipcMain.handle("accounts:matchDetail", (_event, id, matchId) => accountMatchDetail(accountIdSchema.parse(id), matchHistoryMatchIdSchema.parse(matchId)));
-  ipcMain.handle("accounts:create", (_event, input) => createAccount(createAccountSchema.parse(input)));
-  ipcMain.handle("accounts:update", (_event, id, input) => updateAccount(accountIdSchema.parse(id), patchAccountSchema.parse(input)));
-  ipcMain.handle("accounts:resetPassword", (_event, id, password) => {
+  ipcMain.handle("matchmaking:occupancy", () => withAuthBoundary(() => deps.getApiClient().matchmakingOccupancy()));
+  ipcMain.handle("accounts:list", () => withAuthBoundary(listAccounts));
+  ipcMain.handle("accounts:matches", (_event, id, page) => withAuthBoundary(() => accountMatchHistory(accountIdSchema.parse(id), matchHistoryPageSchema.parse(page))));
+  ipcMain.handle("accounts:matchDetail", (_event, id, matchId) => withAuthBoundary(() => accountMatchDetail(accountIdSchema.parse(id), matchHistoryMatchIdSchema.parse(matchId))));
+  ipcMain.handle("accounts:create", (_event, input) => withAuthBoundary(() => createAccount(createAccountSchema.parse(input))));
+  ipcMain.handle("accounts:update", (_event, id, input) => withAuthBoundary(() => updateAccount(accountIdSchema.parse(id), patchAccountSchema.parse(input))));
+  ipcMain.handle("accounts:resetPassword", (_event, id, password) => withAuthBoundary(() => {
     const input = passwordSchema.parse({ password });
     return resetPassword(accountIdSchema.parse(id), input.password);
-  });
-  ipcMain.handle("accounts:delete", (_event, id) => deleteAccount(accountIdSchema.parse(id)));
+  }));
+  ipcMain.handle("accounts:delete", (_event, id) => withAuthBoundary(() => deleteAccount(accountIdSchema.parse(id))));
   ipcMain.handle("logs:recent", () => deps.logStore.recent());
   ipcMain.handle("updates:version", () => getCurrentVersion());
   ipcMain.handle("updates:check", () => checkForUpdates("compet-server-manager"));

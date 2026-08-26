@@ -3,6 +3,12 @@ import type { UpdateCheckResult } from "../../../../desktop/updateTypes.js";
 
 export type { UpdateCheckResult };
 
+let authRequired = false;
+
+export function isManagerAuthRequired(): boolean {
+  return authRequired;
+}
+
 export const managerApi = {
   loadConfig: () => window.managerApi.loadConfig() as Promise<ManagerConfig>,
   saveConfig: (config: ManagerConfig) => window.managerApi.saveConfig(config) as Promise<void>,
@@ -12,9 +18,18 @@ export const managerApi = {
   stopService: () => window.managerApi.stopService() as Promise<ServiceStatus>,
   restartService: () => window.managerApi.restartService() as Promise<ServiceStatus>,
   writeBootstrap: (input: BootstrapAdminInput) => window.managerApi.writeBootstrap(input) as Promise<string>,
-  login: (username: string, password: string) => window.managerApi.login(username, password) as Promise<LoginResult>,
+  login: async (username: string, password: string) => {
+    const result = await window.managerApi.login(username, password) as LoginResult;
+    authRequired = false;
+    return result;
+  },
   loadSavedLogin: () => window.managerApi.loadSavedLogin() as Promise<SavedLoginCredentials | null>,
   changePassword: (currentPassword: string, newPassword: string) => window.managerApi.changePassword(currentPassword, newPassword) as Promise<void>,
+  onAuthRequired: (callback: () => void) => window.managerApi.onAuthRequired(() => {
+    authRequired = true;
+    callback();
+  }),
+  removeAuthRequiredListener: () => window.managerApi.removeAuthRequiredListener(),
   matchmakingOccupancy: () => window.managerApi.matchmakingOccupancy() as Promise<MatchmakingOccupancy>,
   getVersion: () => window.managerApi.getVersion() as Promise<string>,
   checkUpdate: () => window.managerApi.checkUpdate() as Promise<UpdateCheckResult>,

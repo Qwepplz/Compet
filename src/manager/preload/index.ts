@@ -15,6 +15,13 @@ export const managerApi = {
   loadSavedLogin: () => invoke("credentials:load"),
   logout: () => invoke("auth:logout"),
   changePassword: (currentPassword: string, newPassword: string) => invoke("auth:changePassword", currentPassword, newPassword),
+  onAuthRequired: (callback: () => void) => {
+    ipcRenderer.removeAllListeners("auth:required");
+    ipcRenderer.on("auth:required", () => callback());
+  },
+  removeAuthRequiredListener: () => {
+    ipcRenderer.removeAllListeners("auth:required");
+  },
   matchmakingOccupancy: () => invoke("matchmaking:occupancy"),
   listAccounts: () => invoke("accounts:list"),
   accountMatches: (id: string, page: number) => invoke("accounts:matches", id, page),

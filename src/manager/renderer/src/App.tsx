@@ -1,7 +1,7 @@
 import { Button, Card, message, Space, Typography } from "antd";
 import { useEffect, useState } from "react";
 import type { BootstrapAdminInput, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus } from "../../shared/types.js";
-import { managerApi } from "./api/managerApi.js";
+import { isManagerAuthRequired, managerApi } from "./api/managerApi.js";
 import { AppShell } from "./components/AppShell.js";
 import { AccountsPage } from "./pages/AccountsPage.js";
 import { BootstrapPage } from "./pages/BootstrapPage.js";
@@ -27,6 +27,19 @@ export function App() {
   useEffect(() => {
     void refreshStatus();
     void loadSavedLogin();
+  }, []);
+
+  useEffect(() => {
+    const handleAuthRequired = () => {
+      setLoggedIn(false);
+      setPasswordChangeRequired(false);
+      setPage("overview");
+      setMatchmakingOccupancy(initialMatchmakingOccupancy);
+      message.warning("登录已失效，请重新登录");
+    };
+
+    managerApi.onAuthRequired(handleAuthRequired);
+    return () => managerApi.removeAuthRequiredListener();
   }, []);
 
   useEffect(() => {
@@ -185,7 +198,7 @@ export function App() {
       setLoggedIn(true);
       setPage("overview");
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "修改密码失败");
+      if (!isManagerAuthRequired()) message.error(error instanceof Error ? error.message : "修改密码失败");
     }
   }
   if (status.state === "failed" && !loggedIn) {

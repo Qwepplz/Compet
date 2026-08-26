@@ -1,6 +1,13 @@
 import { requestJson } from "../../shared/httpJsonClient.js";
 import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, LoginResult, MatchmakingOccupancy, UpdateAccountInput } from "../shared/types.js";
 
+export class ServiceApiError extends Error {
+  constructor(message: string, readonly statusCode: number) {
+    super(message);
+    this.name = "ServiceApiError";
+  }
+}
+
 export class ServiceApiClient {
   private token?: string;
 
@@ -75,6 +82,7 @@ export class ServiceApiClient {
       token: this.token,
       timeoutMs: 3_000,
       timeoutMessage: "Request timed out",
+      createResponseError: (message, statusCode) => new ServiceApiError(message, statusCode),
     });
   }
 }

@@ -38,6 +38,7 @@ const sevenZipPath = isPackagedRuntime
 const logStore = new FileLogStore(logDir, { sevenZipPath });
 const service = new ManagedServiceProcess(appRoot);
 let apiClient = new ServiceApiClient("https://127.0.0.1:8443");
+let mainWindow: BrowserWindow | undefined;
 
 registerManagerIpc({
   configStore,
@@ -52,6 +53,9 @@ registerManagerIpc({
   saveSavedLogin: (credentials) => credentialStore.save(credentials),
   clearSavedLogin: () => credentialStore.clear(),
   setApiClient: (client) => { apiClient = client; },
+  onAuthRequired: () => {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("auth:required");
+  },
 });
 
 function appendLog(input: Parameters<FileLogStore["append"]>[0]): void {
@@ -68,7 +72,6 @@ service.on("status", (status) => appendLog({
 
 let isQuitPromptOpen = false;
 let isQuitConfirmed = false;
-let mainWindow: BrowserWindow | undefined;
 
 logStore.on("entry", (entry) => {
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("logs:appended", entry);
