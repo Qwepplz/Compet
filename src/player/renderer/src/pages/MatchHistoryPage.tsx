@@ -1,11 +1,12 @@
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import { Button, Pagination, Spin } from "antd";
-import type { CSSProperties } from "react";
+import { useLayoutEffect, useRef, type CSSProperties, type RefObject } from "react";
 import type { PlayerMatchHistoryDto, PlayerMatchHistoryEntryDto } from "../../../shared/types.js";
 
 interface MatchHistoryPageProps {
   history: PlayerMatchHistoryDto | null;
   loading: boolean;
+  scrollTopRef: RefObject<number>;
   onBackHome: () => void;
   onOpenMatch: (matchId: string) => void;
   onPageChange: (page: number) => void;
@@ -148,8 +149,25 @@ function MatchHistoryRow({
   );
 }
 
-export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch, onPageChange }: MatchHistoryPageProps) {
+export function MatchHistoryPage({ history, loading, scrollTopRef, onBackHome, onOpenMatch, onPageChange }: MatchHistoryPageProps) {
   const matches = history?.matches ?? [];
+  const tableWrapRef = useRef<HTMLDivElement | null>(null);
+
+  useLayoutEffect(() => {
+    const wrap = tableWrapRef.current;
+    if (wrap) wrap.scrollTop = scrollTopRef.current;
+    return () => {
+      if (wrap) scrollTopRef.current = wrap.scrollTop;
+    };
+  }, [scrollTopRef]);
+
+  function changePage(page: number) {
+    const wrap = tableWrapRef.current;
+    if (wrap) wrap.scrollTop = 0;
+    scrollTopRef.current = 0;
+    onPageChange(page);
+  }
+
   return (
     <div className="match-history-page">
       <Button className="match-history-back-button" aria-label="返回主页面" icon={<ArrowLeftOutlined />} type="text" onClick={onBackHome} />
@@ -157,7 +175,7 @@ export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch, on
         <header className="match-history-header">
           <h1>Recent matches</h1>
         </header>
-        <div className="match-history-table-wrap">
+        <div className="match-history-table-wrap" ref={tableWrapRef}>
           {loading ? <Spin className="match-history-loading" /> : null}
           <table className="match-history-table">
             <thead>
@@ -190,7 +208,7 @@ export function MatchHistoryPage({ history, loading, onBackHome, onOpenMatch, on
             showLessItems
             showSizeChanger={false}
             disabled={loading}
-            onChange={onPageChange}
+            onChange={changePage}
           />
         ) : null}
       </section>

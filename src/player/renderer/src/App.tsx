@@ -341,6 +341,7 @@ export function App() {
   const pendingMatchSoundRoomIds = useRef(new Set<string>());
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
   const matchSoundEnabledRef = useRef(matchSoundEnabled);
+  const matchHistoryScrollTopRef = useRef(0);
 
   const api = window.playerApi;
   const currentRoom = getCurrentRoom(matchmaking);
@@ -938,6 +939,7 @@ export function App() {
   async function openMatchHistory() {
     setMatchHistoryPlayer(null);
     setMatchHistory(null);
+    matchHistoryScrollTopRef.current = 0;
     setActiveView("match-history");
     await loadMatchHistory();
   }
@@ -946,6 +948,7 @@ export function App() {
     const player = friendMatchHistoryPlayer(friend);
     setMatchHistoryPlayer(player);
     setMatchHistory(null);
+    matchHistoryScrollTopRef.current = 0;
     setActiveView("match-history");
     await loadMatchHistory(player);
   }
@@ -1387,6 +1390,7 @@ export function App() {
         <MatchHistoryPage
           history={matchHistory}
           loading={matchHistoryLoading}
+          scrollTopRef={matchHistoryScrollTopRef}
           onBackHome={backFromMatchHistory}
           onOpenMatch={(matchId) => void openMatchHistoryResult(matchId)}
           onPageChange={(page) => void loadMatchHistory(matchHistoryPlayer, page)}
