@@ -40,7 +40,7 @@ const STARTUP_POLL_INTERVAL_MS = 250;
 
 export interface ManagerIpcLifecycle {
   closeOfflineAccounts(): Promise<void>;
-  stopService(): Promise<void>;
+  stopService(): Promise<ServiceStatus>;
 }
 
 export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
@@ -146,10 +146,10 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
     });
   }
 
-  async function stopService(): Promise<void> {
-    await offlineAccountsLifecycle.enqueue(async () => {
+  async function stopService(): Promise<ServiceStatus> {
+    return offlineAccountsLifecycle.enqueue(async () => {
       closeOfflineAccountsNow();
-      await deps.service.stop();
+      return deps.service.stop();
     });
   }
 

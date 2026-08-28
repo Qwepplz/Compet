@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { ServiceStatus } from "../shared/types.js";
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(channel, ...args);
 
@@ -6,10 +7,10 @@ export const managerApi = {
   loadConfig: () => invoke("config:load"),
   saveConfig: (config: unknown) => invoke("config:save", config),
   selectServerRoot: () => invoke("config:selectServerRoot"),
-  serviceStatus: () => invoke("service:status"),
-  startService: () => invoke("service:start"),
-  stopService: () => invoke("service:stop"),
-  restartService: () => invoke("service:restart"),
+  serviceStatus: () => invoke<ServiceStatus>("service:status"),
+  startService: () => invoke<ServiceStatus>("service:start"),
+  stopService: () => invoke<ServiceStatus>("service:stop"),
+  restartService: () => invoke<ServiceStatus>("service:restart"),
   writeBootstrap: (input: unknown) => invoke("bootstrap:write", input),
   login: (username: string, password: string) => invoke("auth:login", username, password),
   loadSavedLogin: () => invoke("credentials:load"),
