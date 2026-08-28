@@ -31,7 +31,8 @@ export async function openCompetDatabase(recordsDir: string): Promise<DatabaseSy
   if (!exists) {
     const { hasLegacyPersistence, importLegacyJsonData } = await import("./legacyJsonImporter.js");
     if (await hasLegacyPersistence(recordsDir)) {
-      await importLegacyJsonData(recordsDir, databasePath);
+      const report = await importLegacyJsonData(recordsDir, databasePath);
+      console.info(`Legacy data migration completed: ${JSON.stringify(report)}`);
     }
   }
 

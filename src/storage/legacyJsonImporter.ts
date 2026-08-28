@@ -14,15 +14,42 @@ const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 const MATCH_PHASES = ["queue", "ready", "match_room", "map_randomizing", "server_prepare", "connect", "live", "completed", "failed"];
 
 interface LegacyImportReport {
-  accounts: number;
-  sessions: number;
+  sourceAccounts: number;
+  importedAccounts: number;
+
+  sourceSessions: number;
+  importedSessions: number;
   skippedRevokedSessions: number;
   skippedExpiredSessions: number;
   skippedOrphanSessions: number;
-  friendships: number;
-  friendRequests: number;
-  matches: number;
+  deduplicatedSessions: number;
+
+  sourceFriendships: number;
+  importedFriendships: number;
+  skippedOrphanFriendships: number;
+  skippedSelfFriendships: number;
+  deduplicatedFriendships: number;
+
+  sourceFriendRequests: number;
+  importedFriendRequests: number;
+  skippedOrphanFriendRequests: number;
+  skippedSelfFriendRequests: number;
+  deduplicatedFriendRequests: number;
+
+  importedMatches: number;
   skippedIncompleteMatches: number;
+}
+
+interface LegacyImportDiagnostic {
+  type: "friendship" | "friendRequest";
+  recordId: string;
+  reason: "missingAccount" | "selfReference" | "exactDuplicate";
+  missingAccountIds?: string[];
+}
+
+interface LegacyImportResult {
+  report: LegacyImportReport;
+  diagnostics: LegacyImportDiagnostic[];
 }
 
 interface LegacyData {
@@ -44,13 +71,17 @@ interface LegacyMatch {
 }
 
 export async function hasLegacyPersistence(recordsDir: string): Promise<boolean> {
-  const legacyFiles = [
-    path.join(recordsDir, "accounts.json"),
+  if (await pathExists(path.join(recordsDir, "accounts.json"))) return true;
+  return hasLegacyDataWithoutAccounts(recordsDir);
+}
+
+async function hasLegacyDataWithoutAccounts(recordsDir: string): Promise<boolean> {
+  const dependentFiles = [
     path.join(recordsDir, "sessions.json"),
     path.join(recordsDir, "friends", "friendships.json"),
     path.join(recordsDir, "friends", "requests.json"),
   ];
-  for (const filePath of legacyFiles) {
+  for (const filePath of dependentFiles) {
     if (await pathExists(filePath)) return true;
   }
 
@@ -78,7 +109,7 @@ export async function importLegacyJsonData(
     applySqliteMigrations(database);
 
     const now = options.now?.getTime() ?? Date.now();
-    const report = withDatabaseTransaction(database, (connection) => importIntoDatabase(connection, legacy, now));
+    const result = withDatabaseTransaction(database, (connection) => importIntoDatabase(connection, legacy, now));
     assertSqliteIntegrity(database);
     database.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     database.close();
@@ -89,7 +120,8 @@ export async function importLegacyJsonData(
     }
     await rename(temporaryPath, databasePath);
     await cleanupLegacyPersistence(recordsDir);
-    return report;
+    logLegacyImportDiagnostics(result.diagnostics);
+    return result.report;
   } catch (error) {
     if (database?.isOpen) database.close();
     await rm(temporaryPath, { force: true });
@@ -137,7 +169,11 @@ async function removeDirectoryIfEmpty(directory: string): Promise<void> {
 }
 
 async function readLegacyData(recordsDir: string): Promise<LegacyData> {
-  const accounts = parseAccounts(await readOptionalJson(path.join(recordsDir, "accounts.json"), { accounts: [] }));
+  const accountsPath = path.join(recordsDir, "accounts.json");
+  if (!(await pathExists(accountsPath)) && await hasLegacyDataWithoutAccounts(recordsDir)) {
+    throw new Error("accounts.json is required when other legacy data exists");
+  }
+  const accounts = parseAccounts(await readOptionalJson(accountsPath, { accounts: [] }));
   const sessions = parseSessions(await readOptionalJson(path.join(recordsDir, "sessions.json"), { sessions: [] }));
   const friendships = parseFriendships(await readOptionalJson(path.join(recordsDir, "friends", "friendships.json"), { friendships: [] }));
   const requests = parseRequests(await readOptionalJson(path.join(recordsDir, "friends", "requests.json"), { requests: [] }));
@@ -149,8 +185,8 @@ async function readOptionalJson(filePath: string, fallback: unknown): Promise<un
   return (await pathExists(filePath)) ? readJsonFile<unknown>(filePath) : fallback;
 }
 
-function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: number): LegacyImportReport {
-  const accountIds = new Set<string>();
+function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: number): LegacyImportResult {
+  const accountIds = validateAccounts(legacy.accounts);
   const accountInsert = database.prepare(`
     INSERT INTO accounts (
       id, username, display_name, steam64, role, enabled, dev,
@@ -158,8 +194,6 @@ function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: num
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const account of legacy.accounts) {
-    if (accountIds.has(account.id)) throw new Error(`duplicate account id: ${account.id}`);
-    accountIds.add(account.id);
     accountInsert.run(
       account.id,
       account.username,
@@ -184,6 +218,9 @@ function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: num
   let skippedRevokedSessions = 0;
   let skippedExpiredSessions = 0;
   let skippedOrphanSessions = 0;
+  let deduplicatedSessions = 0;
+  const sessionsById = new Map<string, SessionRecord>();
+  const sessionsByTokenHash = new Map<string, SessionRecord>();
   for (const session of legacy.sessions) {
     if (session.revokedAt) {
       skippedRevokedSessions += 1;
@@ -197,6 +234,18 @@ function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: num
       skippedOrphanSessions += 1;
       continue;
     }
+    const existingById = sessionsById.get(session.id);
+    const existingByTokenHash = sessionsByTokenHash.get(session.tokenHash);
+    if (existingById && !sameLegacyRecord(existingById, session)) {
+      throw new Error(`duplicate session id with conflicting data: ${session.id}`);
+    }
+    if (existingByTokenHash && !sameLegacyRecord(existingByTokenHash, session)) {
+      throw new Error(`duplicate session token with conflicting data: ${session.id}`);
+    }
+    if (existingById || existingByTokenHash) {
+      deduplicatedSessions += 1;
+      continue;
+    }
     sessionInsert.run(
       session.id,
       session.accountId,
@@ -206,23 +255,99 @@ function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: num
       null,
       session.lastSeenAt,
     );
+    sessionsById.set(session.id, session);
+    sessionsByTokenHash.set(session.tokenHash, session);
     sessions += 1;
   }
 
+  const diagnostics: LegacyImportDiagnostic[] = [];
   const friendshipInsert = database.prepare(`
     INSERT INTO friendships (id, account_a_id, account_b_id, created_at) VALUES (?, ?, ?, ?)
   `);
+  let importedFriendships = 0;
+  let skippedOrphanFriendships = 0;
+  let skippedSelfFriendships = 0;
+  let deduplicatedFriendships = 0;
+  const friendshipsById = new Map<string, FriendshipRecord>();
+  const friendshipsByPair = new Map<string, FriendshipRecord>();
   for (const friendship of legacy.friendships) {
-    assertAccountPair(accountIds, friendship.accountAId, friendship.accountBId, friendship.id);
+    const missingAccountIds = getMissingAccountIds(accountIds, friendship.accountAId, friendship.accountBId);
+    if (missingAccountIds.length > 0) {
+      skippedOrphanFriendships += 1;
+      diagnostics.push({
+        type: "friendship",
+        recordId: friendship.id,
+        reason: "missingAccount",
+        missingAccountIds,
+      });
+      continue;
+    }
+    if (friendship.accountAId === friendship.accountBId) {
+      skippedSelfFriendships += 1;
+      diagnostics.push({ type: "friendship", recordId: friendship.id, reason: "selfReference" });
+      continue;
+    }
+    const existingById = friendshipsById.get(friendship.id);
+    const pairKey = accountPairKey(friendship.accountAId, friendship.accountBId);
+    const existingByPair = friendshipsByPair.get(pairKey);
+    if (existingById && !sameLegacyRecord(existingById, friendship)) {
+      throw new Error(`duplicate friendship id with conflicting data: ${friendship.id}`);
+    }
+    if (existingByPair && !sameLegacyRecord(existingByPair, friendship)) {
+      throw new Error(`duplicate friendship account pair with conflicting data: ${friendship.id}`);
+    }
+    if (existingById || existingByPair) {
+      deduplicatedFriendships += 1;
+      diagnostics.push({ type: "friendship", recordId: friendship.id, reason: "exactDuplicate" });
+      continue;
+    }
     friendshipInsert.run(friendship.id, friendship.accountAId, friendship.accountBId, friendship.createdAt);
+    friendshipsById.set(friendship.id, friendship);
+    friendshipsByPair.set(pairKey, friendship);
+    importedFriendships += 1;
   }
 
   const requestInsert = database.prepare(`
     INSERT INTO friend_requests (id, from_account_id, to_account_id, status, created_at, resolved_at)
     VALUES (?, ?, ?, ?, ?, ?)
   `);
+  let importedFriendRequests = 0;
+  let skippedOrphanFriendRequests = 0;
+  let skippedSelfFriendRequests = 0;
+  let deduplicatedFriendRequests = 0;
+  const requestsById = new Map<string, FriendRequestRecord>();
+  const pendingRequestsByPair = new Map<string, FriendRequestRecord>();
   for (const request of legacy.requests) {
-    assertAccountPair(accountIds, request.fromAccountId, request.toAccountId, request.id);
+    const missingAccountIds = getMissingAccountIds(accountIds, request.fromAccountId, request.toAccountId);
+    if (missingAccountIds.length > 0) {
+      skippedOrphanFriendRequests += 1;
+      diagnostics.push({
+        type: "friendRequest",
+        recordId: request.id,
+        reason: "missingAccount",
+        missingAccountIds,
+      });
+      continue;
+    }
+    if (request.fromAccountId === request.toAccountId) {
+      skippedSelfFriendRequests += 1;
+      diagnostics.push({ type: "friendRequest", recordId: request.id, reason: "selfReference" });
+      continue;
+    }
+    const existingById = requestsById.get(request.id);
+    const pairKey = accountPairKey(request.fromAccountId, request.toAccountId);
+    const existingPendingByPair = request.status === "pending" ? pendingRequestsByPair.get(pairKey) : undefined;
+    if (existingById && !sameLegacyRecord(existingById, request)) {
+      throw new Error(`duplicate friend request id with conflicting data: ${request.id}`);
+    }
+    if (existingPendingByPair && !sameLegacyRecord(existingPendingByPair, request)) {
+      throw new Error(`duplicate pending friend request account pair with conflicting data: ${request.id}`);
+    }
+    if (existingById || existingPendingByPair) {
+      deduplicatedFriendRequests += 1;
+      diagnostics.push({ type: "friendRequest", recordId: request.id, reason: "exactDuplicate" });
+      continue;
+    }
     requestInsert.run(
       request.id,
       request.fromAccountId,
@@ -231,6 +356,9 @@ function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: num
       request.createdAt,
       request.resolvedAt ?? null,
     );
+    requestsById.set(request.id, request);
+    if (request.status === "pending") pendingRequestsByPair.set(pairKey, request);
+    importedFriendRequests += 1;
   }
 
   const matchInsert = database.prepare(`
@@ -261,16 +389,72 @@ function importIntoDatabase(database: DatabaseSync, legacy: LegacyData, now: num
   assertImportedMatchParticipants(database, legacy.matches);
   assertSqliteIntegrity(database);
   return {
-    accounts: legacy.accounts.length,
-    sessions,
-    skippedRevokedSessions,
-    skippedExpiredSessions,
-    skippedOrphanSessions,
-    friendships: legacy.friendships.length,
-    friendRequests: legacy.requests.length,
-    matches: legacy.matches.length,
-    skippedIncompleteMatches: legacy.skippedIncompleteMatches,
+    report: {
+      sourceAccounts: legacy.accounts.length,
+      importedAccounts: legacy.accounts.length,
+      sourceSessions: legacy.sessions.length,
+      importedSessions: sessions,
+      skippedRevokedSessions,
+      skippedExpiredSessions,
+      skippedOrphanSessions,
+      deduplicatedSessions,
+      sourceFriendships: legacy.friendships.length,
+      importedFriendships,
+      skippedOrphanFriendships,
+      skippedSelfFriendships,
+      deduplicatedFriendships,
+      sourceFriendRequests: legacy.requests.length,
+      importedFriendRequests,
+      skippedOrphanFriendRequests,
+      skippedSelfFriendRequests,
+      deduplicatedFriendRequests,
+      importedMatches: legacy.matches.length,
+      skippedIncompleteMatches: legacy.skippedIncompleteMatches,
+    },
+    diagnostics,
   };
+}
+
+function validateAccounts(accounts: AccountRecord[]): Set<string> {
+  const accountIds = new Set<string>();
+  const usernames = new Set<string>();
+  const steam64s = new Set<string>();
+  for (const account of accounts) {
+    if (accountIds.has(account.id)) throw new Error(`duplicate account id: ${account.id}`);
+    if (usernames.has(account.username)) throw new Error(`duplicate account username: ${account.username}`);
+    if (account.steam64 && steam64s.has(account.steam64)) {
+      throw new Error(`duplicate non-empty account steam64: ${account.steam64}`);
+    }
+    accountIds.add(account.id);
+    usernames.add(account.username);
+    if (account.steam64) steam64s.add(account.steam64);
+  }
+  return accountIds;
+}
+
+function getMissingAccountIds(accountIds: Set<string>, accountAId: string, accountBId: string): string[] {
+  return [...new Set([accountAId, accountBId].filter((accountId) => !accountIds.has(accountId)))];
+}
+
+function accountPairKey(accountAId: string, accountBId: string): string {
+  return JSON.stringify([accountAId, accountBId].sort());
+}
+
+function sameLegacyRecord<T>(left: T, right: T): boolean {
+  return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function logLegacyImportDiagnostics(diagnostics: LegacyImportDiagnostic[]): void {
+  for (const diagnostic of diagnostics) {
+    if (diagnostic.reason === "missingAccount") {
+      console.info(
+        `Legacy ${diagnostic.type} ${diagnostic.recordId} skipped: missing account ${diagnostic.missingAccountIds?.join(", ") ?? "unknown"}`,
+      );
+      continue;
+    }
+    const reason = diagnostic.reason === "selfReference" ? "self reference" : "exact duplicate";
+    console.info(`Legacy ${diagnostic.type} ${diagnostic.recordId} skipped: ${reason}`);
+  }
 }
 
 function assertImportedMatchParticipants(database: DatabaseSync, matches: LegacyMatch[]): void {
@@ -284,13 +468,6 @@ function assertImportedMatchParticipants(database: DatabaseSync, matches: Legacy
       throw new Error(`match participant index mismatch: ${match.id}`);
     }
   }
-}
-
-function assertAccountPair(accountIds: Set<string>, accountAId: string, accountBId: string, recordId: string): void {
-  if (!accountIds.has(accountAId) || !accountIds.has(accountBId)) {
-    throw new Error(`friend record ${recordId} references a missing account`);
-  }
-  if (accountAId === accountBId) throw new Error(`friend record ${recordId} references the same account twice`);
 }
 
 function participantsForMatch(plan: MatchPlan): Array<{ steam64: string; side: "teamA" | "teamB" }> {
