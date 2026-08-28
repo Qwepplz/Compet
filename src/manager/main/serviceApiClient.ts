@@ -37,6 +37,10 @@ export class ServiceApiClient {
     return this.token;
   }
 
+  setSessionToken(token: string | undefined): void {
+    this.token = token;
+  }
+
   async changePassword(currentPassword: string, newPassword: string): Promise<void> {
     await this.request("POST", "/auth/change-password", { currentPassword, newPassword });
   }

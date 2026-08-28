@@ -16,7 +16,3 @@ export interface AccountRecord {
   updatedAt: string;
   lastLoginAt: string | null;
 }
-
-export interface AccountsFile {
-  accounts: AccountRecord[];
-}

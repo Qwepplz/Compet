@@ -49,6 +49,36 @@ function Get-PackageVersion {
   return $packageVersion
 }
 
+function Assert-NodeSqliteRuntime {
+  param(
+    [Parameter(Mandatory = $true)][string]$Executable,
+    [Parameter(Mandatory = $true)][string]$DisplayName,
+    [switch]$Electron
+  )
+
+  if (-not (Test-Path -LiteralPath $Executable)) {
+    throw "Missing $DisplayName executable: $Executable"
+  }
+
+  $probe = 'const { DatabaseSync } = require("node:sqlite"); const database = new DatabaseSync(":memory:"); database.exec("SELECT 1"); database.close();'
+  $previousElectronRunAsNode = $env:ELECTRON_RUN_AS_NODE
+  try {
+    if ($Electron) { $env:ELECTRON_RUN_AS_NODE = "1" }
+    & $Executable -e $probe *> $null
+    if ($LASTEXITCODE -ne 0) {
+      throw "$DisplayName runtime does not support node:sqlite"
+    }
+  } catch {
+    throw "${DisplayName} runtime does not support node:sqlite: $($_.Exception.Message)"
+  } finally {
+    if ($null -eq $previousElectronRunAsNode) {
+      Remove-Item Env:ELECTRON_RUN_AS_NODE -ErrorAction SilentlyContinue
+    } else {
+      $env:ELECTRON_RUN_AS_NODE = $previousElectronRunAsNode
+    }
+  }
+}
+
 function Set-ExeVersionInfo {
   param(
     [Parameter(Mandatory = $true)][string]$ExePath,
@@ -238,6 +268,9 @@ function Optimize-RuntimeNodeModules {
     Remove-Item -LiteralPath (Join-Path $phcFormatRoot "readme.md") -Force -ErrorAction SilentlyContinue
   }
 }
+
+Assert-NodeSqliteRuntime -Executable $nodeRuntime -DisplayName "Node.js"
+Assert-NodeSqliteRuntime -Executable (Join-Path $electronDist "electron.exe") -DisplayName "Electron" -Electron
 
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededTarXz)) {

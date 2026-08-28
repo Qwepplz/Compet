@@ -1,10 +1,10 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { AccountService } from "../accounts/accountService.js";
-import { JsonAccountRepository } from "../accounts/accountRepository.js";
+import { AccountRepository } from "../accounts/accountRepository.js";
 import { AuthService } from "../auth/authService.js";
 import { InMemoryLoginRateLimiter } from "../auth/rateLimiter.js";
-import { JsonSessionRepository } from "../auth/sessionRepository.js";
+import { SessionRepository } from "../auth/sessionRepository.js";
 import { SessionService } from "../auth/sessionService.js";
 import { bootstrapAdmin } from "../bootstrap/bootstrapAdmin.js";
 import { loadBotCatalog, type BotCatalog } from "../bots/botCatalog.js";
@@ -21,6 +21,7 @@ import { PresenceService } from "../presence/presenceService.js";
 import { RankmeScoreStore } from "../rankme/rankmeScoreStore.js";
 import { RealtimeEventBus } from "../realtime/eventBus.js";
 import { MatchRecordStore } from "../records/matchRecordStore.js";
+import { openCompetDatabase } from "../storage/competDatabase.js";
 import { ensureServerCertificate } from "../tls/certificateService.js";
 import { createServer } from "./createServer.js";
 
@@ -40,111 +41,118 @@ const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
 export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   const recordsDir = path.join(config.dataDir, "records");
   await mkdir(recordsDir, { recursive: true });
+  const database = await openCompetDatabase(recordsDir);
 
-  const certificate = await ensureServerCertificate(path.join(config.dataDir, "certs"));
-  const accounts = new AccountService(await JsonAccountRepository.create(path.join(recordsDir, "accounts.json")));
-  const sessions = new SessionService(
-    await JsonSessionRepository.create(path.join(recordsDir, "sessions.json")),
-    config.tokenTtlMinutes,
-  );
+  try {
+    const certificate = await ensureServerCertificate(path.join(config.dataDir, "certs"));
+    const accounts = new AccountService(new AccountRepository(database));
+    const sessions = new SessionService(
+      new SessionRepository(database),
+      config.tokenTtlMinutes,
+    );
 
-  await bootstrapAdmin(accounts, path.join(config.dataDir, "bootstrap-admin.json"));
+    await bootstrapAdmin(accounts, path.join(config.dataDir, "bootstrap-admin.json"));
 
-  const records = new MatchRecordStore(recordsDir);
-  const databaseBackup = new MysqlDatabaseBackup({
-    serverRoot: config.gameServer.serverRoot,
-    backupDir: path.join(recordsDir, "mysql-backups"),
-  });
-  const rankme = await RankmeScoreStore.create(config.gameServer.serverRoot) ?? {
-    getScoreBySteam64: async () => null,
-    lookupScoreBySteam64: async () => ({ status: "unavailable" as const }),
-  };
-  const events = new RealtimeEventBus();
-  const presence = new PresenceService();
-  for (const [accountId, lastSeenAt] of await sessions.listLatestLastSeenByAccount()) {
-    presence.seedLastSeen(accountId, lastSeenAt);
+    const records = new MatchRecordStore(recordsDir, database);
+    const databaseBackup = new MysqlDatabaseBackup({
+      serverRoot: config.gameServer.serverRoot,
+      backupDir: path.join(recordsDir, "mysql-backups"),
+    });
+    const rankme = await RankmeScoreStore.create(config.gameServer.serverRoot) ?? {
+      getScoreBySteam64: async () => null,
+      lookupScoreBySteam64: async () => ({ status: "unavailable" as const }),
+    };
+    const events = new RealtimeEventBus();
+    const presence = new PresenceService();
+    for (const [accountId, lastSeenAt] of await sessions.listLatestLastSeenByAccount()) {
+      presence.seedLastSeen(accountId, lastSeenAt);
+    }
+    const friends = new FriendService({
+      store: new FriendStore(database),
+      accounts,
+      presence,
+      events,
+    });
+    const gameStdoutHandler = (chunk: string) => {
+      process.stdout.write(chunk);
+    };
+    let matchmaking: MatchmakingService | undefined;
+    const executor = new MatchExecutor({
+      launcher: new NodeGameServerLauncher({
+        onStdout: gameStdoutHandler,
+        onStderr: (chunk) => process.stderr.write(chunk),
+      }),
+      records,
+      config: config.gameServer,
+      onServerExit: (matchId, report) => {
+        void matchmaking?.completeMatchFromServerExit(matchId, report).catch((error) => {
+          process.stderr.write(`Failed to complete match after srcds exit: ${error instanceof Error ? error.message : String(error)}\n`);
+        });
+      },
+    });
+    const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
+    const matchmakingService = new MatchmakingService({
+      store: await MatchmakingStore.create(path.join(recordsDir, "matchmaking")),
+      accounts,
+      friends,
+      botCatalog,
+      executor,
+      databaseBackup,
+      records,
+      rankme,
+      events,
+    });
+    await matchmakingService.recoverCompletedMatches();
+    await matchmakingService.resumePendingTimeouts();
+    matchmaking = matchmakingService;
+    await completeRoomsIfGameServerUnavailable(matchmakingService, config.gameServer.portRange.start);
+    const offlineCleanupGraceMs = resolveOfflineCleanupGraceMs();
+    const offlineCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
+    events.subscribe((event) => {
+      if (event.type !== "presence_updated") return;
+      const existingTimer = offlineCleanupTimers.get(event.accountId);
+      if (existingTimer) {
+        clearTimeout(existingTimer);
+        offlineCleanupTimers.delete(event.accountId);
+      }
+      if (event.online) return;
+
+      const timer = setTimeout(() => {
+        offlineCleanupTimers.delete(event.accountId);
+        if (presence.isOnline(event.accountId)) return;
+        void friends.expireDisconnectedRequests(event.accountId).catch(() => undefined);
+        void matchmakingService.handleAccountOffline(event.accountId).catch(() => undefined);
+      }, offlineCleanupGraceMs);
+      timer.unref?.();
+      offlineCleanupTimers.set(event.accountId, timer);
+    });
+
+    const auth = new AuthService(accounts, sessions, new InMemoryLoginRateLimiter());
+    const app = await createServer({
+      accounts,
+      sessions,
+      auth,
+      friends,
+      matchmaking: matchmakingService,
+      records,
+      rankme,
+      events,
+      presence,
+      https: { key: certificate.keyPem, cert: certificate.certPem },
+    });
+    app.addHook("onClose", async () => {
+      for (const timer of offlineCleanupTimers.values()) {
+        clearTimeout(timer);
+      }
+      offlineCleanupTimers.clear();
+      database.close();
+    });
+
+    return { app, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
+  } catch (error) {
+    if (database.isOpen) database.close();
+    throw error;
   }
-  const friends = new FriendService({
-    store: await FriendStore.create(path.join(recordsDir, "friends")),
-    accounts,
-    presence,
-    events,
-  });
-  const gameStdoutHandler = (chunk: string) => {
-    process.stdout.write(chunk);
-  };
-  let matchmaking: MatchmakingService | undefined;
-  const executor = new MatchExecutor({
-    launcher: new NodeGameServerLauncher({
-      onStdout: gameStdoutHandler,
-      onStderr: (chunk) => process.stderr.write(chunk),
-    }),
-    records,
-    config: config.gameServer,
-    onServerExit: (matchId, report) => {
-      void matchmaking?.completeMatchFromServerExit(matchId, report).catch((error) => {
-        process.stderr.write(`Failed to complete match after srcds exit: ${error instanceof Error ? error.message : String(error)}\n`);
-      });
-    },
-  });
-  const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
-  const matchmakingService = new MatchmakingService({
-    store: await MatchmakingStore.create(path.join(recordsDir, "matchmaking")),
-    accounts,
-    friends,
-    botCatalog,
-    executor,
-    databaseBackup,
-    records,
-    rankme,
-    events,
-  });
-  await matchmakingService.resumePendingTimeouts();
-  matchmaking = matchmakingService;
-  await completeRoomsIfGameServerUnavailable(matchmakingService, config.gameServer.portRange.start);
-  const offlineCleanupGraceMs = resolveOfflineCleanupGraceMs();
-  const offlineCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  events.subscribe((event) => {
-    if (event.type !== "presence_updated") return;
-    const existingTimer = offlineCleanupTimers.get(event.accountId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-      offlineCleanupTimers.delete(event.accountId);
-    }
-    if (event.online) return;
-
-    const timer = setTimeout(() => {
-      offlineCleanupTimers.delete(event.accountId);
-      if (presence.isOnline(event.accountId)) return;
-      void friends.expireDisconnectedRequests(event.accountId).catch(() => undefined);
-      void matchmakingService.handleAccountOffline(event.accountId).catch(() => undefined);
-    }, offlineCleanupGraceMs);
-    timer.unref?.();
-    offlineCleanupTimers.set(event.accountId, timer);
-  });
-
-  const auth = new AuthService(accounts, sessions, new InMemoryLoginRateLimiter());
-  const app = await createServer({
-    accounts,
-    sessions,
-    auth,
-    friends,
-    matchmaking: matchmakingService,
-    records,
-    rankme,
-    events,
-    presence,
-    https: { key: certificate.keyPem, cert: certificate.certPem },
-  });
-  app.addHook("onClose", (_instance, done) => {
-    for (const timer of offlineCleanupTimers.values()) {
-      clearTimeout(timer);
-    }
-    offlineCleanupTimers.clear();
-    done();
-  });
-
-  return { app, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
 }
 
 function resolveOfflineCleanupGraceMs(): number {

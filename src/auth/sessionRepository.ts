@@ -1,5 +1,5 @@
-import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
-import { SerialQueue } from "../storage/serialQueue.js";
+import type { DatabaseSync } from "node:sqlite";
+import { withDatabaseTransaction } from "../storage/competDatabase.js";
 
 export interface SessionRecord {
   id: string;
@@ -11,128 +11,147 @@ export interface SessionRecord {
   lastSeenAt: string;
 }
 
-export interface SessionsFile {
-  sessions: SessionRecord[];
-}
-
-export class JsonSessionRepository {
-  private readonly writeQueue = new SerialQueue();
-
-  private constructor(private readonly filePath: string) {}
-
-  static async create(filePath: string): Promise<JsonSessionRepository> {
-    await ensureJsonFile<SessionsFile>(filePath, { sessions: [] });
-    return new JsonSessionRepository(filePath);
-  }
+export class SessionRepository {
+  constructor(private readonly database: DatabaseSync) {}
 
   async list(): Promise<SessionRecord[]> {
-    return (await readJsonFile<SessionsFile>(this.filePath, { sessions: [] })).sessions;
-  }
-
-  async saveAll(sessions: SessionRecord[]): Promise<void> {
-    await this.writeQueue.enqueue(() => writeJsonFileAtomic(this.filePath, { sessions }));
+    return this.database.prepare(`
+      SELECT id, account_id, token_hash, created_at, expires_at, revoked_at, last_seen_at
+      FROM sessions
+    `).all().map(sessionFromRow);
   }
 
   async upsert(session: SessionRecord): Promise<SessionRecord> {
-    return this.writeQueue.enqueue(async () => {
-      const sessions = await this.list();
-      const index = sessions.findIndex((item) => item.id === session.id);
-      const next = index === -1 || !sessions[index].revokedAt || session.revokedAt
-        ? session
-        : { ...session, revokedAt: sessions[index].revokedAt };
-      if (index === -1) sessions.push(next);
-      else sessions[index] = next;
-      await writeJsonFileAtomic(this.filePath, { sessions });
-      return next;
-    });
+    this.database.prepare(`
+      INSERT INTO sessions (id, account_id, token_hash, created_at, expires_at, revoked_at, last_seen_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        account_id = excluded.account_id,
+        token_hash = excluded.token_hash,
+        created_at = excluded.created_at,
+        expires_at = excluded.expires_at,
+        revoked_at = COALESCE(sessions.revoked_at, excluded.revoked_at),
+        last_seen_at = excluded.last_seen_at
+    `).run(
+      session.id,
+      session.accountId,
+      session.tokenHash,
+      session.createdAt,
+      session.expiresAt,
+      session.revokedAt,
+      session.lastSeenAt,
+    );
+    const stored = this.database.prepare(`
+      SELECT id, account_id, token_hash, created_at, expires_at, revoked_at, last_seen_at
+      FROM sessions WHERE id = ?
+    `).get(session.id);
+    return stored ? sessionFromRow(stored) : session;
   }
 
   async replaceActiveForAccount(session: SessionRecord, revokedAt: string): Promise<SessionRecord> {
-    return this.writeQueue.enqueue(async () => {
-      const sessions = await this.list();
-      const next = sessions.map((item) => {
-        if (item.accountId !== session.accountId || item.revokedAt) return item;
-        return { ...item, revokedAt };
-      });
-      next.push(session);
-      await writeJsonFileAtomic(this.filePath, { sessions: next });
+    return withDatabaseTransaction(this.database, (database) => {
+      database.prepare(
+        "UPDATE sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL",
+      ).run(revokedAt, session.accountId);
+      insertSession(database, session);
       return session;
     });
   }
 
   async insertIfNoActiveForAccount(session: SessionRecord, now: string, staleBefore?: string): Promise<SessionRecord> {
-    return this.writeQueue.enqueue(async () => {
-      const sessions = await this.list();
-      let hasActive = false;
-      for (let index = 0; index < sessions.length; index += 1) {
-        const item = sessions[index];
-        if (item.accountId !== session.accountId || item.revokedAt || Date.parse(item.expiresAt) <= Date.parse(now)) continue;
-        if (staleBefore && Date.parse(item.lastSeenAt) <= Date.parse(staleBefore)) {
-          sessions[index] = { ...item, revokedAt: now };
-          continue;
-        }
-        hasActive = true;
-        break;
+    return withDatabaseTransaction(this.database, (database) => {
+      database.prepare(`
+        UPDATE sessions
+        SET revoked_at = ?
+        WHERE account_id = ? AND revoked_at IS NULL AND julianday(expires_at) <= julianday(?)
+      `).run(now, session.accountId, now);
+      if (staleBefore) {
+        database.prepare(`
+          UPDATE sessions
+          SET revoked_at = ?
+          WHERE account_id = ? AND revoked_at IS NULL
+            AND julianday(expires_at) > julianday(?) AND julianday(last_seen_at) <= julianday(?)
+        `).run(now, session.accountId, now, staleBefore);
       }
-      if (hasActive) throw new Error("account already logged in");
-      sessions.push(session);
-      await writeJsonFileAtomic(this.filePath, { sessions });
+
+      const active = database.prepare(`
+        SELECT id FROM sessions
+        WHERE account_id = ? AND revoked_at IS NULL AND julianday(expires_at) > julianday(?)
+        LIMIT 1
+      `).get(session.accountId, now);
+      if (active) throw new Error("account already logged in");
+      insertSession(database, session);
       return session;
     });
   }
 
-  async updateById(id: string, update: (session: SessionRecord) => SessionRecord | undefined): Promise<SessionRecord | undefined> {
-    return this.writeQueue.enqueue(async () => {
-      const sessions = await this.list();
-      const index = sessions.findIndex((item) => item.id === id);
-      if (index === -1) return undefined;
-      const next = update(sessions[index]);
-      if (!next) return undefined;
-      sessions[index] = next;
-      await writeJsonFileAtomic(this.filePath, { sessions });
-      return next;
+  async updateActiveUniqueByTokenHash(tokenHash: string, seenAt: string, expiresAt: string): Promise<SessionRecord | undefined> {
+    return withDatabaseTransaction(this.database, (database) => {
+      const row = database.prepare(`
+        SELECT id, account_id, token_hash, created_at, expires_at, revoked_at, last_seen_at
+        FROM sessions WHERE token_hash = ?
+      `).get(tokenHash);
+      if (!row) return undefined;
+      const current = sessionFromRow(row);
+      if (current.revokedAt || Date.parse(current.expiresAt) <= Date.parse(seenAt)) return undefined;
+
+      const activeRows = database.prepare(`
+        SELECT id, account_id, token_hash, created_at, expires_at, revoked_at, last_seen_at
+        FROM sessions
+        WHERE account_id = ? AND revoked_at IS NULL AND julianday(expires_at) > julianday(?)
+        ORDER BY julianday(created_at) ASC, id ASC
+      `).all(current.accountId, seenAt).map(sessionFromRow);
+      const allowed = activeRows[0];
+      for (const session of activeRows.slice(1)) {
+        database.prepare("UPDATE sessions SET revoked_at = ? WHERE id = ?").run(seenAt, session.id);
+      }
+      if (!allowed || allowed.id !== current.id) return undefined;
+
+      database.prepare(
+        "UPDATE sessions SET last_seen_at = ?, expires_at = ? WHERE id = ? AND revoked_at IS NULL",
+      ).run(seenAt, expiresAt, current.id);
+      return { ...current, lastSeenAt: seenAt, expiresAt };
     });
   }
 
-  async updateActiveUniqueByTokenHash(tokenHash: string, seenAt: string, expiresAt: string): Promise<SessionRecord | undefined> {
-    return this.writeQueue.enqueue(async () => {
-      const sessions = await this.list();
-      const index = sessions.findIndex((item) => item.tokenHash === tokenHash);
-      if (index === -1) return undefined;
-      const current = sessions[index];
-      if (current.revokedAt || Date.parse(current.expiresAt) <= Date.parse(seenAt)) return undefined;
-
-      const activeIndexes = sessions
-        .map((item, itemIndex) => ({ item, itemIndex }))
-        .filter(({ item }) => item.accountId === current.accountId && !item.revokedAt && Date.parse(item.expiresAt) > Date.parse(seenAt))
-        .sort((left, right) => Date.parse(left.item.createdAt) - Date.parse(right.item.createdAt));
-      const allowedIndex = activeIndexes[0]?.itemIndex;
-      for (const { itemIndex } of activeIndexes.slice(1)) {
-        sessions[itemIndex] = { ...sessions[itemIndex], revokedAt: seenAt };
-      }
-      if (index !== allowedIndex) {
-        await writeJsonFileAtomic(this.filePath, { sessions });
-        return undefined;
-      }
-
-      const next = { ...current, expiresAt, lastSeenAt: seenAt };
-      sessions[index] = next;
-      await writeJsonFileAtomic(this.filePath, { sessions });
-      return next;
-    });
+  async revokeById(id: string, revokedAt: string): Promise<boolean> {
+    const result = this.database.prepare(
+      "UPDATE sessions SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL",
+    ).run(revokedAt, id);
+    return result.changes > 0;
   }
 
   async revokeForAccount(accountId: string, revokedAt: string): Promise<number> {
-    return this.writeQueue.enqueue(async () => {
-      const sessions = await this.list();
-      let count = 0;
-      const next = sessions.map((session) => {
-        if (session.accountId !== accountId || session.revokedAt) return session;
-        count += 1;
-        return { ...session, revokedAt };
-      });
-      if (count > 0) await writeJsonFileAtomic(this.filePath, { sessions: next });
-      return count;
-    });
+    const result = this.database.prepare(
+      "UPDATE sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL",
+    ).run(revokedAt, accountId);
+    return Number(result.changes);
   }
+}
+
+function insertSession(database: DatabaseSync, session: SessionRecord): void {
+  database.prepare(`
+    INSERT INTO sessions (id, account_id, token_hash, created_at, expires_at, revoked_at, last_seen_at)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    session.id,
+    session.accountId,
+    session.tokenHash,
+    session.createdAt,
+    session.expiresAt,
+    session.revokedAt,
+    session.lastSeenAt,
+  );
+}
+
+function sessionFromRow(row: Record<string, unknown>): SessionRecord {
+  return {
+    id: String(row.id),
+    accountId: String(row.account_id),
+    tokenHash: String(row.token_hash),
+    createdAt: String(row.created_at),
+    expiresAt: String(row.expires_at),
+    revokedAt: row.revoked_at === null ? null : String(row.revoked_at),
+    lastSeenAt: String(row.last_seen_at),
+  };
 }

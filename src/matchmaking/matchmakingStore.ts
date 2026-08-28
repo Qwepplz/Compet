@@ -178,26 +178,8 @@ export class MatchmakingStore {
   }
 
   private async recoverRuntimeStateOnLoad(): Promise<void> {
-    const [roomFile, partyFile, queueFile] = await Promise.all([
-      readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] }),
-      readJsonFile<PartiesFile>(this.partiesPath, { parties: [] }),
-      readJsonFile<QueueFile>(this.queuePath, { queue: [] }),
-    ]);
-
-    const clearedRoomIds = new Set(roomFile.rooms.map((room) => room.id));
-    const now = new Date().toISOString();
-    const parties = partyFile.parties.map((party) => {
-      if (!clearedRoomIds.has(party.lockedMatchId ?? "")) return party;
-      return { ...party, status: "open" as const, lockedMatchId: undefined, updatedAt: now };
-    });
-
+    const queueFile = await readJsonFile<QueueFile>(this.queuePath, { queue: [] });
     const queue = queueFile.queue.length > 0 ? [] : queueFile.queue;
-    if (roomFile.rooms.length > 0) {
-      await writeJsonFileAtomic(this.roomsPath, { rooms: [] });
-    }
-    if (parties.some((party, index) => party !== partyFile.parties[index])) {
-      await writeJsonFileAtomic(this.partiesPath, { parties });
-    }
     if (queue !== queueFile.queue) {
       await writeJsonFileAtomic(this.queuePath, { queue });
     }

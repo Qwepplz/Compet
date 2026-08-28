@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import type { JsonSessionRepository, SessionRecord } from "./sessionRepository.js";
+import type { SessionRepository, SessionRecord } from "./sessionRepository.js";
 
 const ACTIVE_CLIENT_STALE_AFTER_MS = 120_000;
 
@@ -11,7 +11,7 @@ export interface VerifiedSession {
 
 export class SessionService {
   constructor(
-    private readonly repository: JsonSessionRepository,
+    private readonly repository: SessionRepository,
     private readonly ttlMinutes: number,
   ) {}
 
@@ -53,10 +53,7 @@ export class SessionService {
 
   async revokeSession(sessionId: string): Promise<void> {
     const revokedAt = new Date().toISOString();
-    await this.repository.updateById(sessionId, (session) => {
-      if (session.revokedAt) return undefined;
-      return { ...session, revokedAt };
-    });
+    await this.repository.revokeById(sessionId, revokedAt);
   }
 
   async revokeSessionsForAccount(accountId: string): Promise<number> {

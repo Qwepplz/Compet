@@ -22,6 +22,7 @@ export async function readJsonFile<T>(filePath: string, fallback?: T): Promise<T
 
 export interface WriteJsonFileOptions {
   pretty?: boolean;
+  createParent?: boolean;
 }
 
 export async function writeJsonFileAtomic(
@@ -29,7 +30,9 @@ export async function writeJsonFileAtomic(
   value: unknown,
   options: WriteJsonFileOptions = {},
 ): Promise<void> {
-  await mkdir(path.dirname(filePath), { recursive: true });
+  if (options.createParent !== false) {
+    await mkdir(path.dirname(filePath), { recursive: true });
+  }
   const tempPath = `${filePath}.${randomUUID()}.tmp`;
   const json = options.pretty === false ? JSON.stringify(value) : JSON.stringify(value, null, 2);
 

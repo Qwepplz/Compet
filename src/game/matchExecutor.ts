@@ -92,9 +92,15 @@ export class MatchExecutor {
 
     const launched = await this.options.launcher.launch(spec);
     const emptyServerWatchdog = this.createEmptyServerWatchdog(matchPlan.id);
-    this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
     const connect = buildConnectInfo(matchPlan, this.options.config.publicConnectHost, launched.port);
-    await this.saveConnectState(matchPlan.id, launched, connect);
+    try {
+      await this.saveConnectState(matchPlan.id, launched, connect);
+    } catch (error) {
+      this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
+      emptyServerWatchdog.start();
+      throw error;
+    }
+    this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
     emptyServerWatchdog.start();
     return connect;
   }

@@ -3,7 +3,7 @@ import { hashPassword } from "../auth/passwordHasher.js";
 import { SerialQueue } from "../storage/serialQueue.js";
 import { USERNAME_PATTERN } from "./accountTypes.js";
 import type { AccountRecord, AccountRole } from "./accountTypes.js";
-import type { JsonAccountRepository } from "./accountRepository.js";
+import type { AccountRepository } from "./accountRepository.js";
 
 export interface CreateAccountInput {
   username: string;
@@ -28,7 +28,7 @@ function normalizeSteam64(role: AccountRole, steam64: string | undefined): strin
 export class AccountService {
   private readonly mutationQueue = new SerialQueue();
 
-  constructor(private readonly repository: JsonAccountRepository) {}
+  constructor(private readonly repository: AccountRepository) {}
 
   listAccounts(): Promise<AccountRecord[]> {
     return this.repository.list().then((accounts) => [...accounts].sort((left, right) => {

@@ -86,14 +86,8 @@ export class FriendService {
   removeFriend(accountId: string, friendshipId: string): Promise<void> {
     return this.enqueueMutation(async () => {
       await this.requireEnabledAccount(accountId);
-      const friendships = await this.deps.store.listFriendships();
-      const friendship = friendships.find((record) => record.id === friendshipId);
+      const friendship = await this.deps.store.removeFriendship(accountId, friendshipId);
       if (!friendship) throw new Error(`friendship not found: ${friendshipId}`);
-      if (friendship.accountAId !== accountId && friendship.accountBId !== accountId) {
-        throw new Error("friendship does not belong to account");
-      }
-
-      await this.deps.store.saveFriendships(friendships.filter((record) => record.id !== friendshipId));
       this.publish({ type: "friend_list_refresh", accountId: friendship.accountAId });
       this.publish({ type: "friend_list_refresh", accountId: friendship.accountBId });
     });
@@ -119,7 +113,7 @@ export class FriendService {
         createdAt: this.now(),
       };
 
-      await this.deps.store.saveRequests([...requests, request]);
+      await this.deps.store.createRequest(request);
 
       const accounts = new Map<string, AccountRecord>([
         [fromAccount.id, fromAccount],
@@ -151,19 +145,18 @@ export class FriendService {
       if (this.hasFriendship(friendships, request.fromAccountId, request.toAccountId)) throw new Error("friendship already exists");
 
       const resolvedAt = this.now();
-      const acceptedRequest: FriendRequestRecord = { ...request, status: "accepted", resolvedAt };
-      const nextRequests = [...requests];
-      nextRequests[requestIndex] = acceptedRequest;
       const friendship: FriendshipRecord = {
         id: this.idFactory(),
         accountAId: request.fromAccountId,
         accountBId: request.toAccountId,
         createdAt: resolvedAt,
       };
-      const nextFriendships = [...friendships, friendship];
-
-      await this.deps.store.saveRequests(nextRequests);
-      await this.deps.store.saveFriendships(nextFriendships);
+      const accepted = await this.deps.store.acceptRequest(accountId, requestId, friendship);
+      const acceptedRequest = accepted.request;
+      const nextRequests = requests.map((currentRequest) =>
+        currentRequest.id === requestId ? acceptedRequest : currentRequest,
+      );
+      const nextFriendships = [...friendships, accepted.friendship];
 
       const accounts = await this.loadAccountMap();
       this.publishRequestResolved(acceptedRequest, accounts);
@@ -184,15 +177,7 @@ export class FriendService {
       if (request.toAccountId !== accountId) throw new Error("friend request does not belong to account");
       if (request.status !== "pending") throw new Error("friend request is not pending");
 
-      const declinedRequest: FriendRequestRecord = {
-        ...request,
-        status: "declined",
-        resolvedAt: this.now(),
-      };
-      const nextRequests = [...requests];
-      nextRequests[requestIndex] = declinedRequest;
-
-      await this.deps.store.saveRequests(nextRequests);
+      const declinedRequest = await this.deps.store.resolveRequest(accountId, requestId, "declined", this.now());
 
       const accounts = await this.loadAccountMap();
       this.publishRequestResolved(declinedRequest, accounts);
@@ -217,9 +202,7 @@ export class FriendService {
     const currentFriendships = friendships ?? (await this.deps.store.listFriendships());
     const currentRequests = requests ?? (await this.deps.store.listRequests());
     const currentAccounts = accounts ?? (await this.loadAccountMap());
-    const friends = friendships
-      ?? currentFriendships;
-    const mappedFriends = friends
+    const mappedFriends = currentFriendships
       .filter((record) => record.accountAId === accountId || record.accountBId === accountId)
       .map((record) => {
         const friendAccountId = record.accountAId === accountId ? record.accountBId : record.accountAId;
@@ -250,30 +233,24 @@ export class FriendService {
   private async expireDisconnectedRequestsInternal(accountIds: Set<string>): Promise<FriendRequestRecord[]> {
     const requests = await this.deps.store.listRequests();
     const accounts = await this.loadAccountMap();
-    const expiredRequests: FriendRequestRecord[] = [];
-    const nextRequests = requests.map((request) => {
-      if (request.status !== "pending") return request;
-      if (!accountIds.has(request.fromAccountId) && !accountIds.has(request.toAccountId)) return request;
-      if (!this.isDisconnectedRequest(request, accounts)) return request;
+    const candidateRequestIds: string[] = [];
+    for (const request of requests) {
+      if (request.status !== "pending") continue;
+      if (!accountIds.has(request.fromAccountId) && !accountIds.has(request.toAccountId)) continue;
+      if (!this.isDisconnectedRequest(request, accounts)) continue;
+      candidateRequestIds.push(request.id);
+    }
 
-      const expiredRequest: FriendRequestRecord = {
-        ...request,
-        status: "expired",
-        resolvedAt: this.now(),
-      };
-      expiredRequests.push(expiredRequest);
-      return expiredRequest;
-    });
-
+    const expiredRequests = await this.deps.store.expireRequests(candidateRequestIds, this.now());
     if (expiredRequests.length === 0) return requests;
 
-    await this.deps.store.saveRequests(nextRequests);
+    const expiredById = new Map(expiredRequests.map((request) => [request.id, request]));
     for (const request of expiredRequests) {
       this.publishRequestResolved(request, accounts);
       this.publish({ type: "friend_list_refresh", accountId: request.fromAccountId });
       this.publish({ type: "friend_list_refresh", accountId: request.toAccountId });
     }
-    return nextRequests;
+    return requests.map((request) => expiredById.get(request.id) ?? request);
   }
 
   private publishRequestResolved(request: FriendRequestRecord, accounts: Map<string, AccountRecord>): void {

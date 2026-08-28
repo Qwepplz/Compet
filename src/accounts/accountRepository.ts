@@ -1,51 +1,94 @@
-import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
-import { SerialQueue } from "../storage/serialQueue.js";
-import type { AccountRecord, AccountsFile } from "./accountTypes.js";
+import type { DatabaseSync } from "node:sqlite";
+import type { AccountRecord } from "./accountTypes.js";
 
-export class JsonAccountRepository {
-  private readonly writeQueue = new SerialQueue();
-
-  private constructor(private readonly filePath: string) {}
-
-  static async create(filePath: string): Promise<JsonAccountRepository> {
-    await ensureJsonFile<AccountsFile>(filePath, { accounts: [] });
-    return new JsonAccountRepository(filePath);
-  }
+export class AccountRepository {
+  constructor(private readonly database: DatabaseSync) {}
 
   async list(): Promise<AccountRecord[]> {
-    return (await readJsonFile<AccountsFile>(this.filePath, { accounts: [] })).accounts;
-  }
-
-  async saveAll(accounts: AccountRecord[]): Promise<void> {
-    await writeJsonFileAtomic(this.filePath, { accounts });
+    return this.database.prepare(`
+      SELECT
+        id, username, display_name, steam64, role, enabled, dev,
+        password_hash, must_change_password, created_at, updated_at, last_login_at
+      FROM accounts
+    `).all().map(accountFromRow);
   }
 
   async findById(id: string): Promise<AccountRecord | undefined> {
-    return (await this.list()).find((account) => account.id === id);
+    const row = this.database.prepare(`
+      SELECT
+        id, username, display_name, steam64, role, enabled, dev,
+        password_hash, must_change_password, created_at, updated_at, last_login_at
+      FROM accounts
+      WHERE id = ?
+    `).get(id);
+    return row ? accountFromRow(row) : undefined;
   }
 
   async findByUsername(username: string): Promise<AccountRecord | undefined> {
-    return (await this.list()).find((account) => account.username === username);
+    const row = this.database.prepare(`
+      SELECT
+        id, username, display_name, steam64, role, enabled, dev,
+        password_hash, must_change_password, created_at, updated_at, last_login_at
+      FROM accounts
+      WHERE username = ? COLLATE BINARY
+    `).get(username);
+    return row ? accountFromRow(row) : undefined;
   }
 
   async upsert(account: AccountRecord): Promise<AccountRecord> {
-    return this.writeQueue.enqueue(async () => {
-      const accounts = await this.list();
-      const index = accounts.findIndex((existing) => existing.id === account.id);
-      if (index === -1) accounts.push(account);
-      else accounts[index] = account;
-      await this.saveAll(accounts);
-      return account;
-    });
+    this.database.prepare(`
+      INSERT INTO accounts (
+        id, username, display_name, steam64, role, enabled, dev,
+        password_hash, must_change_password, created_at, updated_at, last_login_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        username = excluded.username,
+        display_name = excluded.display_name,
+        steam64 = excluded.steam64,
+        role = excluded.role,
+        enabled = excluded.enabled,
+        dev = excluded.dev,
+        password_hash = excluded.password_hash,
+        must_change_password = excluded.must_change_password,
+        created_at = excluded.created_at,
+        updated_at = excluded.updated_at,
+        last_login_at = excluded.last_login_at
+    `).run(
+      account.id,
+      account.username,
+      account.displayName,
+      account.steam64,
+      account.role,
+      account.enabled ? 1 : 0,
+      account.dev ? 1 : 0,
+      account.passwordHash,
+      account.mustChangePassword ? 1 : 0,
+      account.createdAt,
+      account.updatedAt,
+      account.lastLoginAt,
+    );
+    return account;
   }
 
   async deleteById(id: string): Promise<boolean> {
-    return this.writeQueue.enqueue(async () => {
-      const accounts = await this.list();
-      const next = accounts.filter((account) => account.id !== id);
-      if (next.length === accounts.length) return false;
-      await this.saveAll(next);
-      return true;
-    });
+    const result = this.database.prepare("DELETE FROM accounts WHERE id = ?").run(id);
+    return result.changes > 0;
   }
+}
+
+function accountFromRow(row: Record<string, unknown>): AccountRecord {
+  return {
+    id: String(row.id),
+    username: String(row.username),
+    displayName: String(row.display_name),
+    steam64: String(row.steam64),
+    role: row.role as AccountRecord["role"],
+    enabled: Number(row.enabled) === 1,
+    dev: Number(row.dev) === 1,
+    passwordHash: String(row.password_hash),
+    mustChangePassword: Number(row.must_change_password) === 1,
+    createdAt: String(row.created_at),
+    updatedAt: String(row.updated_at),
+    lastLoginAt: row.last_login_at === null ? null : String(row.last_login_at),
+  };
 }

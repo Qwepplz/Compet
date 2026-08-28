@@ -40,7 +40,7 @@ const service = new ManagedServiceProcess(appRoot);
 let apiClient = new ServiceApiClient("https://127.0.0.1:8443");
 let mainWindow: BrowserWindow | undefined;
 
-registerManagerIpc({
+const { closeOfflineAccounts, stopService } = registerManagerIpc({
   configStore,
   logStore,
   service,
@@ -107,25 +107,30 @@ async function createWindow(): Promise<void> {
   appendBootLog(bootLogFile, "desktop window load requested");
 }
 
-app.on("before-quit", async (event) => {
-  if (isQuitConfirmed || service.status().state !== "running") return;
-
+app.on("before-quit", (event) => {
+  if (isQuitConfirmed || isQuitPromptOpen) return;
   event.preventDefault();
-  if (isQuitPromptOpen) return;
 
   isQuitPromptOpen = true;
-  try {
-    const choice = await dialog.showMessageBox({ type: "question", buttons: ["停止服务后退出", "保持服务运行并退出", "取消"], defaultId: 0, cancelId: 2, message: "托管服务仍在运行" });
-    if (choice.response === 2) return;
+  void (async () => {
+    try {
+      if (service.status().state === "running") {
+        const choice = await dialog.showMessageBox({ type: "question", buttons: ["停止服务后退出", "保持服务运行并退出", "取消"], defaultId: 0, cancelId: 2, message: "托管服务仍在运行" });
+        if (choice.response === 2) return;
 
-    if (choice.response === 0) await service.stop();
-    isQuitConfirmed = true;
-    app.exit(0);
-  } catch (error) {
-    console.error("Failed to confirm manager quit", error);
-  } finally {
-    isQuitPromptOpen = false;
-  }
+        if (choice.response === 0) await stopService();
+        else await closeOfflineAccounts();
+      } else {
+        await closeOfflineAccounts();
+      }
+      isQuitConfirmed = true;
+      app.exit(0);
+    } catch (error) {
+      console.error("Failed to confirm manager quit", error);
+    } finally {
+      isQuitPromptOpen = false;
+    }
+  })();
 });
 
 app.whenReady().then(async () => {
