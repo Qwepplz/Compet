@@ -165,7 +165,7 @@ export function createPreviewPlayerApi() {
     login: async (): Promise<PlayerLoginResult> => ({ token: "preview-token", account: previewAccount }),
     logout: async (): Promise<void> => undefined,
     changePassword: async (): Promise<void> => undefined,
-    restoreSession: async (): Promise<RestoreSessionResult> => ({
+    restoreSession: async (_timeoutMs?: number): Promise<RestoreSessionResult> => ({
       baseUrl: "preview://offline",
       account: previewAccount,
       matchmaking: matchmaking(),
@@ -341,7 +341,7 @@ export function createPreviewPlayerApi() {
     copyText: async (): Promise<void> => undefined,
     openConnectUrl: async (): Promise<void> => undefined,
     getVersion: async (): Promise<string> => "preview",
-    checkUpdate: async (): Promise<UpdateCheckResult> => ({
+    checkUpdate: async (_timeoutMs?: number): Promise<UpdateCheckResult> => ({
       currentVersion: "preview",
       latestVersion: "preview",
       updateAvailable: false,

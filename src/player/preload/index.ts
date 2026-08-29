@@ -36,7 +36,7 @@ export const playerApi = {
   logout: (): Promise<void> => invoke("auth:logout"),
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
     invoke("auth:changePassword", currentPassword, newPassword),
-  restoreSession: (): Promise<RestoreSessionResult | null> => invoke("session:restore"),
+  restoreSession: (timeoutMs?: number): Promise<RestoreSessionResult | null> => invoke("session:restore", timeoutMs),
   loadSavedLogin: (): Promise<SavedPlayerLogin | null> => invoke("session:credentials"),
   searchFriends: (query: string): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:search", query),
   reenrichFriends: (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:reenrich", results),
@@ -79,7 +79,7 @@ export const playerApi = {
   minimizeWindow: (): Promise<void> => invoke("player:window:minimize"),
   closeWindow: (): Promise<void> => invoke("player:window:close"),
   getVersion: (): Promise<string> => invoke("updates:version"),
-  checkUpdate: () => invoke("updates:check"),
+  checkUpdate: (timeoutMs?: number) => invoke("updates:check", timeoutMs),
   installUpdate: () => invoke("updates:install"),
 };
 

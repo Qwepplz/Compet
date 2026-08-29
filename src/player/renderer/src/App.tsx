@@ -63,9 +63,14 @@ const emptyFriends: PlayerFriendListDto = { friends: [], incomingRequests: [], o
 const emptyMatchmaking: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 }, baseSeq: 0 };
 const emptyRealtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
-const STARTUP_UPDATE_RETRY_COUNT = 5;
+const STARTUP_CONNECTION_BUDGET_MS = 5_000;
+const STARTUP_UPDATE_MAX_ATTEMPTS = 5;
 const STARTUP_UPDATE_RETRY_DELAY_MS = 1_000;
 let startupInitializationStarted = false;
+
+function remainingStartupMs(deadline: number): number {
+  return Math.max(0, Math.ceil(deadline - performance.now()));
+}
 
 function HistoryChartIcon() {
   return (
@@ -966,11 +971,20 @@ export function App() {
     }
   }
 
-  async function restoreSession() {
+  async function restoreSession(startupDeadline?: number) {
     try {
       await loadSavedLogin();
-      const restored = await window.playerApi.restoreSession();
-      if (!restored) {
+      const startupTimeoutMs = startupDeadline === undefined ? undefined : remainingStartupMs(startupDeadline);
+      if (startupTimeoutMs !== undefined && startupTimeoutMs > 0) {
+        setLoadingMessage("正在连接服务器");
+      }
+      const restored = startupTimeoutMs === undefined
+        ? await window.playerApi.restoreSession()
+        : startupTimeoutMs > 0
+          ? await window.playerApi.restoreSession(startupTimeoutMs)
+          : null;
+      const startupTimedOut = startupDeadline !== undefined && remainingStartupMs(startupDeadline) <= 0;
+      if (!restored || startupTimedOut) {
         setMatchResult(null);
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
@@ -1162,30 +1176,32 @@ export function App() {
   async function initializeStartup() {
     if (startupInitializationStarted) return;
     startupInitializationStarted = true;
-    const installing = await checkStartupUpdate();
+    const startupDeadline = performance.now() + STARTUP_CONNECTION_BUDGET_MS;
+    const installing = await checkStartupUpdate(startupDeadline);
     if (installing) return;
-    await restoreSession();
+    await restoreSession(startupDeadline);
     setLoading(false);
   }
 
-  async function checkStartupUpdate(): Promise<boolean> {
-    for (let retry = 0; retry <= STARTUP_UPDATE_RETRY_COUNT; retry += 1) {
+  async function checkStartupUpdate(startupDeadline: number): Promise<boolean> {
+    for (let attempt = 0; attempt < STARTUP_UPDATE_MAX_ATTEMPTS; attempt += 1) {
+      const timeoutMs = remainingStartupMs(startupDeadline);
+      if (timeoutMs <= 0) return false;
       setLoadingMessage("正在检查更新");
       try {
-        const result = await window.playerApi.checkUpdate() as UpdateCheckResult;
+        const result = await window.playerApi.checkUpdate(timeoutMs) as UpdateCheckResult;
         if (!result.updateAvailable) return false;
 
         setLoadingMessage("正在安装更新");
         const installResult = await window.playerApi.installUpdate() as UpdateInstallResult;
         if (installResult.installing) return true;
         if (!installResult.updateAvailable) return false;
-      } catch {
-        // The next attempt handles transient update service and download failures.
-      }
+      } catch {}
 
-      if (retry < STARTUP_UPDATE_RETRY_COUNT) {
-        await new Promise<void>((resolve) => window.setTimeout(resolve, STARTUP_UPDATE_RETRY_DELAY_MS));
-      }
+      if (attempt + 1 >= STARTUP_UPDATE_MAX_ATTEMPTS) return false;
+      const retryDelayMs = Math.min(STARTUP_UPDATE_RETRY_DELAY_MS, remainingStartupMs(startupDeadline));
+      if (retryDelayMs <= 0) return false;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelayMs));
     }
 
     return false;

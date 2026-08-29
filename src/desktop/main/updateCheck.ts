@@ -41,13 +41,25 @@ const latestUrls: Record<string, string> = {
   "compet-server-manager": "https://qwepplz111.site/update/server/latest.json",
 };
 
-export async function checkForUpdates(appId: string): Promise<UpdateCheckResult> {
-  const loaded = await loadUpdate(appId);
+export async function checkForUpdates(appId: string, timeoutMs?: number): Promise<UpdateCheckResult> {
+  const loaded = await loadUpdate(appId, timeoutMs);
+  const updateAvailable = compareSemver(loaded.latestVersion, loaded.currentVersion) > 0;
+  if (timeoutMs !== undefined) {
+    return {
+      currentVersion: loaded.currentVersion,
+      latestVersion: loaded.latestVersion,
+      updateAvailable,
+      changedFiles: 0,
+      changedBytes: 0,
+      manifestUrl: loaded.manifestUrl,
+    };
+  }
+
   const changed = await listChangedFiles(loaded.files);
   return {
     currentVersion: loaded.currentVersion,
     latestVersion: loaded.latestVersion,
-    updateAvailable: compareSemver(loaded.latestVersion, loaded.currentVersion) > 0,
+    updateAvailable,
     changedFiles: changed.files.length,
     changedBytes: changed.bytes,
     manifestUrl: loaded.manifestUrl,
@@ -134,26 +146,48 @@ export function getCurrentVersion(): string {
   return app.getVersion();
 }
 
-async function loadUpdate(appId: string): Promise<LoadedUpdate> {
+async function loadUpdate(appId: string, timeoutMs?: number): Promise<LoadedUpdate> {
   const latestUrl = latestUrls[appId];
   if (!latestUrl) throw new Error("未知更新源");
-  const currentVersion = app.getVersion();
-  const latest = await fetchJson<LatestPayload>(latestUrl);
-  if (typeof latest.version !== "string" || !isSemver(latest.version)) throw new Error("更新版本号无效");
-  if (typeof latest.manifestUrl !== "string") throw new Error("更新清单地址无效");
-  const manifestUrl = new URL(latest.manifestUrl, latestUrl).toString();
-  ensureSameOrigin(latestUrl, manifestUrl);
 
-  if (compareSemver(latest.version, currentVersion) <= 0) {
-    return { currentVersion, latestVersion: latest.version, manifestUrl, files: [] };
+  if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
+    throw new RangeError("timeoutMs must be a finite positive number");
   }
 
-  const manifest = await fetchJson<ManifestPayload>(manifestUrl);
-  if (manifest.appId !== appId) throw new Error("更新清单不适用于当前程序");
-  if (manifest.version !== latest.version) throw new Error("更新版本与清单不一致");
-  if (manifest.platform !== "win32-x64") throw new Error("更新清单不适用于当前平台");
-  if (!Array.isArray(manifest.files)) throw new Error("更新文件列表无效");
-  return { currentVersion, latestVersion: latest.version, manifestUrl, files: manifest.files.map(parseManifestFile) };
+  const currentVersion = app.getVersion();
+  const controller = timeoutMs === undefined ? undefined : new AbortController();
+  const signal = controller?.signal;
+  const deadlineTimer = timeoutMs === undefined
+    ? undefined
+    : setTimeout(() => {
+        controller?.abort();
+      }, timeoutMs);
+
+  try {
+    const latest = await fetchJson<LatestPayload>(latestUrl, signal);
+    if (signal?.aborted) throw signal.reason;
+    if (typeof latest.version !== "string" || !isSemver(latest.version)) throw new Error("更新版本号无效");
+    if (typeof latest.manifestUrl !== "string") throw new Error("更新清单地址无效");
+    const manifestUrl = new URL(latest.manifestUrl, latestUrl).toString();
+    ensureSameOrigin(latestUrl, manifestUrl);
+
+    if (compareSemver(latest.version, currentVersion) <= 0) {
+      return { currentVersion, latestVersion: latest.version, manifestUrl, files: [] };
+    }
+
+    const manifest = await fetchJson<ManifestPayload>(manifestUrl, signal);
+    if (signal?.aborted) throw signal.reason;
+    if (manifest.appId !== appId) throw new Error("更新清单不适用于当前程序");
+    if (manifest.version !== latest.version) throw new Error("更新版本与清单不一致");
+    if (manifest.platform !== "win32-x64") throw new Error("更新清单不适用于当前平台");
+    if (!Array.isArray(manifest.files)) throw new Error("更新文件列表无效");
+    return { currentVersion, latestVersion: latest.version, manifestUrl, files: manifest.files.map(parseManifestFile) };
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason;
+    throw error;
+  } finally {
+    if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
+  }
 }
 
 async function listChangedFiles(files: ManifestFile[]): Promise<{ files: ManifestFile[]; bytes: number }> {
@@ -175,8 +209,11 @@ function getInstallRoot(): string {
   return path.resolve(app.getAppPath(), "..", "..", "..", "..");
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const response = await fetch(url, { redirect: "error" });
+async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(url, {
+    redirect: "error",
+    ...(signal === undefined ? {} : { signal }),
+  });
   if (!response.ok) throw new Error(`更新服务器返回 ${response.status}`);
   return (await response.json()) as T;
 }

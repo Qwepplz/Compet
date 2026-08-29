@@ -89,9 +89,9 @@ export class PlayerApiClient {
     this.loginCredentials = { username, password };
   }
 
-  async login(username: string, password: string): Promise<PlayerLoginResult> {
+  async login(username: string, password: string, timeoutMs?: number): Promise<PlayerLoginResult> {
     this.token = undefined;
-    const response = await this.request<PlayerLoginResult>("POST", "/auth/login", { username, password });
+    const response = await this.request<PlayerLoginResult>("POST", "/auth/login", { username, password }, timeoutMs);
     this.token = response.token;
     this.setLoginCredentials(username, password);
     return { ...response, account: await this.enrichAccount(response.account) };
@@ -109,8 +109,8 @@ export class PlayerApiClient {
     return this.request("POST", "/auth/change-password", { currentPassword, newPassword });
   }
 
-  async me(): Promise<AccountView> {
-    return this.enrichAccount(await this.request("GET", "/me"));
+  async me(timeoutMs?: number): Promise<AccountView> {
+    return this.enrichAccount(await this.request("GET", "/me", undefined, timeoutMs));
   }
 
   searchFriends(query: string): Promise<PlayerFriendSearchResultDto[]> {
@@ -263,8 +263,8 @@ export class PlayerApiClient {
     return attachServerNow(response.room, response);
   }
 
-  async getMatchmakingState(): Promise<PlayerMatchmakingStateDto> {
-    return this.enrichMatchmakingState(await this.request("GET", "/matchmaking/state"));
+  async getMatchmakingState(timeoutMs?: number): Promise<PlayerMatchmakingStateDto> {
+    return this.enrichMatchmakingState(await this.request("GET", "/matchmaking/state", undefined, timeoutMs));
   }
 
   matchmakingState(): Promise<PlayerMatchmakingStateDto> {
@@ -335,9 +335,9 @@ export class PlayerApiClient {
     }
   }
 
-  async restoreSession(): Promise<RestoredPlayerSession> {
+  async restoreSession(timeoutMs?: number): Promise<RestoredPlayerSession> {
     try {
-      const [account, matchmaking] = await Promise.all([this.me(), this.getMatchmakingState()]);
+      const [account, matchmaking] = await Promise.all([this.me(timeoutMs), this.getMatchmakingState(timeoutMs)]);
       return { account, matchmaking };
     } catch (error) {
       if (isSessionInvalidError(error)) this.token = undefined;

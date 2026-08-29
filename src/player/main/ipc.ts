@@ -17,6 +17,33 @@ interface PersistedSession extends SavedPlayerLogin {
 }
 
 const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 }, baseSeq: 0 };
+const STARTUP_CONNECTION_BUDGET_MS = 5_000;
+
+class PlayerStartupTimeoutError extends Error {
+  readonly code = "ETIMEDOUT";
+
+  constructor() {
+    super("服务器连接超时");
+    this.name = "PlayerStartupTimeoutError";
+  }
+}
+
+function normalizeStartupTimeout(timeoutMs: unknown): number | undefined {
+  if (timeoutMs === undefined) return undefined;
+  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new RangeError("timeoutMs must be a finite positive number");
+  }
+  return Math.min(timeoutMs, STARTUP_CONNECTION_BUDGET_MS);
+}
+
+function clearPlayerRuntime(deps: IpcDeps): void {
+  deps.disconnectRealtime();
+  deps.setApiClient(undefined);
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return error instanceof Error && (error as { code?: unknown }).code === "ETIMEDOUT";
+}
 
 export function isSafeSteamConnectUrl(connectUrl: string): boolean {
   if (typeof connectUrl !== "string" || /[\r\n]/.test(connectUrl)) return false;
@@ -139,7 +166,19 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     return shell.openExternal(connectUrl);
   });
 
-  ipcMain.handle("session:restore", async (): Promise<RestoreSessionResult | null> => {
+  ipcMain.handle("session:restore", async (_event, timeoutMs?: number): Promise<RestoreSessionResult | null> => {
+    const normalizedTimeoutMs = normalizeStartupTimeout(timeoutMs);
+    const deadline = normalizedTimeoutMs === undefined ? undefined : performance.now() + normalizedTimeoutMs;
+    const remainingTimeout = (): number | undefined => {
+      if (deadline === undefined) return undefined;
+      const remaining = deadline - performance.now();
+      if (remaining <= 0) throw new PlayerStartupTimeoutError();
+      return remaining;
+    };
+    const assertWithinDeadline = (): void => {
+      if (deadline !== undefined && deadline - performance.now() <= 0) throw new PlayerStartupTimeoutError();
+    };
+
     const persisted = await deps.loadSession();
     if (!persisted?.baseUrl) return null;
 
@@ -149,40 +188,52 @@ export function registerPlayerIpc(deps: IpcDeps): void {
         client.setLoginCredentials(persisted.username, persisted.password);
       }
       try {
-        const restored = await client.restoreSession();
+        const restored = await client.restoreSession(remainingTimeout());
+        assertWithinDeadline();
         deps.setApiClient(client);
         deps.connectRealtime(persisted.baseUrl, persisted.token);
         return { baseUrl: persisted.baseUrl, ...restored };
       } catch (error) {
-        if (!isSessionInvalidError(error)) throw error;
+        if (!isSessionInvalidError(error)) {
+          clearPlayerRuntime(deps);
+          if (deadline !== undefined && isTimeoutError(error)) throw new PlayerStartupTimeoutError();
+          throw error;
+        }
+        clearPlayerRuntime(deps);
+        await deps.clearSession();
       }
     }
 
     if (!persisted.username || !persisted.password) {
-      deps.disconnectRealtime();
-      deps.setApiClient(undefined);
+      clearPlayerRuntime(deps);
       await deps.clearSession();
       return null;
     }
 
     const client = createPlayerApiClient(persisted.baseUrl, undefined, deps);
     try {
-      const loginResult = await client.login(persisted.username, persisted.password);
-      deps.setApiClient(client);
+      const loginResult = await client.login(persisted.username, persisted.password, remainingTimeout());
+      assertWithinDeadline();
       await deps.saveSession({ ...persisted, token: loginResult.token });
+      assertWithinDeadline();
       if (loginResult.account.mustChangePassword) {
+        deps.setApiClient(client);
         deps.disconnectRealtime();
         return { baseUrl: persisted.baseUrl, account: loginResult.account, matchmaking: emptyMatchmakingState };
       }
-      const restored = await client.restoreSession();
+      const restored = await client.restoreSession(remainingTimeout());
+      assertWithinDeadline();
+      deps.setApiClient(client);
       deps.connectRealtime(persisted.baseUrl, loginResult.token);
       return { baseUrl: persisted.baseUrl, ...restored };
     } catch (error) {
-      if (!isSessionInvalidError(error)) throw error;
-      deps.disconnectRealtime();
-      deps.setApiClient(undefined);
-      await deps.clearSession();
-      return null;
+      clearPlayerRuntime(deps);
+      if (isSessionInvalidError(error)) {
+        await deps.clearSession();
+        return null;
+      }
+      if (deadline !== undefined && isTimeoutError(error)) throw new PlayerStartupTimeoutError();
+      throw error;
     }
   });
 
@@ -197,6 +248,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   });
 
   ipcMain.handle("updates:version", () => getCurrentVersion());
-  ipcMain.handle("updates:check", () => checkForUpdates("compet-player-client"));
+  ipcMain.handle("updates:check", (_event, timeoutMs?: number) =>
+    checkForUpdates("compet-player-client", normalizeStartupTimeout(timeoutMs)));
   ipcMain.handle("updates:install", () => installUpdate("compet-player-client", "Compet Player Client.exe"));
 }
