@@ -5,7 +5,7 @@ import path from "node:path";
 import { type ActivityLogInput, type LogActor } from "../../shared/activityLog.js";
 import type { LogEntry } from "../shared/types.js";
 import { SevenZipLogArchiver } from "./logArchiver.js";
-import { redactSensitiveText } from "./redact.js";
+import { redactSensitiveText } from "../../shared/redactSensitiveText.js";
 
 type LogContext = NonNullable<LogEntry["context"]>;
 

@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AccountRecord } from "../accounts/accountTypes.js";
 import { SERVER_ACTIVITY_PREFIX, type ActivityLogInput, type LogActor, type LogSource } from "../shared/activityLog.js";
+import { redactSensitiveText } from "../shared/redactSensitiveText.js";
 import type { RealtimeCommand, RealtimeCommandAck } from "../realtime/realtimeCommands.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 
@@ -235,11 +236,21 @@ function eventSource(type: RealtimeEvent["type"]): LogSource {
 }
 
 function errorContext(error: unknown): LogContext {
-  const candidate = error && typeof error === "object" ? (error as { code?: unknown }).code : undefined;
-  return {
+  const record = error && typeof error === "object" ? (error as Record<string, unknown>) : undefined;
+  const candidate = record?.code;
+  const context: LogContext = {
     errorCode: typeof candidate === "string" && isSafeToken(candidate) ? candidate : "request_error",
     errorType: error instanceof Error && isSafeToken(error.name) ? error.name : "unknown_error",
   };
+  if (!record || typeof candidate !== "string" || !candidate.startsWith("ERR_SQLITE_")) return context;
+
+  if (typeof record.message === "string") {
+    context.errorMessage = redactSensitiveText(record.message);
+  }
+  if (typeof record.errcode === "number" && Number.isInteger(record.errcode)) {
+    context.sqliteErrorCode = record.errcode;
+  }
+  return context;
 }
 
 function isSafeToken(value: string): boolean {

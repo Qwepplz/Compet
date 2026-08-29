@@ -125,8 +125,11 @@ export class MatchRecordStore {
     const rows = this.database.prepare(`
       SELECT m.id, m.plan_json, m.result_json
       FROM matches AS m
-      INNER JOIN match_participants AS p ON p.match_id = m.id
-      WHERE p.steam64 = ?
+      WHERE EXISTS (
+        SELECT 1
+        FROM match_participants AS p
+        WHERE p.match_id = m.id AND p.steam64 = ?
+      )
       ORDER BY m.completed_at DESC, m.id DESC
       LIMIT ? OFFSET ?
     `).all(normalizedSteam64, pagination.pageSize, offset);
