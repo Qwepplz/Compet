@@ -58,7 +58,6 @@ public void OnPluginStart() {
 }
 
 public void OnPluginEnd() {
-  WriteMatchStats();
   StopEnforceTimer();
   StopStatusTimer();
 }
