@@ -18,11 +18,13 @@ import { isSourceServerObservable, type SourceServerExitMonitorSpec } from "../g
 import { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import { MatchmakingStore } from "../matchmaking/matchmakingStore.js";
 import { PresenceService } from "../presence/presenceService.js";
+import { ServerSteamPersonaDirectory } from "../profiles/serverSteamPersonaDirectory.js";
 import { RankmeScoreStore } from "../rankme/rankmeScoreStore.js";
 import { RealtimeEventBus } from "../realtime/eventBus.js";
 import { MatchRecordStore } from "../records/matchRecordStore.js";
 import { openCompetDatabase } from "../storage/competDatabase.js";
 import { ensureServerCertificate } from "../tls/certificateService.js";
+import { writeActivityLog } from "./activityLogger.js";
 import { createServer } from "./createServer.js";
 
 export interface Runtime {
@@ -73,6 +75,12 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       presence,
       events,
     });
+    const steamPersonas = await ServerSteamPersonaDirectory.create({
+      baseUrl: config.profileBaseUrl,
+      seedPath: path.join(process.cwd(), "runtime", "profiles", "human-index.json"),
+      cachePath: path.join(recordsDir, "profiles", "human-index.json"),
+      onLog: (message) => writeActivityLog({ source: "server", level: "info", message: `Steam profile directory: ${message}` }),
+    });
     const gameStdoutHandler = (chunk: string) => {
       process.stdout.write(chunk);
     };
@@ -101,6 +109,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       records,
       rankme,
       events,
+      steamPersonas,
     });
     await matchmakingService.recoverCompletedMatches();
     await matchmakingService.resumePendingTimeouts();

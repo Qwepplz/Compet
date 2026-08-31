@@ -2,6 +2,10 @@
 // Both bot and human entries are merged into one lookup table loaded once and
 // refreshed on a TTL. Misses return nothing; callers fall back to steam64 text
 // and a local placeholder avatar.
+import {
+  normalizeSteam64,
+  parseHumanProfileIndexEntries,
+} from "../../profiles/humanProfileIndex.js";
 
 export interface PlayerProfile {
   steam64: string;
@@ -12,16 +16,9 @@ export interface PlayerProfile {
 const DEFAULT_REFRESH_TTL_MS = 30 * 60 * 1000;
 const DEFAULT_RELOAD_RETRY_MS = 60 * 1000;
 const FETCH_TIMEOUT_MS = 8_000;
-const STEAM64_PATTERN = /^\d{17}$/;
-
-interface RemoteIndexEntry {
-  personaName: string;
-  avatarPath: string;
-}
-
 interface ProfileEntry {
   personaName: string;
-  avatarRemoteUrl: string;
+  avatarRemoteUrl?: string;
 }
 
 interface RemoteProfileServiceOptions {
@@ -66,13 +63,13 @@ export class RemoteProfileService {
     this.startLoadIfNeeded();
     const result = new Map<string, PlayerProfile>();
     for (const raw of steam64s) {
-      const steam64 = raw.trim();
-      if (!STEAM64_PATTERN.test(steam64)) continue;
+      const steam64 = normalizeSteam64(raw);
+      if (!steam64) continue;
       const entry = this.profiles.get(steam64);
       if (!entry) continue;
 
       const avatarUrl = this.avatarCache.get(steam64);
-      if (avatarUrl === undefined) {
+      if (avatarUrl === undefined && entry.avatarRemoteUrl) {
         this.fetchAvatarInBackground(steam64, entry.avatarRemoteUrl);
       }
       result.set(steam64, { steam64, personaName: entry.personaName, avatarUrl: avatarUrl ?? "" });
@@ -137,11 +134,10 @@ export class RemoteProfileService {
       const merged = new Map<string, ProfileEntry>();
       const indexes = await Promise.all(this.indexFiles.map((file) => this.fetchIndex(file)));
       for (const index of indexes) {
-        for (const [steam64, entry] of Object.entries(index)) {
-          if (!STEAM64_PATTERN.test(steam64)) continue;
+        for (const [steam64, entry] of index) {
           merged.set(steam64, {
             personaName: entry.personaName,
-            avatarRemoteUrl: joinUrl(this.baseUrl, entry.avatarPath),
+            ...(entry.avatarPath ? { avatarRemoteUrl: joinUrl(this.baseUrl, entry.avatarPath) } : {}),
           });
         }
       }
@@ -159,19 +155,19 @@ export class RemoteProfileService {
     }
   }
 
-  private async fetchIndex(file: string): Promise<Record<string, RemoteIndexEntry>> {
+  private async fetchIndex(file: string): Promise<Map<string, { personaName: string; avatarPath?: string }>> {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
     try {
       const response = await this.fetchFn(joinUrl(this.baseUrl, file), { signal: controller.signal });
       if (!response.ok) {
         this.onLog?.(`fetch ${file} returned status ${response.status}`);
-        return {};
+        return new Map();
       }
-      return (await response.json()) as Record<string, RemoteIndexEntry>;
+      return parseHumanProfileIndexEntries(await response.json());
     } catch (error) {
       this.onLog?.(`fetch ${file} threw: ${error instanceof Error ? error.message : String(error)}`);
-      return {};
+      return new Map();
     } finally {
       clearTimeout(timeout);
     }

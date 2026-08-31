@@ -5,6 +5,8 @@
 import { readFile, writeFile, mkdir, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { writeJsonFileAtomic } from "../src/storage/jsonFile.js";
+import { parseHumanProfileIndex, type HumanProfileIndexEntry } from "../src/profiles/humanProfileIndex.js";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -17,6 +19,7 @@ const botInfoPath = process.env.COMPET_BOT_INFO_PATH
   ?? "E:/EXCHANGE/Git/BetterBots/addons/sourcemod/data/bot_info.json";
 const outDir = path.join(REPO_ROOT, "artifacts/cos-upload");
 const avatarsDir = path.join(outDir, "avatars");
+const profileSeedPath = path.join(REPO_ROOT, "packaging/server/profile-seed/human-index.json");
 const STEAM64_ACCOUNT_ID_OFFSET = 76561197960265728n;
 const SUMMARIES_BATCH = 100;
 const apiKey = process.env.COMPET_STEAM_WEB_API_KEY
@@ -32,10 +35,7 @@ const HUMAN_INPUTS: Array<{ kind: "steam64"; value: string } | { kind: "vanity";
   { kind: "steam64", value: "76561199195939058" },
 ];
 
-interface IndexEntry {
-  personaName: string;
-  avatarPath: string;
-}
+type IndexEntry = HumanProfileIndexEntry & { avatarPath: string };
 
 interface SteamPlayerSummary {
   steamid: string;
@@ -204,9 +204,11 @@ async function run(): Promise<number> {
   console.log("Building human index (resolving vanity + fetching avatars) ...");
   const humanIndex = await buildHumanIndex();
   console.log(`  human entries: ${Object.keys(humanIndex).length}`);
+  parseHumanProfileIndex(humanIndex);
 
   await writeFile(path.join(outDir, "bot-index.json"), JSON.stringify(botIndex), "utf8");
   await writeFile(path.join(outDir, "human-index.json"), JSON.stringify(humanIndex), "utf8");
+  await writeJsonFileAtomic(profileSeedPath, humanIndex, { pretty: false });
 
   console.log(`\nUpload the whole folder to your COS bucket: ${outDir}`);
   console.log("  bot-index.json, human-index.json, avatars/<steam64>.jpg");

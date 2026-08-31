@@ -200,14 +200,14 @@ function partyMemberDisplayName(accountId: string, account: AccountView | null, 
   return friend?.steamPersonaName ?? friend?.displayName ?? "玩家";
 }
 
-function partyInviteAccountDisplay(
+function partyInviteAvatarUrl(
   accountId: string,
   account: AccountView | null,
   friends: PlayerFriendListDto,
-): { label: string; avatarUrl?: string } {
-  if (accountId === account?.id) return { label: playerAccountLabel(account), avatarUrl: account.steamAvatarUrl };
+): string | undefined {
+  if (accountId === account?.id) return account.steamAvatarUrl;
   const friend = friends.friends.find((entry) => entry.accountId === accountId);
-  return { label: friend?.steamPersonaName ?? friend?.displayName ?? "玩家", avatarUrl: friend?.steamAvatarUrl };
+  return friend?.steamAvatarUrl;
 }
 
 function friendMatchHistoryPlayer(friend: PlayerFriendDto): MatchHistoryPlayer {
@@ -277,7 +277,8 @@ function PartyInviteToasts({
   return (
     <div className="player-party-invite-toasts" aria-live="polite">
       {invitations.map((invitation) => {
-        const inviter = partyInviteAccountDisplay(invitation.fromAccountId, account, friends);
+        const inviterLabel = invitation.fromDisplayName;
+        const inviterAvatarUrl = partyInviteAvatarUrl(invitation.fromAccountId, account, friends);
         const progressStyle = {
           transform: `scaleX(${partyInviteProgressScale(invitation, nowMs)})`,
         } as CSSProperties;
@@ -286,9 +287,9 @@ function PartyInviteToasts({
           <div className="player-party-invite-toast" key={invitation.id}>
             <div className="player-party-invite-progress" style={progressStyle} />
             <div className="player-party-invite-body">
-              <SteamAvatar className="player-party-invite-avatar" avatarUrl={inviter.avatarUrl} label={inviter.label} />
+              <SteamAvatar className="player-party-invite-avatar" avatarUrl={inviterAvatarUrl} label={inviterLabel} />
               <div className="player-party-invite-copy">
-                <strong>{inviter.label}</strong>
+                <strong>{inviterLabel}</strong>
                 <span>邀请你加入队伍</span>
               </div>
               <div className="player-party-invite-actions">
@@ -714,7 +715,7 @@ export function App() {
           partyInvitations: removePartyInvitation(current.partyInvitations, event.invitation.id),
         }));
         if (event.invitation.fromAccountId === account?.id) {
-          const invitee = partyInviteAccountDisplay(event.invitation.toAccountId, account, friends).label;
+          const invitee = event.invitation.toDisplayName;
           if (event.invitation.status === "accepted") {
             acceptedInviteJoinMessageAccountIds.current.add(event.invitation.toAccountId);
             void message.success(`${invitee}接受了你的邀请`);

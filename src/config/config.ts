@@ -1,5 +1,6 @@
 import path from "node:path";
 import { z } from "zod";
+import { DEFAULT_PROFILE_BASE_URL } from "../profiles/humanProfileIndex.js";
 import { defaultPublicConnectHost } from "../shared/network.js";
 
 export interface GameServerConfig {
@@ -13,6 +14,7 @@ export interface ServerConfig {
   port: number;
   dataDir: string;
   tokenTtlMinutes: number;
+  profileBaseUrl: string;
   gameServer: GameServerConfig;
 }
 
@@ -24,6 +26,7 @@ const envSchema = z.object({
   COMPET_PORT: positiveInt.max(65535).default(8443),
   COMPET_DATA_DIR: z.string().min(1).optional(),
   COMPET_TOKEN_TTL_MINUTES: positiveInt.default(1440),
+  COMPET_PROFILE_BASE_URL: z.string().min(1).url().default(DEFAULT_PROFILE_BASE_URL),
   COMPET_CSGO_SERVER_ROOT: z.string().default(""),
   COMPET_PUBLIC_CONNECT_HOST: z.string().min(1).default(detectedPublicConnectHost),
   COMPET_GAME_PORT_START: positiveInt.max(65535).default(27015),
@@ -42,6 +45,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
     port: parsed.COMPET_PORT,
     dataDir: path.normalize(dataDir).replace(/\\/g, "/"),
     tokenTtlMinutes: parsed.COMPET_TOKEN_TTL_MINUTES,
+    profileBaseUrl: parsed.COMPET_PROFILE_BASE_URL,
     gameServer: {
       serverRoot: parsed.COMPET_CSGO_SERVER_ROOT,
       publicConnectHost: parsed.COMPET_PUBLIC_CONNECT_HOST,

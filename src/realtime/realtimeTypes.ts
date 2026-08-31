@@ -1,4 +1,5 @@
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
+import type { PartyInvitationDto } from "../matchmaking/partyInvitationTypes.js";
 
 type RealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string };
 
@@ -15,8 +16,8 @@ export type RealtimeEvent =
   | RealtimeEventWithSeq<{ type: "friend_request_resolved"; accountId: string; request: unknown }>
   | RealtimeEventWithSeq<{ type: "friend_list_refresh"; accountId: string }>
   | RealtimeEventWithSeq<{ type: "party_updated"; accountIds: string[]; party: unknown }>
-  | RealtimeEventWithSeq<{ type: "party_invite_received"; accountIds: string[]; invitation: unknown }>
-  | RealtimeEventWithSeq<{ type: "party_invite_resolved"; accountIds: string[]; invitation: unknown }>
+  | RealtimeEventWithSeq<{ type: "party_invite_received"; accountIds: string[]; invitation: PartyInvitationDto }>
+  | RealtimeEventWithSeq<{ type: "party_invite_resolved"; accountIds: string[]; invitation: PartyInvitationDto }>
   | RealtimeEventWithSeq<{ type: "queue_updated"; accountIds: string[]; queue: unknown[] }>
   | RealtimeEventWithSeq<{ type: "matchmaking_occupancy_updated"; occupancy: { activeCount: number } }>
   | RealtimeEventWithSeq<{

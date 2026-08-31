@@ -234,6 +234,8 @@ export function createPreviewPlayerApi() {
       partyId: ensureParty().id,
       fromAccountId: previewAccount.id,
       toAccountId: accountId,
+      fromDisplayName: previewAccount.steamPersonaName ?? previewAccount.steam64 ?? previewAccount.displayName,
+      toDisplayName: accountId,
       status: "pending",
       createdAt,
     }),

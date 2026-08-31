@@ -5,7 +5,8 @@ import type {
   FriendSearchResult,
 } from "../../friends/friendService.js";
 import type { MatchConnectInfo } from "../../game/matchExecutor.js";
-import type { PublicMatchRoomRecord, PartyInvitationDto } from "../../matchmaking/matchmakingService.js";
+import type { PublicMatchRoomRecord } from "../../matchmaking/matchmakingService.js";
+import type { PartyInvitationDto } from "../../matchmaking/partyInvitationTypes.js";
 import type { MatchClientStage, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
 import type { MatchParticipant, MatchPlayerResult, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
 import type { MatchHistoryEntry } from "../../records/matchHistory.js";

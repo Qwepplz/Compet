@@ -18,6 +18,7 @@ $serverExe = "Compet Server Manager.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
 $logArchive7z = Join-Path $repo "packaging\server\runtime\7zr.exe"
+$profileSeedPath = Join-Path $repo "packaging\server\profile-seed\human-index.json"
 $packageVersion = [string]((Get-Content -LiteralPath (Join-Path $repo "packaging\server\app-package.json") -Raw | ConvertFrom-Json).version)
 
 function Get-ArchiveEntryPath {
@@ -47,6 +48,38 @@ function Get-PackageVersion {
     return "$packageVersion.0"
   }
   return $packageVersion
+}
+
+function Assert-ProfileSeed {
+  param(
+    [Parameter(Mandatory = $true)][string]$SeedPath
+  )
+
+  if (-not (Test-Path -LiteralPath $SeedPath)) {
+    throw "Missing profile seed: $SeedPath"
+  }
+
+  try {
+    $seed = Get-Content -LiteralPath $SeedPath -Raw | ConvertFrom-Json -ErrorAction Stop
+  } catch {
+    throw "Invalid profile seed JSON: $SeedPath"
+  }
+
+  if ($null -eq $seed -or $seed -is [System.Array] -or $seed -isnot [pscustomobject]) {
+    throw "Invalid profile seed root: $SeedPath"
+  }
+
+  $validEntries = 0
+  foreach ($property in $seed.PSObject.Properties) {
+    if ($property.Name -notmatch '^\d{17}$') { continue }
+    $personaName = $property.Value.personaName
+    if ($personaName -is [string] -and $personaName.Trim().Length -gt 0) {
+      $validEntries += 1
+    }
+  }
+  if ($validEntries -eq 0) {
+    throw "Profile seed contains no valid human entries: $SeedPath"
+  }
 }
 
 function Assert-NodeSqliteRuntime {
@@ -271,6 +304,7 @@ function Optimize-RuntimeNodeModules {
 
 Assert-NodeSqliteRuntime -Executable $nodeRuntime -DisplayName "Node.js"
 Assert-NodeSqliteRuntime -Executable (Join-Path $electronDist "electron.exe") -DisplayName "Electron" -Electron
+Assert-ProfileSeed -SeedPath $profileSeedPath
 
 Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
 foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededTarXz)) {
@@ -281,7 +315,7 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
+$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "packaging\server\profile-seed\human-index.json", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
@@ -313,6 +347,8 @@ New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\node") -Force | 
 Copy-Item -LiteralPath $nodeRuntime -Destination (Join-Path $appRoot "runtime\node\node.exe")
 New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\7z") -Force | Out-Null
 Copy-Item -LiteralPath $logArchive7z -Destination (Join-Path $appRoot "runtime\7z\7zr.exe")
+New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\profiles") -Force | Out-Null
+Copy-Item -LiteralPath $profileSeedPath -Destination (Join-Path $appRoot "runtime\profiles\human-index.json")
 
 New-Item -ItemType Directory -Path (Join-Path $appRoot "dist") -Force | Out-Null
 $serverBundle = Join-Path $appRoot "dist\main.cjs"
@@ -344,6 +380,7 @@ $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "package.json")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "runtime\node\node.exe")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "runtime\7z\7zr.exe")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "runtime\profiles\human-index.json")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "dist\main.cjs")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\main\index.cjs")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\preload\index.js")),

@@ -5,6 +5,7 @@ import { RemoteProfileService } from "./remoteProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
 import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
+import { DEFAULT_PROFILE_BASE_URL } from "../../profiles/humanProfileIndex.js";
 
 export interface SavedPlayerLogin {
   baseUrl: string;
@@ -72,7 +73,7 @@ export interface RestoreSessionResult extends RestoredPlayerSession {
 }
 
 const profileBootLogFile = "compet-player-client-boot.log";
-const PROFILE_BASE_URL = process.env.COMPET_PROFILE_BASE_URL ?? "https://qwepplz111.site/cos-upload/";
+const PROFILE_BASE_URL = process.env.COMPET_PROFILE_BASE_URL?.trim() || DEFAULT_PROFILE_BASE_URL;
 let profilesUpdatedHandler: (() => void) | undefined;
 const sharedProfileService = new RemoteProfileService({
   baseUrl: PROFILE_BASE_URL,

@@ -11,6 +11,7 @@ import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from 
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { CompletedMatchRecord, MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
+import type { PartyInvitationDto } from "./partyInvitationTypes.js";
 import type { GameSide, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayerResult, MatchSeriesResult, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
@@ -194,8 +195,6 @@ type ReadyTimeoutHandle = ReturnType<typeof setTimeout>;
 type ReadyTimeoutScheduler = (handler: () => void, timeoutMs: number) => ReadyTimeoutHandle;
 type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
 
-export type PartyInvitationDto = PartyInvitationRecord;
-
 export interface MatchExecutorPort {
   prepare(plan: MatchPlan): Promise<MatchConnectInfo>;
   deleteMatchArtifacts?(matchId: string): Promise<void>;
@@ -217,6 +216,9 @@ export interface MatchmakingServiceDeps {
   records?: Pick<MatchRecordStore, "appendEvent" | "completeMatch" | "cleanupCompletedMatchFiles" | "deleteMatch" | "listPlayerCompletedMatches" | "listRecentMatchMaps" | "readCompletedMatch" | "readMatchPlan" | "saveMatchPlan" | "saveStatus">;
   rankme?: RankmeScoreReader;
   events?: { publish(event: RealtimeEvent): void };
+  steamPersonas?: {
+    displayName(steam64: string): string;
+  };
   mapPool?: string[];
   now?: () => string;
   idFactory?: () => string;
@@ -482,8 +484,9 @@ export class MatchmakingService {
       };
       await this.deps.store.saveInvitations([...invitations, invitation]);
       this.schedulePartyInviteTimeout(invitation);
-      await this.emit({ type: "party_invite_received", accountIds: [ownerAccountId, toAccountId], invitation });
-      return invitation;
+      const publicInvitation = await this.toPartyInvitationDto(invitation);
+      await this.emit({ type: "party_invite_received", accountIds: [ownerAccountId, toAccountId], invitation: publicInvitation });
+      return publicInvitation;
     });
   }
 
@@ -842,7 +845,7 @@ export class MatchmakingService {
         (participant) => participant.accountId === accountId,
       );
       if (!declinedParticipant) throw new Error("ready participant not found for account");
-      const readyDeclinedByDisplayName = declinedParticipant.displayName;
+      const readyDeclinedByDisplayName = this.displayNameForSteam64(declinedParticipant.steam64 ?? "");
       return this.toPublicRoom(await this.failMatchRoom(rooms, room, "ready declined", readyDeclinedByDisplayName));
     });
   }
@@ -871,9 +874,10 @@ export class MatchmakingService {
       .filter((room) => this.roomHasAccount(room, accountId))
       .map((room) => this.toPlayerPublicRoom(room, accountId));
     const party = parties.find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
-    const partyInvitations = (await this.deps.store.listInvitations()).filter(
+    const pendingInvitations = (await this.deps.store.listInvitations()).filter(
       (invitation) => invitation.toAccountId === accountId && invitation.status === "pending" && !this.isPartyInviteOverdue(invitation),
     );
+    const partyInvitations = await Promise.all(pendingInvitations.map((invitation) => this.toPartyInvitationDto(invitation)));
     return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms), occupancy: this.occupancySummary(allRooms, parties) };
   }
 
@@ -1194,7 +1198,8 @@ export class MatchmakingService {
       const previousInvitation = previous.find((candidate) => candidate.id === invitation.id);
       if (previousInvitation?.status === "pending" && invitation.status !== "pending") {
         this.clearPartyInviteTimeout(invitation.id);
-        await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation });
+        const publicInvitation = await this.toPartyInvitationDto(invitation);
+        await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation: publicInvitation });
       }
     }
   }
@@ -1214,17 +1219,15 @@ export class MatchmakingService {
   private async expirePendingInvitationsForParty(partyId: string): Promise<void> {
     const invitations = await this.deps.store.listInvitations();
     const resolvedAt = this.now();
-    const expired = invitations
-      .filter((invitation) => invitation.partyId === partyId && invitation.status === "pending")
-      .map((invitation): PartyInvitationRecord => ({ ...invitation, status: "expired", resolvedAt }));
-    if (expired.length === 0) return;
+    const resolvedInvitations = invitations.map((invitation): PartyInvitationRecord => (
+      invitation.partyId === partyId && invitation.status === "pending"
+        ? { ...invitation, status: "expired", resolvedAt }
+        : invitation
+    ));
+    if (resolvedInvitations.every((invitation, index) => invitation === invitations[index])) return;
 
-    const expiredById = new Map(expired.map((invitation) => [invitation.id, invitation]));
-    await this.deps.store.saveInvitations(invitations.map((invitation) => expiredById.get(invitation.id) ?? invitation));
-    for (const invitation of expired) {
-      this.clearPartyInviteTimeout(invitation.id);
-      await this.emit({ type: "party_invite_resolved", accountIds: [invitation.fromAccountId, invitation.toAccountId], invitation });
-    }
+    await this.deps.store.saveInvitations(resolvedInvitations);
+    await this.emitResolvedInvitations(invitations, resolvedInvitations);
   }
 
   private buildPendingMatchmakingStartAt(pendingAt: string): string {
@@ -1580,6 +1583,34 @@ export class MatchmakingService {
     if (!(await this.deps.accounts.getById(accountId))) throw new Error(`account not found: ${accountId}`);
   }
 
+  private displayNameForSteam64(steam64: string): string {
+    const normalized = steam64.trim();
+    const resolved = normalized ? this.deps.steamPersonas?.displayName(normalized)?.trim() : "";
+    return resolved || normalized || "未知玩家";
+  }
+
+  private displayNameForInvitationAccount(account: AccountRecord | null | undefined): string {
+    return this.displayNameForSteam64(account?.steam64 ?? "");
+  }
+
+  private async toPartyInvitationDto(invitation: PartyInvitationRecord): Promise<PartyInvitationDto> {
+    const [fromAccount, toAccount] = await Promise.all([
+      this.deps.accounts.getById(invitation.fromAccountId),
+      this.deps.accounts.getById(invitation.toAccountId),
+    ]);
+    return {
+      id: invitation.id,
+      partyId: invitation.partyId,
+      fromAccountId: invitation.fromAccountId,
+      toAccountId: invitation.toAccountId,
+      status: invitation.status,
+      createdAt: invitation.createdAt,
+      ...(invitation.resolvedAt ? { resolvedAt: invitation.resolvedAt } : {}),
+      fromDisplayName: this.displayNameForInvitationAccount(fromAccount),
+      toDisplayName: this.displayNameForInvitationAccount(toAccount),
+    };
+  }
+
   private async requireMatchmakingAccount(accountId: string): Promise<AccountRecord> {
     const account = await this.deps.accounts.getById(accountId);
     if (!account) throw new Error(`account not found: ${accountId}`);
@@ -1593,13 +1624,14 @@ export class MatchmakingService {
     const steam64 = account.steam64.trim();
     if (!steam64) throw new Error("steam64 required for matchmaking");
 
-    const accountDisplayName = account.displayName.trim();
+    const displayName = this.displayNameForSteam64(steam64);
 
     return {
       id: account.id,
       kind: "human",
-      displayName: accountDisplayName || steam64,
+      displayName,
       steam64,
+      ...(displayName !== steam64 ? { steamPersonaName: displayName } : {}),
       accountId: account.id,
     };
   }
