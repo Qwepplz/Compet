@@ -1133,6 +1133,27 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #fff;
 }
 
+.match-result-loading-content {
+  grid-row: 1 / -1;
+  align-items: stretch;
+}
+
+.match-result-loading-content .match-result-back-button {
+  align-self: start;
+}
+
+.match-result-loading-state {
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  color: #a8a8a8;
+  font-size: 13px;
+}
+
 .match-result-meta span {
   color: #8f8f8f;
   font-size: 12px;

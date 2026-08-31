@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
-import { CloseOutlined, MinusOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined, CloseOutlined, MinusOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
 import type {
@@ -348,6 +348,7 @@ export function App() {
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
   const matchSoundEnabledRef = useRef(matchSoundEnabled);
   const matchHistoryScrollTopRef = useRef(0);
+  const matchHistoryResultRequestIdRef = useRef<number>(0);
 
   const api = window.playerApi;
   const currentRoom = getCurrentRoom(matchmaking);
@@ -374,6 +375,10 @@ export function App() {
 
   function updateServerClock(serverNow: string | undefined, localNowMs = Date.now()) {
     setServerClockOffsetMs((current) => updateServerClockOffset(current, serverNow, localNowMs));
+  }
+
+  function invalidateMatchHistoryResultRequest() {
+    matchHistoryResultRequestIdRef.current += 1;
   }
 
   useEffect(() => {
@@ -756,9 +761,6 @@ export function App() {
         }));
         return;
       case "match_room_created":
-        setMatchResult(null);
-        setMatchResultMatchId(null);
-        setMatchResultPlayerSteam64(undefined);
         playMatchFoundSound(event.matchId);
         setMatchmaking((current) => {
           const nextRooms = upsertRoom(current.rooms, event.room);
@@ -801,6 +803,7 @@ export function App() {
         }));
         return;
       case "match_completed":
+        invalidateMatchHistoryResultRequest();
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "completed",
@@ -824,6 +827,7 @@ export function App() {
         setActiveView("home");
         return;
       case "match_failed":
+        invalidateMatchHistoryResultRequest();
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "failed",
@@ -943,6 +947,10 @@ export function App() {
   }
 
   async function openMatchHistory() {
+    invalidateMatchHistoryResultRequest();
+    setMatchResult(null);
+    setMatchResultMatchId(null);
+    setMatchResultPlayerSteam64(undefined);
     setMatchHistoryPlayer(null);
     setMatchHistory(null);
     matchHistoryScrollTopRef.current = 0;
@@ -952,6 +960,10 @@ export function App() {
 
   async function openFriendMatchHistory(friend: PlayerFriendDto) {
     const player = friendMatchHistoryPlayer(friend);
+    invalidateMatchHistoryResultRequest();
+    setMatchResult(null);
+    setMatchResultMatchId(null);
+    setMatchResultPlayerSteam64(undefined);
     setMatchHistoryPlayer(player);
     setMatchHistory(null);
     matchHistoryScrollTopRef.current = 0;
@@ -960,19 +972,30 @@ export function App() {
   }
 
   async function openMatchHistoryResult(matchId: string) {
+    const requestId = ++matchHistoryResultRequestIdRef.current;
+    const viewedAccountId = matchHistoryPlayer?.accountId;
+    const viewedSteam64 = matchHistoryPlayer?.steam64 ?? account?.steam64;
+    setMatchResult(null);
+    setMatchResultMatchId(matchId);
+    setMatchResultPlayerSteam64(viewedSteam64);
+    setMatchResultBackView("match-history");
+    setActiveView("match-result");
     try {
-      const result = await api.getMatchHistoryResult(matchId, matchHistoryPlayer?.accountId);
+      const result = await api.getMatchHistoryResult(matchId, viewedAccountId);
+      if (requestId !== matchHistoryResultRequestIdRef.current) return;
       setMatchResult(result);
-      setMatchResultMatchId(matchId);
-      setMatchResultPlayerSteam64(matchHistoryPlayer?.steam64 ?? account?.steam64);
-      setMatchResultBackView("match-history");
-      setActiveView("match-result");
     } catch (error) {
+      if (requestId !== matchHistoryResultRequestIdRef.current) return;
+      setMatchResult(null);
+      setMatchResultMatchId(null);
+      setMatchResultPlayerSteam64(undefined);
+      setActiveView("match-history");
       message.error(error instanceof Error ? error.message : "加载比赛详情失败");
     }
   }
 
   async function restoreSession(startupDeadline?: number) {
+    invalidateMatchHistoryResultRequest();
     try {
       await loadSavedLogin();
       const startupTimeoutMs = startupDeadline === undefined ? undefined : remainingStartupMs(startupDeadline);
@@ -1040,6 +1063,7 @@ export function App() {
 
   async function login(values: LoginValues) {
     if (loginPending) return;
+    invalidateMatchHistoryResultRequest();
     setLoginPending(true);
     try {
       setBaseUrl(values.baseUrl);
@@ -1149,6 +1173,7 @@ export function App() {
   }
 
   async function logout() {
+    invalidateMatchHistoryResultRequest();
     try {
       await window.playerApi.logout();
     } finally {
@@ -1331,6 +1356,7 @@ export function App() {
     const nextRoom = await api.startPartyMatchmaking(options);
     updateServerClock(nextRoom.serverNow);
     await hydrateRealtimeState();
+    invalidateMatchHistoryResultRequest();
     playMatchFoundSound(nextRoom.id);
     setActiveView("match-room");
     setMatchmakingFeedbackPending(false);
@@ -1387,6 +1413,7 @@ export function App() {
     const nextRoom = await api.declineReady();
     updateServerClock(nextRoom.serverNow);
     if (isTerminalMatchPhase(nextRoom.phase)) {
+      invalidateMatchHistoryResultRequest();
       setActiveView("home");
     }
     await hydrateRealtimeState();
@@ -1399,6 +1426,15 @@ export function App() {
 
   function backFromMatchHistory() {
     setActiveView(activeMatchRoom ? "match-room" : "home");
+  }
+
+  function backFromMatchResult() {
+    invalidateMatchHistoryResultRequest();
+    const backView = matchResultBackView;
+    setMatchResult(null);
+    setMatchResultMatchId(null);
+    setMatchResultPlayerSteam64(undefined);
+    setActiveView(backView);
   }
 
   function renderAuthenticatedView() {
@@ -1414,8 +1450,26 @@ export function App() {
         />
       );
     }
-    if (activeView === "match-result" && matchResult) {
-      return <MatchResultPage result={matchResult} selfSteam64={matchResultPlayerSteam64} onBackHome={() => setActiveView(matchResultBackView)} />;
+    if (activeView === "match-result") {
+      if (!matchResult) {
+        return (
+          <div className="match-result-page">
+            <section className="match-result-content match-result-loading-content">
+              <Button
+                className="match-result-back-button"
+                aria-label="返回大厅"
+                icon={<ArrowLeftOutlined />}
+                onClick={backFromMatchResult}
+              />
+              <div className="match-result-loading-state" role="status" aria-live="polite">
+                <Spin size="large" />
+                <span>正在加载比赛详情</span>
+              </div>
+            </section>
+          </div>
+        );
+      }
+      return <MatchResultPage result={matchResult} selfSteam64={matchResultPlayerSteam64} onBackHome={backFromMatchResult} />;
     }
     if (activeView === "match-room") {
       return (
