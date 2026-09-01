@@ -68,7 +68,10 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
     <section className={`faceit-team-column faceit-team-column--${side}`}>
       <div className="faceit-team-title">
         <span>Players</span>
-        <strong>{team.name}</strong>
+        <div className="faceit-team-identity">
+          {team.logoImage ? <img className="faceit-team-logo" src={team.logoImage} alt="" /> : null}
+          <strong>{team.name}</strong>
+        </div>
       </div>
       <div className="faceit-player-list">
         {team.participants.map((participant) => {

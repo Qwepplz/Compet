@@ -625,7 +625,12 @@ export class MatchmakingService {
       const startedAt = this.now();
       const humans = await Promise.all(party.memberAccountIds.map((accountId) => this.toHumanParticipant(accountId)));
       const teams = useDev
-        ? assignDevTeams({ humans, botCandidates: this.deps.botCatalog.candidates, random: this.random })
+        ? assignDevTeams({
+            humans,
+            botCandidates: this.deps.botCatalog.candidates,
+            botRosters: this.deps.botCatalog.rosters,
+            random: this.random,
+          })
         : assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
       const participants = [...teams.teamA.participants, ...teams.teamB.participants];
       const humanAccountIds = humans.map((participant) => participant.accountId ?? participant.id);

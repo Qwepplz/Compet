@@ -1502,10 +1502,25 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .faceit-team-title {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   color: #9b9b9b;
   font-size: 14px;
   font-weight: 700;
+}
+
+.faceit-team-identity {
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
+}
+
+.faceit-team-logo {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  object-fit: contain;
 }
 
 .faceit-team-title strong {

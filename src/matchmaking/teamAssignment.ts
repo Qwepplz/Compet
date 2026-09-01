@@ -29,11 +29,14 @@ export const DEV_PRO_TEAMMATES = ["ZywOo", "donk", "m0NESY", "ropz"] as const;
 export interface AssignDevTeamsInput {
   humans: MatchParticipant[];
   botCandidates: BotCandidate[];
+  botRosters: BotRosterTeam[];
   random?: () => number;
 }
 
 export function assignDevTeams(input: AssignDevTeamsInput): AssignTeamsResult {
   const random = input.random ?? Math.random;
+  const teamARoster = requireDevRoster(input.botRosters, "vita");
+  const teamBRoster = requireDevRoster(input.botRosters, "fal");
 
   const allyHumans = input.humans;
   const proSlots = 5 - allyHumans.length;
@@ -64,10 +67,21 @@ export function assignDevTeams(input: AssignDevTeamsInput): AssignTeamsResult {
   const enemyParticipants = enemyBots.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, new Set()));
 
   const allySide: GameSide = random() < 0.5 ? "t" : "ct";
-  const allyTeam = createTeam("teamA", allySide, { name: "Team A" }, allyParticipants, random);
-  const enemyTeam = createTeam("teamB", allySide === "t" ? "ct" : "t", { name: "Team B" }, enemyParticipants, random);
+  const allyTeam = createTeam("teamA", allySide, teamARoster, allyParticipants, random);
+  const enemyTeam = createTeam("teamB", allySide === "t" ? "ct" : "t", teamBRoster, enemyParticipants, random);
 
   return { teamA: allyTeam, teamB: enemyTeam, selectedBots: [...proTeammates, ...enemyBots] };
+}
+
+function requireDevRoster(botRosters: readonly BotRosterTeam[], logo: "vita" | "fal"): PickedTeamRoster {
+  const roster = botRosters.find((candidate) => candidate.logo === logo);
+  const name = roster?.name.trim();
+  const logoImage = roster?.logoImage?.trim();
+  if (!roster || !name || !logoImage || !/^data:[^,]*,.+$/u.test(logoImage)) {
+    throw new Error(`dev mode requires team roster "${logo}" with non-empty name and logo image`);
+  }
+
+  return { name, logo, logoImage };
 }
 
 function findCandidateByName(candidates: readonly BotCandidate[], name: string): BotCandidate | undefined {
