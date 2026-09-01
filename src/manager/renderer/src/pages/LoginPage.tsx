@@ -14,11 +14,9 @@ const statusColor: Record<ServiceStatus["state"], string> = {
   stopping: "warning",
   failed: "error",
 };
-export function LoginPage({ status, savedLogin, onStart, onLogin }: { status: ServiceStatus; savedLogin: SavedLoginCredentials | null; onStart: () => Promise<void>; onLogin: (username: string, password: string) => Promise<void> }) {
+export function LoginPage({ status, savedLogin, onLogin }: { status: ServiceStatus; savedLogin: SavedLoginCredentials | null; onLogin: (username: string, password: string) => Promise<void> }) {
   const [form] = Form.useForm<LoginValues>();
-  const [startPending, setStartPending] = useState(false);
   const [loginPending, setLoginPending] = useState(false);
-  const serviceReady = status.state === "running";
 
   useEffect(() => {
     form.setFieldsValue({
@@ -26,16 +24,6 @@ export function LoginPage({ status, savedLogin, onStart, onLogin }: { status: Se
       password: savedLogin?.password,
     });
   }, [form, savedLogin]);
-
-  async function handleStart() {
-    if (startPending) return;
-    setStartPending(true);
-    try {
-      await onStart();
-    } finally {
-      setStartPending(false);
-    }
-  }
 
   async function handleLogin(values: LoginValues) {
     if (loginPending) return;
@@ -56,19 +44,14 @@ export function LoginPage({ status, savedLogin, onStart, onLogin }: { status: Se
         </Space>
         <Form<LoginValues> form={form} layout="vertical" onFinish={handleLogin}>
           <Form.Item name="username" label="用户名" rules={[{ required: true, message: "请输入用户名" }]}> 
-            <Input autoComplete="username" disabled={!serviceReady || loginPending} />
+            <Input autoComplete="username" disabled={loginPending} />
           </Form.Item>
           <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}> 
-            <Input.Password autoComplete="current-password" disabled={!serviceReady || loginPending} />
+            <Input.Password autoComplete="current-password" disabled={loginPending} />
           </Form.Item>
-          <Space style={{ width: "100%" }} direction="vertical">
-            <Button type="primary" htmlType="submit" block loading={loginPending} disabled={!serviceReady || startPending}>
-              登录
-            </Button>
-            <Button block onClick={handleStart} loading={startPending} disabled={status.state === "running" || status.state === "starting" || loginPending}>
-              启动服务
-            </Button>
-          </Space>
+          <Button type="primary" htmlType="submit" block loading={loginPending} disabled={loginPending}>
+            登录
+          </Button>
         </Form>
       </Card>
     </div>

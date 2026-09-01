@@ -135,14 +135,29 @@ export function App() {
       const nextStatus = await managerApi.startService();
       setStatus(nextStatus);
       if (nextStatus.state === "running") {
-        await login(input.username, input.password);
+        await login(input.username, input.password, nextStatus);
       }
     } catch (error) {
       message.error(error instanceof Error ? error.message : "初始化管理员失败");
     }
   }
 
-  async function login(username: string, password: string) {
+  async function login(username: string, password: string, knownStatus: ServiceStatus = status) {
+    if (knownStatus.state !== "running") {
+      try {
+        const nextStatus = await managerApi.startService();
+        setStatus(nextStatus);
+        if (nextStatus.state !== "running") {
+          message.error(nextStatus.lastError ?? "启动服务失败");
+          return;
+        }
+      } catch (error) {
+        await refreshStatus();
+        message.error(error instanceof Error ? error.message : "启动服务失败");
+        return;
+      }
+    }
+
     try {
       const result = await managerApi.login(username, password);
       setSavedLogin({ username, password });
@@ -213,7 +228,7 @@ export function App() {
   }
 
   if (!loggedIn) {
-    return <LoginPage status={status} savedLogin={savedLogin} onStart={startService} onLogin={login} />;
+    return <LoginPage status={status} savedLogin={savedLogin} onLogin={login} />;
   }
 
   return (
