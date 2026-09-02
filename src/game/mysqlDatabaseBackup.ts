@@ -47,11 +47,13 @@ export class MysqlDatabaseBackup {
     }
   }
 
-  async restore(matchId: string): Promise<void> {
+  async restore(matchId: string, options: { preserveBackup?: boolean } = {}): Promise<void> {
     const filePath = mysqlBackupFilePath(this.options.backupDir, matchId);
     if (!existsSync(filePath)) throw new Error(`mysql backup not found: ${matchId}`);
     await (await this.resolveProcess()).restore(await this.resolveDatabase(), filePath);
-    await this.discard(matchId);
+    if (options.preserveBackup !== true) {
+      await this.discard(matchId);
+    }
   }
 
   async discard(matchId: string): Promise<void> {

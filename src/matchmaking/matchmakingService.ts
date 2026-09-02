@@ -202,7 +202,7 @@ export interface MatchExecutorPort {
 
 export interface MatchDatabaseBackup {
   create(matchId: string): Promise<void>;
-  restore(matchId: string): Promise<void>;
+  restore(matchId: string, options?: { preserveBackup?: boolean }): Promise<void>;
   discard(matchId: string): Promise<void>;
 }
 
@@ -637,6 +637,7 @@ export class MatchmakingService {
       const room: MatchRoomRecord = {
         id: this.idFactory(),
         phase: "ready",
+        ...(useDev ? { dev: true as const } : {}),
         teamA: teams.teamA,
         teamB: teams.teamB,
         humanAccountIds,
@@ -990,13 +991,15 @@ export class MatchmakingService {
       }
 
       let result: MatchSeriesResult;
+      let savedPlan: MatchPlan | undefined;
       try {
         const alignedGet5Result = alignGet5ResultToRoom(room, report.get5Result.result);
         const { team1StartingSide: _team1StartingSide, team2StartingSide: _team2StartingSide, ...publicGet5Result } = alignedGet5Result;
-        const savedPlan = await this.readSavedMatchPlan(matchId);
-        const players = await this.applyRankmeScoreDeltas(
+        savedPlan = await this.readSavedMatchPlan(matchId);
+        const players = await this.applyRankmeScores(
           mergeMatchResultPlayers(room, report.competStats),
           savedPlan?.rankmeScoresBefore,
+          savedPlan?.dev === true,
         );
         result = {
           ...publicGet5Result,
@@ -1033,7 +1036,7 @@ export class MatchmakingService {
         if (restoreError) return this.toPublicRoom(room);
         return this.toPublicRoom(await this.failMatchRoom(rooms, room, failure));
       }
-      let committedRecord: Pick<CompletedMatchRecord, "result" | "completionEventPublished"> = { result };
+      let committedRecord: Pick<CompletedMatchRecord, "plan" | "result" | "completionEventPublished"> | undefined;
       try {
         const stored = await this.deps.records?.readCompletedMatch?.(matchId);
         if (stored) committedRecord = stored;
@@ -1041,6 +1044,14 @@ export class MatchmakingService {
         process.stderr.write(
           `Failed to read completed match event state ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`,
         );
+      }
+      if (!committedRecord && savedPlan) {
+        committedRecord = { plan: savedPlan, result };
+      }
+      if (!committedRecord) {
+        const restoreError = await this.restoreMatchDatabase(matchId);
+        if (restoreError) return this.toPublicRoom(room);
+        return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match plan unavailable"));
       }
       return this.finalizeCommittedMatch(rooms, room, committedRecord);
     });
@@ -1090,6 +1101,7 @@ export class MatchmakingService {
     rooms: MatchRoomRecord[],
     room: MatchRoomRecord,
     completedAt: string,
+    options: { discardDatabaseBackup: boolean },
   ): Promise<CommittedMatchRepair | undefined> {
     const completed: MatchRoomRecord = {
       ...room,
@@ -1116,7 +1128,9 @@ export class MatchmakingService {
       }
       return undefined;
     }
-    let cleanupComplete = await this.discardMatchDatabaseBackup(room.id);
+    let cleanupComplete = options.discardDatabaseBackup
+      ? await this.discardMatchDatabaseBackup(room.id)
+      : true;
     try {
       await this.deps.records?.cleanupCompletedMatchFiles?.(room.id);
     } catch (error) {
@@ -1129,7 +1143,7 @@ export class MatchmakingService {
   private async finalizeCommittedMatch(
     rooms: MatchRoomRecord[],
     room: MatchRoomRecord,
-    committed: Pick<CompletedMatchRecord, "result" | "completionEventPublished">,
+    committed: Pick<CompletedMatchRecord, "plan" | "result" | "completionEventPublished">,
   ): Promise<PublicMatchRoomRecord> {
     const reconciliation = await this.reconcileCommittedMatch(rooms, room, committed);
     if (!reconciliation || reconciliation.retryRequired) {
@@ -1141,28 +1155,46 @@ export class MatchmakingService {
   private async reconcileCommittedMatch(
     rooms: MatchRoomRecord[],
     room: MatchRoomRecord,
-    committed: Pick<CompletedMatchRecord, "result" | "completionEventPublished">,
+    committed: Pick<CompletedMatchRecord, "plan" | "result" | "completionEventPublished">,
   ): Promise<CommittedMatchReconciliation | undefined> {
-    const repaired = await this.repairCommittedMatchRoom(rooms, room, committed.result.completedAt);
-    if (!repaired) return undefined;
-    if (committed.completionEventPublished) {
-      return { room: repaired.room, retryRequired: !repaired.cleanupComplete };
+    const dev = committed.plan.dev === true;
+    if (dev && !committed.completionEventPublished) {
+      const restoreError = await this.restoreMatchDatabase(room.id, { preserveBackup: true });
+      if (restoreError) return { room, retryRequired: true };
     }
-    try {
-      await this.emit(
-        {
-          type: "match_completed",
-          matchId: room.id,
-          accountIds: this.roomAudience(repaired.room),
-          result: committed.result,
-        },
-        room.id,
-      );
-    } catch (error) {
-      process.stderr.write(
-        `Failed to publish completed match ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`,
-      );
-      return { room: repaired.room, retryRequired: true };
+
+    const repaired = await this.repairCommittedMatchRoom(
+      rooms,
+      room,
+      committed.result.completedAt,
+      { discardDatabaseBackup: !dev },
+    );
+    if (!repaired) return undefined;
+    if (!committed.completionEventPublished) {
+      try {
+        await this.emit(
+          {
+            type: "match_completed",
+            matchId: room.id,
+            accountIds: this.roomAudience(repaired.room),
+            result: committed.result,
+          },
+          room.id,
+        );
+      } catch (error) {
+        process.stderr.write(
+          `Failed to publish completed match ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return { room: repaired.room, retryRequired: true };
+      }
+    }
+
+    if (dev) {
+      const backupDiscarded = await this.discardMatchDatabaseBackup(room.id);
+      return {
+        room: repaired.room,
+        retryRequired: !repaired.cleanupComplete || !backupDiscarded,
+      };
     }
     return { room: repaired.room, retryRequired: !repaired.cleanupComplete };
   }
@@ -1379,6 +1411,7 @@ export class MatchmakingService {
         process.stderr.write(
           `Failed to append match event for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`,
         );
+        if (event.type === "match_completed") throw error;
       }
     }
     if (event.type !== "match_completed") {
@@ -1481,6 +1514,7 @@ export class MatchmakingService {
     return {
       id: room.id,
       phase: "server_prepare",
+      ...(room.dev === true ? { dev: true as const } : {}),
       map,
       teamA: room.teamA,
       teamB: room.teamB,
@@ -1517,11 +1551,21 @@ export class MatchmakingService {
     return matches.total === 0;
   }
 
-  private async applyRankmeScoreDeltas(
+  private async applyRankmeScores(
     players: MatchPlayerResult[],
     rankmeScoresBefore: Record<string, number> | undefined,
+    dev: boolean,
   ): Promise<MatchPlayerResult[]> {
-    if (!this.deps.rankme || !rankmeScoresBefore) return players;
+    if (!rankmeScoresBefore) return players;
+    if (dev) {
+      return players.map((player) => {
+        const before = rankmeScoresBefore[player.steam64];
+        return player.kind === "human" && typeof before === "number" && Number.isFinite(before)
+          ? { ...player, rankmeScore: before, rankmeScoreDelta: 0 }
+          : player;
+      });
+    }
+    if (!this.deps.rankme) return players;
     return Promise.all(players.map(async (player) => {
       const before = rankmeScoresBefore[player.steam64];
       if (player.kind !== "human" || typeof before !== "number" || !Number.isFinite(before)) return player;
@@ -1543,10 +1587,13 @@ export class MatchmakingService {
     }
   }
 
-  private async restoreMatchDatabase(matchId: string): Promise<string | undefined> {
+  private async restoreMatchDatabase(
+    matchId: string,
+    options: { preserveBackup?: boolean } = {},
+  ): Promise<string | undefined> {
     if (!this.deps.databaseBackup) return undefined;
     try {
-      await this.deps.databaseBackup.restore(matchId);
+      await this.deps.databaseBackup.restore(matchId, options);
       return undefined;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);

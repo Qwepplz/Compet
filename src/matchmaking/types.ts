@@ -67,6 +67,7 @@ export interface MatchPlayerResult {
 export interface MatchPlan {
   id: string;
   phase: MatchPhase;
+  dev?: true;
   map: string;
   teamA: MatchTeam;
   teamB: MatchTeam;

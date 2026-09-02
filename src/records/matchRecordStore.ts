@@ -79,6 +79,8 @@ export class MatchRecordStore {
         events,
       );
 
+      if (plan.dev === true) return;
+
       const participantStatement = database.prepare(`
         INSERT INTO match_participants (match_id, steam64, side)
         VALUES (?, ?, ?)
@@ -156,10 +158,15 @@ export class MatchRecordStore {
   async listRecentMatchMaps(limit: number): Promise<string[]> {
     if (limit <= 0) return [];
     const rows = this.database.prepare(`
-      SELECT map
-      FROM matches
-      WHERE trim(map) <> ''
-      ORDER BY created_at ASC, id ASC
+      SELECT m.map
+      FROM matches AS m
+      WHERE trim(m.map) <> ''
+        AND EXISTS (
+          SELECT 1
+          FROM match_participants AS p
+          WHERE p.match_id = m.id
+        )
+      ORDER BY m.created_at ASC, m.id ASC
     `).all();
     return rows
       .slice(-limit)

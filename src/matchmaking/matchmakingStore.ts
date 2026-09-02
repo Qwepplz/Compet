@@ -62,6 +62,7 @@ export interface MatchMapSelectionState {
 export interface MatchRoomRecord {
   id: string;
   phase: MatchPhase;
+  dev?: true;
   teamA: MatchTeam;
   teamB: MatchTeam;
   humanAccountIds?: string[];
