@@ -8,6 +8,7 @@ import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
 import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
 import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
+import type { GamePresenceChange, PresenceService } from "../presence/presenceService.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { CompletedMatchRecord, MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
@@ -198,6 +199,7 @@ type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
 export interface MatchExecutorPort {
   prepare(plan: MatchPlan): Promise<MatchConnectInfo>;
   deleteMatchArtifacts?(matchId: string): Promise<void>;
+  stopGameServerPresence?(matchId: string): Promise<void>;
 }
 
 export interface MatchDatabaseBackup {
@@ -216,6 +218,7 @@ export interface MatchmakingServiceDeps {
   records?: Pick<MatchRecordStore, "appendEvent" | "completeMatch" | "cleanupCompletedMatchFiles" | "deleteMatch" | "listPlayerCompletedMatches" | "listRecentMatchMaps" | "readCompletedMatch" | "readMatchPlan" | "saveMatchPlan" | "saveStatus">;
   rankme?: RankmeScoreReader;
   events?: { publish(event: RealtimeEvent): void };
+  presence?: Pick<PresenceService, "get" | "replaceInGameAccounts">;
   steamPersonas?: {
     displayName(steam64: string): string;
   };
@@ -452,6 +455,21 @@ export class MatchmakingService {
     });
   }
 
+  updateGameServerPresence(matchId: string, steam64s: readonly string[]): Promise<void> {
+    return this.enqueueMutation(async () => {
+      const room = (await this.deps.store.listRooms()).find((candidate) => (
+        candidate.id === matchId && !isTerminalMatchPhase(candidate.phase)
+      ));
+      if (!room || !this.deps.presence) return;
+
+      const activeSteam64s = new Set(steam64s.filter((steam64) => steam64.trim().length > 0));
+      const inGameAccountIds = this.humanParticipantsForRoom(room)
+        .filter((participant) => participant.steam64 && activeSteam64s.has(participant.steam64))
+        .map((participant) => participant.accountId as string);
+      await this.publishGamePresenceChanges(this.deps.presence.replaceInGameAccounts(inGameAccountIds));
+    });
+  }
+
   inviteToParty(ownerAccountId: string, toAccountId: string): Promise<PartyInvitationDto> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(toAccountId);
@@ -473,6 +491,7 @@ export class MatchmakingService {
       const friendList = await this.deps.friends?.listFriends(ownerAccountId);
       const friend = friendList?.friends.find((candidate) => candidate.accountId === toAccountId);
       if (!friend) throw new Error("party invite target is not a friend");
+      if (this.deps.presence?.get(toAccountId).inGame) throw new Error("party invitation target is in game");
 
       const invitation: PartyInvitationRecord = {
         id: this.idFactory(),
@@ -1487,7 +1506,10 @@ export class MatchmakingService {
       const connect = await this.deps.executor.prepare(plan);
       const latestRooms = await this.deps.store.listRooms();
       const latestRoom = latestRooms.find((candidate) => candidate.id === room.id) ?? preparing;
-      if (!isServerManagedPhase(latestRoom.phase)) return latestRoom;
+      if (!isServerManagedPhase(latestRoom.phase)) {
+        await this.clearGameServerPresenceForRoom(preparing);
+        return latestRoom;
+      }
 
       const roomsToSave = latestRooms.some((candidate) => candidate.id === room.id) ? latestRooms : rooms;
       const connected: MatchRoomRecord = {
@@ -1948,6 +1970,7 @@ export class MatchmakingService {
     const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
     await this.deps.store.saveRooms(updatedRooms);
     await this.unlockPartyForRoom(failedRoom, failedAt);
+    await this.clearGameServerPresenceForRoom(room);
     await this.emitMatchFailure({
       type: "match_failed",
       matchId: room.id,
@@ -1956,6 +1979,34 @@ export class MatchmakingService {
       ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
     });
     return failedRoom;
+  }
+
+  private async clearGameServerPresenceForRoom(room: MatchRoomRecord): Promise<void> {
+    if (!isServerManagedPhase(room.phase)) return;
+    try {
+      const presence = this.deps.presence;
+      if (presence) await this.publishGamePresenceChanges(presence.replaceInGameAccounts([]));
+    } catch (error) {
+      process.stderr.write(
+        `Failed to clear game server presence for ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`,
+      );
+    }
+    void Promise.resolve()
+      .then(() => this.deps.executor?.stopGameServerPresence?.(room.id))
+      .catch(() => undefined);
+  }
+
+  private async publishGamePresenceChanges(changes: readonly GamePresenceChange[]): Promise<void> {
+    for (const change of changes) {
+      const friendList = await this.deps.friends?.listFriends(change.accountId);
+      const accountIds = [...new Set(friendList?.friends.map((friend) => friend.accountId) ?? [])];
+      await this.emit({
+        type: "game_presence_updated",
+        accountId: change.accountId,
+        accountIds,
+        inGame: change.inGame,
+      });
+    }
   }
 
   private async unlockPartyForRoom(room: MatchRoomRecord, updatedAt: string): Promise<void> {

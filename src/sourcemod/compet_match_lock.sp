@@ -71,6 +71,10 @@ public void OnClientPutInServer(int client) {
   CaptureClientIdentity(client);
 }
 
+public void OnClientDisconnect_Post(int client) {
+  WriteStatusFiles();
+}
+
 public void OnClientPostAdminCheck(int client) {
   if (!g_LockEnabled || IsFakeClient(client)) {
     return;
@@ -183,6 +187,7 @@ public Action Timer_ApplyClientLock(Handle timer, int userId) {
   int client = GetClientOfUserId(userId);
   if (client > 0 && IsClientInGame(client) && !IsFakeClient(client)) {
     ApplyClientLock(client, false, CS_TEAM_NONE);
+    WriteStatusFiles();
   }
   return Plugin_Stop;
 }

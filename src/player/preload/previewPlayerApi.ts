@@ -44,6 +44,7 @@ const previewFriends: PlayerFriendListDto = {
       steam64: "76561198000000011",
       steamPersonaName: "Alpha",
       online: true,
+      inGame: false,
       createdAt,
     },
     {
@@ -53,6 +54,28 @@ const previewFriends: PlayerFriendListDto = {
       steam64: "76561198000000012",
       steamPersonaName: "Bravo",
       online: false,
+      inGame: false,
+      lastSeenAt: createdAt,
+      createdAt,
+    },
+    {
+      friendshipId: "preview-friend-3",
+      accountId: "preview-friend-charlie",
+      displayName: "Charlie",
+      steam64: "76561198000000013",
+      steamPersonaName: "Charlie",
+      online: true,
+      inGame: true,
+      createdAt,
+    },
+    {
+      friendshipId: "preview-friend-4",
+      accountId: "preview-friend-delta",
+      displayName: "Delta",
+      steam64: "76561198000000014",
+      steamPersonaName: "Delta",
+      online: false,
+      inGame: true,
       lastSeenAt: createdAt,
       createdAt,
     },
@@ -179,13 +202,14 @@ export function createPreviewPlayerApi() {
       const normalized = query.trim();
       return previewFriends.friends
         .filter((friend) => !normalized || friend.displayName.includes(normalized))
-        .map(({ accountId, displayName, steam64, steamPersonaName, steamAvatarUrl, online, lastSeenAt }) => ({
+        .map(({ accountId, displayName, steam64, steamPersonaName, steamAvatarUrl, online, inGame, lastSeenAt }) => ({
           accountId,
           displayName,
           steam64,
           steamPersonaName,
           steamAvatarUrl,
           online,
+          inGame,
           lastSeenAt,
         }));
     },
@@ -215,6 +239,7 @@ export function createPreviewPlayerApi() {
       displayName: accountId,
       steam64: accountId,
       online: true,
+      inGame: false,
       fromAccountId: previewAccount.id,
       toAccountId: accountId,
       status: "pending",

@@ -3,6 +3,7 @@ import { TeamOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendDto, PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
+import { resolveFriendStatus } from "../friendStatus.js";
 import { SteamAvatar } from "./SteamAvatar.js";
 import { playerAccountLabel } from "../playerDisplay.js";
 
@@ -187,15 +188,22 @@ export function FriendsPanel({
         {friends.incomingRequests.length > 0 ? (
           <div className="player-social-group player-social-group--pending">
             <div className="player-social-list">
-              {friends.incomingRequests.map((request) => (
+              {friends.incomingRequests.map((request) => {
+                const status = resolveFriendStatus(request);
+                return (
                 <div className="player-social-row" key={request.id}>
-                  <SteamAvatar avatarUrl={request.steamAvatarUrl} label={request.displayName} />
+                  <SteamAvatar
+                    className={`faceit-avatar player-social-avatar--${status.tone}`}
+                    avatarUrl={request.steamAvatarUrl}
+                    label={request.displayName}
+                  />
                   <div className="player-social-row-main">
                     <strong>{request.displayName}</strong>
                     <span>好友请求</span>
-                    <span className={request.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
-                      {request.online ? "在线" : "离线"}
+                    <span className={`player-status-pill${status.tone === "offline" ? " player-status-pill--muted" : ""}`}>
+                      {status.label}
                     </span>
+                    {status.tone === "offline" && request.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(request.lastSeenAt)}</span> : null}
                   </div>
                   <div className="player-social-row-actions">
                     <Button
@@ -217,7 +225,8 @@ export function FriendsPanel({
                     </Button>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
         ) : null}
@@ -225,7 +234,9 @@ export function FriendsPanel({
         {friends.friends.length > 0 ? (
           <div className="player-social-group">
             <div className="player-social-list">
-              {friends.friends.map((friend) => (
+              {friends.friends.map((friend) => {
+                const status = resolveFriendStatus(friend);
+                return (
                 <Dropdown
                   key={friend.friendshipId}
                   trigger={["contextMenu"]}
@@ -251,20 +262,21 @@ export function FriendsPanel({
                 >
                   <div className="player-social-row">
                     <SteamAvatar
-                      className={friend.online ? "faceit-avatar player-social-avatar--online" : "faceit-avatar"}
+                      className={`faceit-avatar player-social-avatar--${status.tone}`}
                       avatarUrl={friend.steamAvatarUrl}
                       label={friend.displayName}
                     />
                     <div className="player-social-row-main">
                       <strong>{friend.displayName}</strong>
-                      <span className={friend.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
-                        {friend.online ? "在线" : "离线"}
+                      <span className={`player-status-pill${status.tone === "offline" ? " player-status-pill--muted" : ""}`}>
+                        {status.label}
                       </span>
-                      {!friend.online && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt)}</span> : null}
+                      {status.tone === "offline" && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt)}</span> : null}
                     </div>
                   </div>
                 </Dropdown>
-              ))}
+                );
+              })}
             </div>
           </div>
         ) : null}
@@ -302,18 +314,23 @@ export function FriendsPanel({
           {searchResults.length > 0 ? (
             <div className="player-social-list">
               {searchResults.map((result) => {
+                const status = resolveFriendStatus(result);
                 const isSelf = result.accountId === accountId;
                 const isFriend = friendIds.has(result.accountId);
                 const hasPending = pendingAccountIds.has(result.accountId) || isSelf;
                 return (
                   <div className="player-social-row" key={result.accountId}>
-                    <SteamAvatar avatarUrl={result.steamAvatarUrl} label={result.displayName} />
+                    <SteamAvatar
+                      className={`faceit-avatar player-social-avatar--${status.tone}`}
+                      avatarUrl={result.steamAvatarUrl}
+                      label={result.displayName}
+                    />
                     <div className="player-social-row-main">
                       <strong>{result.displayName}</strong>
-                      <span className={result.online ? "player-status-pill" : "player-status-pill player-status-pill--muted"}>
-                        {result.online ? "在线" : "离线"}
+                      <span className={`player-status-pill${status.tone === "offline" ? " player-status-pill--muted" : ""}`}>
+                        {status.label}
                       </span>
-                      {!result.online && result.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(result.lastSeenAt)}</span> : null}
+                      {status.tone === "offline" && result.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(result.lastSeenAt)}</span> : null}
                     </div>
                     <Button
                       aria-label="发送好友请求"

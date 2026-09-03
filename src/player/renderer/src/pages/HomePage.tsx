@@ -4,6 +4,7 @@ import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
+import { resolveFriendStatus } from "../friendStatus.js";
 import { formatMatchmakingElapsed } from "../matchTimers.js";
 import { playerAccountLabel } from "../playerDisplay.js";
 
@@ -43,7 +44,7 @@ function slotAccountId(index: number, account: AccountView | null, party: Player
 }
 
 function canInviteFriend(friend: PlayerFriendDto, party: PlayerPartyDto | null, account: AccountView | null): boolean {
-  if (!friend.online) return false;
+  if (!resolveFriendStatus(friend).inviteable) return false;
   if (friend.accountId === account?.id) return false;
   if (party && party.memberAccountIds.length >= PARTY_SLOT_COUNT) return false;
   return !(party?.memberAccountIds.includes(friend.accountId) ?? false);
@@ -166,13 +167,14 @@ export function HomePage({
           {friends.friends.length > 0 ? (
             friends.friends.map((friend) => {
               const label = friend.displayName || "玩家";
+              const status = resolveFriendStatus(friend);
               const inviteEnabled = Boolean(onInviteFriend && canInviteFriend(friend, party, account));
               return (
                 <div className="faceit-invite-row" key={friend.friendshipId}>
                   <SteamAvatar avatarUrl={friend.steamAvatarUrl} label={label} />
                   <div className="faceit-invite-main">
                     <strong>{label}</strong>
-                    <span>{friend.online ? "在线" : "离线"}</span>
+                    <span>{status.label}</span>
                   </div>
                   <Button
                     aria-label={`邀请 ${label}`}

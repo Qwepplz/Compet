@@ -97,6 +97,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
           process.stderr.write(`Failed to complete match after srcds exit: ${error instanceof Error ? error.message : String(error)}\n`);
         });
       },
+      onGameServerPresence: (matchId, steam64s) => matchmaking?.updateGameServerPresence(matchId, steam64s),
     });
     const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
     const matchmakingService = new MatchmakingService({
@@ -110,6 +111,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       rankme,
       events,
       steamPersonas,
+      presence,
     });
     await matchmakingService.recoverCompletedMatches();
     await matchmakingService.resumePendingTimeouts();

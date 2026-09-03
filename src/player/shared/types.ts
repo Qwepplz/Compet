@@ -75,6 +75,7 @@ export type PlayerRealtimeEvent =
       connectionCount: number;
       lastSeenAt?: string;
     }>
+  | PlayerRealtimeEventWithSeq<{ type: "game_presence_updated"; accountId: string; inGame: boolean }>
   | PlayerRealtimeEventWithSeq<{ type: "friend_request_received"; accountId: string; request: PlayerFriendRequestDto }>
   | PlayerRealtimeEventWithSeq<{ type: "friend_request_resolved"; accountId: string; request: PlayerFriendRequestDto }>
   | PlayerRealtimeEventWithSeq<{ type: "friend_list_refresh"; accountId: string }>

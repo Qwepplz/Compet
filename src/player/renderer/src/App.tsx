@@ -68,6 +68,32 @@ const STARTUP_UPDATE_MAX_ATTEMPTS = 5;
 const STARTUP_UPDATE_RETRY_DELAY_MS = 1_000;
 let startupInitializationStarted = false;
 
+type FriendPresenceEntry = {
+  accountId?: string;
+  fromAccountId?: string;
+  toAccountId?: string;
+  online?: boolean;
+  inGame?: boolean;
+  lastSeenAt?: string;
+};
+
+function updateFriendPresenceEntries(
+  currentFriends: PlayerFriendListDto,
+  accountId: string,
+  update: (entry: FriendPresenceEntry) => FriendPresenceEntry,
+): PlayerFriendListDto {
+  const applyEntry = <T extends FriendPresenceEntry>(entry: T): T => {
+    const matchesAccount = entry.accountId === accountId || entry.fromAccountId === accountId || entry.toAccountId === accountId;
+    return matchesAccount ? update(entry) as T : entry;
+  };
+
+  return {
+    friends: currentFriends.friends.map(applyEntry),
+    incomingRequests: currentFriends.incomingRequests.map(applyEntry),
+    outgoingRequests: currentFriends.outgoingRequests.map(applyEntry),
+  };
+}
+
 function remainingStartupMs(deadline: number): number {
   return Math.max(0, Math.ceil(deadline - performance.now()));
 }
@@ -651,6 +677,9 @@ export function App() {
       case "presence_updated":
         setFriends((current) => applyPresenceUpdate(current, event.accountId, event.online, event.lastSeenAt));
         return;
+      case "game_presence_updated":
+        setFriends((current) => applyGamePresenceUpdate(current, event.accountId, event.inGame));
+        return;
       case "friend_request_received":
         resolvedFriendRequestIds.current.delete(event.request.id);
         setFriends((current) => {
@@ -893,26 +922,15 @@ export function App() {
   }
 
   function applyPresenceUpdate(currentFriends: PlayerFriendListDto, accountId: string, online: boolean, lastSeenAt?: string): PlayerFriendListDto {
-    const applyEntry = <T extends { accountId?: string; fromAccountId?: string; toAccountId?: string; online?: boolean; lastSeenAt?: string }>(
-      entry: T,
-      targetAccountId: string,
-    ): T => {
-      const matchesAccount = entry.accountId === targetAccountId || entry.fromAccountId === targetAccountId || entry.toAccountId === targetAccountId;
-      if (!matchesAccount) {
-        return entry;
-      }
-      return {
-        ...entry,
-        online,
-        lastSeenAt: online ? undefined : lastSeenAt ?? entry.lastSeenAt,
-      };
-    };
+    return updateFriendPresenceEntries(currentFriends, accountId, (entry) => ({
+      ...entry,
+      online,
+      lastSeenAt: online ? undefined : lastSeenAt ?? entry.lastSeenAt,
+    }));
+  }
 
-    return {
-      friends: currentFriends.friends.map((friend) => applyEntry(friend, accountId)),
-      incomingRequests: currentFriends.incomingRequests.map((request) => applyEntry(request, accountId)),
-      outgoingRequests: currentFriends.outgoingRequests.map((request) => applyEntry(request, accountId)),
-    };
+  function applyGamePresenceUpdate(currentFriends: PlayerFriendListDto, accountId: string, inGame: boolean): PlayerFriendListDto {
+    return updateFriendPresenceEntries(currentFriends, accountId, (entry) => ({ ...entry, inGame }));
   }
 
   async function refreshFriendsList() {

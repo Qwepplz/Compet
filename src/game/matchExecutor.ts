@@ -6,6 +6,7 @@ import type { GameServerConfig } from "../config/config.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
+import { GameServerPresenceMonitor } from "./gameServerPresenceMonitor.js";
 import {
   competMatchStatsPath,
   readCompetMatchStatsReport,
@@ -39,6 +40,7 @@ export interface MatchExecutorOptions {
   events?: Pick<RealtimeEventBus, "publish">;
   config: GameServerConfig;
   onServerExit?: (matchId: string, report: MatchServerExitReport) => Promise<void> | void;
+  onGameServerPresence?: (matchId: string, steam64s: readonly string[]) => Promise<void> | void;
   emptyServerWatchdog?: EmptyServerWatchdogConfig;
 }
 
@@ -72,6 +74,8 @@ const WARMUP_CFG_LINES = [
 ];
 
 export class MatchExecutor {
+  private readonly gameServerPresenceMonitors = new Map<string, GameServerPresenceMonitor>();
+
   constructor(private readonly options: MatchExecutorOptions) {}
 
   async prepare(matchPlan: MatchPlan): Promise<MatchConnectInfo> {
@@ -100,9 +104,20 @@ export class MatchExecutor {
       emptyServerWatchdog.start();
       throw error;
     }
-    this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
+    const gameServerPresenceMonitor = this.createGameServerPresenceMonitor(matchPlan.id);
+    if (gameServerPresenceMonitor) {
+      this.gameServerPresenceMonitors.set(matchPlan.id, gameServerPresenceMonitor);
+      gameServerPresenceMonitor.start();
+    }
+    this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog, gameServerPresenceMonitor);
     emptyServerWatchdog.start();
     return connect;
+  }
+
+  async stopGameServerPresence(matchId: string): Promise<void> {
+    const monitor = this.gameServerPresenceMonitors.get(matchId);
+    if (!monitor) return;
+    await this.stopGameServerPresenceMonitor(matchId, monitor);
   }
 
   async deleteMatchArtifacts(matchId: string): Promise<void> {
@@ -148,17 +163,41 @@ export class MatchExecutor {
     spec: RunCsgoLaunchSpec,
     launched: LaunchedGameServer,
     emptyServerWatchdog: EmptyServerWatchdog,
+    gameServerPresenceMonitor?: GameServerPresenceMonitor,
   ): void {
+    const stopMonitors = () => {
+      emptyServerWatchdog.stop();
+      if (gameServerPresenceMonitor) {
+        void this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor).catch(() => undefined);
+      }
+    };
     const publishExit = (exitInfo: GameServerExitInfo) => {
       emptyServerWatchdog.stop();
-      this.publishServerExit(matchId, exitInfo);
+      const stopped = gameServerPresenceMonitor
+        ? this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor)
+        : Promise.resolve();
+      void stopped
+        .catch(() => undefined)
+        .then(() => this.publishServerExit(matchId, exitInfo));
     };
 
     if (!this.options.onServerExit) {
       if (spec.exitIndicatesServerExit) {
         void launched.waitForExit()
-          .then(() => emptyServerWatchdog.stop())
-          .catch(() => undefined);
+          .then(stopMonitors)
+          .catch(stopMonitors);
+      }
+      if (spec.serverExitMonitor && gameServerPresenceMonitor) {
+        void waitForSourceServerExit(spec.serverExitMonitor)
+          .then(stopMonitors)
+          .catch(stopMonitors);
+      }
+      if (
+        gameServerPresenceMonitor
+        && !spec.exitIndicatesServerExit
+        && !spec.serverExitMonitor
+      ) {
+        stopMonitors();
       }
       return;
     }
@@ -178,7 +217,7 @@ export class MatchExecutor {
             output: [formatServerExitMonitorOutput(result, spec.serverExitMonitor)],
           });
         })
-        .catch(() => undefined);
+        .catch(stopMonitors);
     }
   }
 
@@ -205,6 +244,26 @@ export class MatchExecutor {
       config: this.options.emptyServerWatchdog,
       records: this.options.records,
     });
+  }
+
+  private createGameServerPresenceMonitor(matchId: string): GameServerPresenceMonitor | undefined {
+    const onChange = this.options.onGameServerPresence;
+    if (!onChange) return undefined;
+    return new GameServerPresenceMonitor({
+      serverRoot: this.options.config.serverRoot,
+      matchId,
+      onChange: (steam64s) => onChange(matchId, steam64s),
+    });
+  }
+
+  private async stopGameServerPresenceMonitor(matchId: string, monitor: GameServerPresenceMonitor): Promise<void> {
+    try {
+      await monitor.stop();
+    } finally {
+      if (this.gameServerPresenceMonitors.get(matchId) === monitor) {
+        this.gameServerPresenceMonitors.delete(matchId);
+      }
+    }
   }
 }
 

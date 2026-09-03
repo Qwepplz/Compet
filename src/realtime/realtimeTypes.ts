@@ -12,6 +12,7 @@ export type RealtimeEvent =
       connectionCount: number;
       lastSeenAt?: string;
     }>
+  | RealtimeEventWithSeq<{ type: "game_presence_updated"; accountId: string; accountIds: string[]; inGame: boolean }>
   | RealtimeEventWithSeq<{ type: "friend_request_received"; accountId: string; request: unknown }>
   | RealtimeEventWithSeq<{ type: "friend_request_resolved"; accountId: string; request: unknown }>
   | RealtimeEventWithSeq<{ type: "friend_list_refresh"; accountId: string }>

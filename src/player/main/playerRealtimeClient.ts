@@ -406,6 +406,7 @@ function sanitizeRealtimeEvent(message: unknown): PlayerRealtimeEvent | undefine
     case "presence_updated":
     case "friend_list_refresh":
       return message as PlayerRealtimeEvent;
+    case "game_presence_updated":
     case "friend_request_received":
     case "friend_request_resolved":
     case "party_updated":

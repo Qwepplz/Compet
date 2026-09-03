@@ -16,6 +16,7 @@ export interface FriendSearchResult {
   steamPersonaName?: string;
   steamAvatarUrl?: string;
   online: boolean;
+  inGame: boolean;
   lastSeenAt?: string;
 }
 
@@ -309,6 +310,7 @@ export class FriendService {
       displayName: steam64 || "玩家",
       steam64,
       online: presence.online,
+      inGame: presence.inGame,
       lastSeenAt: presence.lastSeenAt,
     };
   }

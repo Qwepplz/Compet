@@ -1994,6 +1994,14 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   box-shadow: 0 0 0 2px #20c76a, 0 0 10px rgba(32, 199, 106, 0.42);
 }
 
+.player-social-avatar--online-game {
+  box-shadow: 0 0 0 2px #fa8c16, 0 0 10px rgba(250, 140, 22, 0.42);
+}
+
+.player-social-avatar--offline-game {
+  box-shadow: 0 0 0 2px #ff4d4f, 0 0 10px rgba(255, 77, 79, 0.42);
+}
+
 .player-social-row-main {
   display: flex;
   flex-wrap: wrap;
