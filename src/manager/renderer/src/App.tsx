@@ -1,4 +1,4 @@
-import { Button, Card, message, Space, Typography } from "antd";
+import { Button, Card, message, Space, Spin, Typography } from "antd";
 import { useEffect, useState } from "react";
 import type { BootstrapAdminInput, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus } from "../../shared/types.js";
 import { isManagerAuthRequired, managerApi } from "./api/managerApi.js";
@@ -19,6 +19,7 @@ export function App() {
   const [status, setStatus] = useState<ServiceStatus>(initialStatus);
   const [page, setPage] = useState("overview");
   const [loggedIn, setLoggedIn] = useState(false);
+  const [bootstrapRequired, setBootstrapRequired] = useState<boolean | null>(null);
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
   const [savedLogin, setSavedLogin] = useState<SavedLoginCredentials | null>(null);
   const [serviceActionPending, setServiceActionPending] = useState(false);
@@ -27,6 +28,7 @@ export function App() {
   useEffect(() => {
     void refreshStatus();
     void loadSavedLogin();
+    void refreshBootstrapRequired();
   }, []);
 
   useEffect(() => {
@@ -80,6 +82,14 @@ export function App() {
       message.error(error instanceof Error ? error.message : "读取服务状态失败");
     }
   }
+  async function refreshBootstrapRequired() {
+    try {
+      setBootstrapRequired(await managerApi.bootstrapRequired());
+    } catch (error) {
+      setBootstrapRequired(false);
+      message.error(error instanceof Error ? error.message : "读取管理员初始化状态失败");
+    }
+  }
 
   async function startService() {
     if (serviceActionPending) return;
@@ -129,16 +139,27 @@ export function App() {
   }
 
   async function bootstrap(input: BootstrapAdminInput) {
+    if (serviceActionPending) return;
+    setServiceActionPending(true);
+    let bootstrapWritten = false;
     try {
       await managerApi.writeBootstrap(input);
+      bootstrapWritten = true;
       message.success("已写入 bootstrap 管理员文件");
       const nextStatus = await managerApi.startService();
       setStatus(nextStatus);
       if (nextStatus.state === "running") {
         await login(input.username, input.password, nextStatus);
       }
+      setBootstrapRequired(false);
     } catch (error) {
+      if (bootstrapWritten) {
+        await refreshStatus();
+        setBootstrapRequired(false);
+      }
       message.error(error instanceof Error ? error.message : "初始化管理员失败");
+    } finally {
+      setServiceActionPending(false);
     }
   }
 
@@ -216,10 +237,16 @@ export function App() {
       if (!isManagerAuthRequired()) message.error(error instanceof Error ? error.message : "修改密码失败");
     }
   }
+
+  if (bootstrapRequired === null) {
+    return <div className="auth-page"><Spin size="large" /></div>;
+  }
+
+  if (bootstrapRequired && !loggedIn) {
+    return <BootstrapPage onSubmit={bootstrap} pending={serviceActionPending} />;
+  }
+
   if (status.state === "failed" && !loggedIn) {
-    if (needsBootstrap(status)) {
-      return <BootstrapPage onSubmit={bootstrap} />;
-    }
     return <FailedStatusPage status={status} onStart={startService} onRefresh={refreshStatus} />;
   }
 
@@ -245,10 +272,6 @@ export function App() {
   );
 }
 
-function needsBootstrap(status: ServiceStatus): boolean {
-  const lastError = status.lastError?.toLowerCase() ?? "";
-  return lastError.includes("no accounts") || lastError.includes("bootstrap-admin") || lastError.includes("missing bootstrap") || lastError.includes("缺少 bootstrap") || lastError.includes("缺少bootstrap");
-}
 function FailedStatusPage({ status, onStart, onRefresh }: { status: ServiceStatus; onStart: () => Promise<void>; onRefresh: () => Promise<void> }) {
   return (
     <div className="auth-page">

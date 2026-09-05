@@ -11,6 +11,7 @@ export const managerApi = {
   startService: () => invoke<ServiceStatus>("service:start"),
   stopService: () => invoke<ServiceStatus>("service:stop"),
   restartService: () => invoke<ServiceStatus>("service:restart"),
+  bootstrapRequired: () => invoke<boolean>("bootstrap:required"),
   writeBootstrap: (input: unknown) => invoke("bootstrap:write", input),
   login: (username: string, password: string) => invoke("auth:login", username, password),
   loadSavedLogin: () => invoke("credentials:load"),

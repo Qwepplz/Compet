@@ -17,6 +17,7 @@ export const managerApi = {
   startService: () => window.managerApi.startService(),
   stopService: () => window.managerApi.stopService(),
   restartService: () => window.managerApi.restartService(),
+  bootstrapRequired: () => window.managerApi.bootstrapRequired(),
   writeBootstrap: (input: BootstrapAdminInput) => window.managerApi.writeBootstrap(input) as Promise<string>,
   login: async (username: string, password: string) => {
     const result = await window.managerApi.login(username, password) as LoginResult;

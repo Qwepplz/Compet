@@ -20,6 +20,7 @@ import type { ActivityLogInput, LogActor } from "../../shared/activityLog.js";
 import { MatchRecordStore } from "../../records/matchRecordStore.js";
 import { MATCH_HISTORY_PAGE_SIZE, matchHistoryMatchIdSchema, matchHistoryPageSchema, toMatchHistoryEntry } from "../../records/matchHistory.js";
 import { openCompetDatabase } from "../../storage/competDatabase.js";
+import { pathExists } from "../../storage/jsonFile.js";
 import { SerialQueue } from "../../storage/serialQueue.js";
 import type { DatabaseSync } from "node:sqlite";
 
@@ -92,8 +93,9 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
     }
   }
 
-  async function ensureOfflineAccounts(): Promise<OfflineAccountsContext | undefined> {
-    if (deps.service.status().state !== "stopped") {
+  async function ensureOfflineAccounts(allowFailed = false): Promise<OfflineAccountsContext | undefined> {
+    const serviceState = deps.service.status().state;
+    if (serviceState !== "stopped" && (!allowFailed || serviceState !== "failed")) {
       closeOfflineAccountsNow();
       return undefined;
     }
@@ -133,9 +135,10 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   async function withOfflineAccounts<T>(
     offlineOperation: (offline: OfflineAccountsContext) => Promise<T>,
     onlineOperation: () => Promise<T>,
+    allowFailed = false,
   ): Promise<T> {
     return offlineAccountsLifecycle.enqueue(async () => {
-      const offline = await ensureOfflineAccounts();
+      const offline = await ensureOfflineAccounts(allowFailed);
       return offline ? offlineOperation(offline) : onlineOperation();
     });
   }
@@ -287,7 +290,7 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   ipcMain.handle("service:status", () => offlineAccountsLifecycle.enqueue(async () => {
     const current = deps.service.status();
     const status = await statusWithExternalProbe(deps);
-    if (current.state === "stopped" && status.state === "running") closeOfflineAccountsNow();
+    if ((current.state === "stopped" || current.state === "failed") && status.state === "running") closeOfflineAccountsNow();
     return status;
   }));
   ipcMain.handle("service:start", () => offlineAccountsLifecycle.enqueue(async () => {
@@ -313,6 +316,15 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
     deps.setApiClient(apiClient);
     return waitForServiceReady(deps.service, apiClient);
   }));
+  ipcMain.handle("bootstrap:required", () => withOfflineAccounts(
+    async (offline) => {
+      if ((await offline.accounts.listAccounts()).length > 0) return false;
+      const config = await deps.configStore.load();
+      return !(await pathExists(path.join(config.dataDir, "bootstrap-admin.json")));
+    },
+    async () => false,
+    true,
+  ));
   ipcMain.handle("bootstrap:write", async (_event, input) => {
     const filePath = await writeBootstrapAdminFile((await deps.configStore.load()).dataDir, input);
     await logActivity({ source: "account", level: "info", message: "Bootstrap administrator file written", actor: managerActor, context: { filePath } });
