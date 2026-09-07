@@ -8,6 +8,7 @@ import type { SessionService } from "../auth/sessionService.js";
 import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
+import type { PresenceService } from "../presence/presenceService.js";
 import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
@@ -25,6 +26,7 @@ export interface RouteDeps {
   records?: Pick<MatchRecordStore, "listPlayerCompletedMatches" | "readPlayerCompletedMatch">;
   rankme?: RankmeScoreReader;
   events?: RealtimeEventBus;
+  presence?: PresenceService;
 }
 
 type PublicAccount = Omit<AccountRecord, "passwordHash">;
@@ -234,7 +236,14 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
   app.get("/admin/accounts", async (request) => {
     await authenticateRequest(request, deps);
     requireAdmin(request);
-    return { accounts: (await deps.accounts.listAccounts()).map(publicAccount) };
+    return {
+      accounts: (await deps.accounts.listAccounts()).map((account) => {
+        const view = publicAccount(account);
+        if (!deps.presence) return view;
+        const { online, inGame } = deps.presence.get(account.id);
+        return { ...view, online, inGame };
+      }),
+    };
   });
 
   app.post("/admin/accounts", async (request, reply) => {

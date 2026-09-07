@@ -61,6 +61,8 @@ export interface AccountView {
   role: AccountRole;
   enabled: boolean;
   dev?: boolean;
+  online?: boolean;
+  inGame?: boolean;
   mustChangePassword: boolean;
   lastLoginAt?: string;
   createdAt: string;

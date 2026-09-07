@@ -5,7 +5,6 @@ import { ZodError } from "zod";
 import { HttpError } from "../api/httpErrors.js";
 import { installApiRateLimit } from "../api/rateLimit.js";
 import { registerRoutes, type RouteDeps } from "../api/routes.js";
-import type { PresenceService } from "../presence/presenceService.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import { registerWebSocket } from "../realtime/registerWebSocket.js";
 import { installHttpActivityLogging, logRealtimeEvent, recordHttpActivityError, writeActivityLog } from "./activityLogger.js";
@@ -13,7 +12,6 @@ import { installHttpActivityLogging, logRealtimeEvent, recordHttpActivityError, 
 export interface CreateServerOptions extends RouteDeps {
   https?: ServerOptions;
   events?: RealtimeEventBus;
-  presence?: PresenceService;
 }
 
 export async function createServer(options: CreateServerOptions) {

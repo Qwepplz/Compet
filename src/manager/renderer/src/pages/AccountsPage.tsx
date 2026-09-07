@@ -27,6 +27,35 @@ function showAccountError(error: unknown, fallback: string): void {
   message.error(error instanceof Error ? error.message : fallback);
 }
 
+export function AccountStatus({ online, inGame }: Pick<AccountView, "online" | "inGame">) {
+  if (typeof online !== "boolean" || typeof inGame !== "boolean") {
+    return <span title="状态暂不可用" aria-label="状态暂不可用">—</span>;
+  }
+
+  const color = inGame
+    ? (online ? "#fa8c16" : "#ff4d4f")
+    : (online ? "#52c41a" : "#8c8c8c");
+  const label = inGame
+    ? (online ? "游戏中且在线" : "游戏中且离线")
+    : (online ? "在线" : "离线");
+
+  return (
+    <span
+      role="img"
+      title={label}
+      aria-label={label}
+      style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", backgroundColor: color }}
+    />
+  );
+}
+
+export function withoutAccountPresence(account: AccountView): AccountView {
+  const nextAccount = { ...account };
+  delete nextAccount.online;
+  delete nextAccount.inGame;
+  return nextAccount;
+}
+
 export function AccountsPage() {
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [matchHistoryAccount, setMatchHistoryAccount] = useState<AccountView | null>(null);
@@ -46,21 +75,50 @@ export function AccountsPage() {
   const deletingIdsRef = useRef<Set<string>>(new Set());
   const matchHistoryRequestIdRef = useRef(0);
   const matchDetailRequestIdRef = useRef(0);
+  const mountedRef = useRef(false);
+  const accountRequestIdRef = useRef(0);
+  const accountRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [form] = Form.useForm<AccountFormValues>();
 
-  async function refresh() {
-    setLoading(true);
+  function clearAccountRefreshTimer() {
+    if (accountRefreshTimerRef.current === null) return;
+    clearTimeout(accountRefreshTimerRef.current);
+    accountRefreshTimerRef.current = null;
+  }
+
+  async function refresh(background = false) {
+    const requestId = ++accountRequestIdRef.current;
+    clearAccountRefreshTimer();
+    if (!mountedRef.current) return;
+    const current = () => mountedRef.current && requestId === accountRequestIdRef.current;
+    if (!background) setLoading(true);
     try {
-      setAccounts(await accountApi.list());
+      const nextAccounts = await accountApi.list();
+      if (current()) setAccounts(nextAccounts);
     } catch (error) {
-      showAccountError(error, "读取账号失败");
+      if (current()) {
+        setAccounts((currentAccounts) => currentAccounts.map(withoutAccountPresence));
+        if (!background) showAccountError(error, "读取账号失败");
+      }
     } finally {
-      setLoading(false);
+      if (!current()) return;
+      if (!background) setLoading(false);
+      if (!isManagerAuthRequired()) {
+        accountRefreshTimerRef.current = setTimeout(() => {
+          void refresh(true);
+        }, 3_000);
+      }
     }
   }
 
   useEffect(() => {
+    mountedRef.current = true;
     void refresh();
+    return () => {
+      mountedRef.current = false;
+      accountRequestIdRef.current += 1;
+      clearAccountRefreshTimer();
+    };
   }, []);
 
   function beginUpdating(id: string) {
@@ -102,6 +160,12 @@ export function AccountsPage() {
   const columns: TableProps<AccountView>["columns"] = [
     { title: "用户名", dataIndex: "username" },
     { title: "Steam64", dataIndex: "steam64", render: (value?: string) => value || "-" },
+    {
+      title: "状态",
+      width: 72,
+      align: "center",
+      render: (_: unknown, row: AccountView) => <AccountStatus online={row.online} inGame={row.inGame} />,
+    },
     {
       title: "启用",
       dataIndex: "enabled",
