@@ -42,7 +42,6 @@ export function AccountStatus({ online, inGame }: Pick<AccountView, "online" | "
   return (
     <span
       role="img"
-      title={label}
       aria-label={label}
       style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", backgroundColor: color }}
     />
