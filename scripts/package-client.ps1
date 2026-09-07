@@ -13,6 +13,7 @@ $supersededTarXz = Join-Path $artifacts "Compet-Client.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $launcherSource = Join-Path $repo "scripts\launcher\CompetLauncher.cs"
 $updaterSource = Join-Path $repo "scripts\launcher\CompetUpdater.cs"
+$iconSource = Join-Path $repo "packaging\assets\compet-icon.ico"
 $clientExe = "Compet Player Client.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
@@ -71,6 +72,26 @@ function Set-ExeVersionInfo {
     --set-file-version $version `
     --set-product-version $version
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
+}
+
+function Set-ExeIcon {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [Parameter(Mandatory = $true)][string]$IconPath
+  )
+
+  if (-not (Test-Path -LiteralPath $rcedit)) {
+    throw "Missing rcedit executable: $rcedit"
+  }
+  if (-not (Test-Path -LiteralPath $ExePath)) {
+    throw "Missing executable: $ExePath"
+  }
+  if (-not (Test-Path -LiteralPath $IconPath)) {
+    throw "Missing application icon: $IconPath"
+  }
+
+  & $rcedit $ExePath --set-icon $IconPath
+  if ($LASTEXITCODE -ne 0) { throw "rcedit icon update failed with exit code $LASTEXITCODE" }
 }
 
 function New-CSharpExe {
@@ -193,7 +214,7 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client\app-package.json", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
+$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client\app-package.json", "packaging\assets\compet-icon.ico", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
@@ -220,6 +241,7 @@ Set-ExeVersionInfo `
   -ProductName "Compet Player Client" `
   -OriginalFilename "Compet Updater.exe" `
   -InternalName "Compet Updater"
+Set-ExeIcon -ExePath $clientExePath -IconPath $iconSource
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 
 Copy-Item -LiteralPath (Join-Path $repo "out-player") -Destination $appRoot -Recurse

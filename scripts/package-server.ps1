@@ -13,6 +13,7 @@ $supersededTarXz = Join-Path $artifacts "Compet-Server.tar.xz"
 $electronDist = Join-Path $repo "node_modules\electron\dist"
 $launcherSource = Join-Path $repo "scripts\launcher\CompetLauncher.cs"
 $updaterSource = Join-Path $repo "scripts\launcher\CompetUpdater.cs"
+$iconSource = Join-Path $repo "packaging\assets\compet-icon.ico"
 $nodeRuntime = (Get-Command "node.exe" -ErrorAction Stop).Source
 $serverExe = "Compet Server Manager.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
@@ -139,6 +140,26 @@ function Set-ExeVersionInfo {
   )
   & $rcedit @rceditArgs
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
+}
+
+function Set-ExeIcon {
+  param(
+    [Parameter(Mandatory = $true)][string]$ExePath,
+    [Parameter(Mandatory = $true)][string]$IconPath
+  )
+
+  if (-not (Test-Path -LiteralPath $rcedit)) {
+    throw "Missing rcedit executable: $rcedit"
+  }
+  if (-not (Test-Path -LiteralPath $ExePath)) {
+    throw "Missing executable: $ExePath"
+  }
+  if (-not (Test-Path -LiteralPath $IconPath)) {
+    throw "Missing application icon: $IconPath"
+  }
+
+  & $rcedit $ExePath --set-icon $IconPath
+  if ($LASTEXITCODE -ne 0) { throw "rcedit icon update failed with exit code $LASTEXITCODE" }
 }
 
 function New-CSharpExe {
@@ -315,7 +336,7 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "packaging\server\profile-seed\human-index.json", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
+$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "packaging\server\profile-seed\human-index.json", "packaging\assets\compet-icon.ico", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
@@ -342,6 +363,7 @@ Set-ExeVersionInfo `
   -ProductName "Compet Server Manager" `
   -OriginalFilename "Compet Updater.exe" `
   -InternalName "Compet Updater"
+Set-ExeIcon -ExePath $serverExePath -IconPath $iconSource
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $appRoot "runtime\node") -Force | Out-Null
 Copy-Item -LiteralPath $nodeRuntime -Destination (Join-Path $appRoot "runtime\node\node.exe")

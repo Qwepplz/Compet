@@ -7,6 +7,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
+    "icon:generate": "tsx scripts/generate-app-icon.ts",
     "build": "pwsh -NoProfile -File scripts/clean-server-build.ps1 && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json",
     "manager:dev": "electron-vite dev",
@@ -43,6 +44,7 @@
     "electron": "^42.0.1",
     "electron-vite": "^5.0.0",
     "rcedit": "^5.0.1",
+    "sharp": "^0.35.4",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "utf-8-validate": "^6.0.6",
