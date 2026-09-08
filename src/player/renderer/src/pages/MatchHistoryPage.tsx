@@ -52,9 +52,20 @@ function RankmeScoreChange({ score, delta }: { score: number | null | undefined;
   );
 }
 
-function formatResultDate(completedAt: string, formatDateTime: (value: string | number | Date) => string): string {
+export function formatMatchHistoryDate(
+  completedAt: string,
+  currentYear = new Date().getFullYear(),
+): string {
   const date = new Date(completedAt);
-  return Number.isNaN(date.getTime()) ? "-" : formatDateTime(date);
+  if (Number.isNaN(date.getTime())) return "-";
+
+  const monthAndDay = `${date.getMonth() + 1}/${date.getDate()}`;
+  const datePart = date.getFullYear() === currentYear
+    ? monthAndDay
+    : `${date.getFullYear()}/${monthAndDay}`;
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  return `${datePart} ${hours}:${minutes}`;
 }
 
 function formatMapName(mapName: string): string {
@@ -102,8 +113,8 @@ function MatchHistoryRow({
   match: PlayerMatchHistoryEntryDto;
   onOpenMatch: (matchId: string) => void;
 }) {
-  const { formatDateTime, t } = useLanguage();
-  const date = formatResultDate(match.completedAt, formatDateTime);
+  const { t } = useLanguage();
+  const date = formatMatchHistoryDate(match.completedAt);
   const ratingTone = rating2Tone(match.self.rating2);
   const ratingProgress = rating2Progress(match.self.rating2);
   const selfScore = match.selfTeam === "teamA" ? match.score.team1 : match.score.team2;
