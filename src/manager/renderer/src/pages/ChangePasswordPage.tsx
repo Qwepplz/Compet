@@ -1,5 +1,6 @@
 import { Button, Card, Form, Input, Typography } from "antd";
 import { useState } from "react";
+import { useLanguage } from "../../../../language/react.js";
 
 interface ChangePasswordValues {
   currentPassword: string;
@@ -7,6 +8,7 @@ interface ChangePasswordValues {
 }
 
 export function ChangePasswordPage({ onChangePassword }: { onChangePassword: (currentPassword: string, newPassword: string) => Promise<void> }) {
+  const { t } = useLanguage();
   const [pending, setPending] = useState(false);
 
   async function handleFinish(values: ChangePasswordValues) {
@@ -20,19 +22,19 @@ export function ChangePasswordPage({ onChangePassword }: { onChangePassword: (cu
   }
   return (
     <div className="auth-page">
-      <Card className="auth-card" title="修改初始密码">
+      <Card className="auth-card" title={t("manager.auth.changePasswordTitle")}>
         <Typography.Paragraph type="secondary">
-          该管理员账号首次登录前需要设置新密码。
+          {t("manager.auth.changePasswordDescription")}
         </Typography.Paragraph>
         <Form<ChangePasswordValues> layout="vertical" onFinish={handleFinish}>
-          <Form.Item name="currentPassword" label="当前密码" rules={[{ required: true, message: "请输入当前密码" }]}> 
+          <Form.Item name="currentPassword" label={t("common.labels.currentPassword")} rules={[{ required: true, message: t("common.labels.currentPassword") }]}>
             <Input.Password autoComplete="current-password" disabled={pending} />
           </Form.Item>
-          <Form.Item name="newPassword" label="新密码" rules={[{ required: true, min: 8, message: "请输入至少 8 位新密码" }]}> 
+          <Form.Item name="newPassword" label={t("common.labels.newPassword")} rules={[{ required: true, min: 8, message: t("manager.accounts.passwordRule") }]}>
             <Input.Password autoComplete="new-password" disabled={pending} />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={pending}>
-            保存并进入
+            {t("common.actions.saveAndEnter")}
           </Button>
         </Form>
       </Card>

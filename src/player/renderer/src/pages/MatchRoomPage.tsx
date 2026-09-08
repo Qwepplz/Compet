@@ -9,6 +9,7 @@ import { formatReadyCountdown } from "../matchTimers.js";
 import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
 import { RandomMapReel } from "../components/RandomMapReel.js";
 import { participantDisplayName } from "../playerDisplay.js";
+import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
 
 interface MatchRoomPageProps {
   account: AccountView | null;
@@ -20,37 +21,37 @@ interface MatchRoomPageProps {
   onCopyText?: (text: string) => Promise<void>;
 }
 
-function phaseLabel(phase?: PlayerLiveMatchStateDto["phase"]): string | null {
+function phaseLabel(phase: PlayerLiveMatchStateDto["phase"] | undefined, t: LanguageContextValue["t"]): string | null {
   switch (phase) {
     case "ready":
-      return "准备确认";
+      return t("player.match.phase.ready");
     case "match_room":
-      return "比赛房间";
+      return t("player.match.phase.matchRoom");
     case "map_randomizing":
-      return "随机地图";
+      return t("player.match.phase.mapRandomizing");
     case "server_prepare":
-      return "服务器准备中";
+      return t("player.match.phase.serverPrepare");
     case "connect":
       return null;
     case "live":
-      return "比赛进行中";
+      return t("player.match.phase.live");
     case "completed":
-      return "已结束";
+      return t("player.match.phase.completed");
     case "failed":
-      return "失败";
+      return t("player.match.phase.failed");
     case "queue":
     default:
-      return "等待中";
+      return t("player.match.phase.waiting");
   }
 }
 
-function participantName(participant: PlayerMatchParticipantDto): string {
-  return participantDisplayName(participant);
+function participantName(participant: PlayerMatchParticipantDto, fallback: string): string {
+  return participantDisplayName(participant, fallback);
 }
 
-function participantBadge(participant: PlayerMatchParticipantDto): { variant: "gold" | "white"; title: string } | null {
-  if (participant.kind === "human") return { variant: "gold", title: "Player" };
-  if (participant.botCategory === "pro") return { variant: "white", title: "Pro-Bot" };
+function participantBadge(participant: PlayerMatchParticipantDto, t: LanguageContextValue["t"]): { variant: "gold" | "white"; title: string } | null {
+  if (participant.kind === "human") return { variant: "gold", title: t("common.labels.player") };
+  if (participant.botCategory === "pro") return { variant: "white", title: t("common.labels.proBot") };
   return null;
 }
 
@@ -61,13 +62,19 @@ function isReadyAnonymous(phase: string | undefined, participant: PlayerMatchPar
   return true;
 }
 
-function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | "right", accountId: string | undefined, phase?: string) {
+function renderTeam(
+  team: PlayerMatchTeamDto | null | undefined,
+  side: "left" | "right",
+  accountId: string | undefined,
+  phase: string | undefined,
+  t: LanguageContextValue["t"],
+) {
   if (!team) return null;
 
   return (
     <section className={`faceit-team-column faceit-team-column--${side}`}>
       <div className="faceit-team-title">
-        <span>Players</span>
+        <span>{t("common.labels.players")}</span>
         <div className="faceit-team-identity">
           {team.logoImage ? <img className="faceit-team-logo" src={team.logoImage} alt="" /> : null}
           <strong>{team.name}</strong>
@@ -77,10 +84,10 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
         {team.participants.map((participant) => {
           const isSelf = Boolean(accountId && participant.accountId === accountId);
           const anonymous = isReadyAnonymous(phase, participant, accountId);
-          const displayName = anonymous ? "已匹配玩家" : participantName(participant);
-          const avatarLabel = anonymous ? undefined : participantName(participant);
+          const displayName = anonymous ? t("player.match.anonymousPlayer") : participantName(participant, t("common.player.unknown"));
+          const avatarLabel = anonymous ? undefined : participantName(participant, t("common.player.unknown"));
           const avatarUrl = anonymous ? undefined : participant.steamAvatarUrl;
-          const badge = anonymous ? null : participantBadge(participant);
+          const badge = anonymous ? null : participantBadge(participant, t);
           return (
             <div className={`faceit-player-card${isSelf ? " faceit-player-card--self" : ""}`} key={participant.id}>
               <SteamAvatar className="faceit-player-avatar" avatarUrl={avatarUrl} label={avatarLabel} />
@@ -89,7 +96,7 @@ function renderTeam(team: PlayerMatchTeamDto | null | undefined, side: "left" | 
                   <strong>{displayName}</strong>
                   {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
                   {!anonymous && participant.isCaptain ? (
-                    <span className="faceit-captain-badge" aria-label="队长" title="队长">
+                    <span className="faceit-captain-badge" aria-label={t("common.labels.captain")} title={t("common.labels.captain")}>
                       <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                         <path
                           fillRule="evenodd"
@@ -119,16 +126,17 @@ export function MatchRoomPage({
   onMapRevealComplete,
   onCopyText,
 }: MatchRoomPageProps) {
+  const { t } = useLanguage();
   const connect = room?.connect;
   const selectedMap = getSelectedMap(room, nowMs);
-  const roomPhase = phaseLabel(room?.phase);
+  const roomPhase = phaseLabel(room?.phase, t);
   const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
   const selfReady = room?.ready?.find((entry) => entry.accountId === account?.id)?.ready === true;
   const [readyActionPending, setReadyActionPending] = useState<"accept" | "decline" | null>(null);
   const participantNames = new Map(
     [...(room?.teamA?.participants ?? []), ...(room?.teamB?.participants ?? [])]
-      .flatMap((participant) => (participant.accountId ? [[participant.accountId, participantName(participant)] as const] : [])),
+      .flatMap((participant) => (participant.accountId ? [[participant.accountId, participantName(participant, t("common.player.unknown"))] as const] : [])),
   );
 
   async function handleAcceptReady() {
@@ -155,7 +163,7 @@ export function MatchRoomPage({
     <div className="faceit-matchroom">
       <section className="faceit-match-header">
         <div className="faceit-match-status">
-          <strong>5v5 · BO1</strong>
+          <strong>{t("player.match.format")}</strong>
           {roomPhase ? <span>{roomPhase}</span> : null}
           {selectedMap ? <small>{formatMapName(selectedMap)}</small> : null}
         </div>
@@ -163,19 +171,19 @@ export function MatchRoomPage({
 
       {!room ? (
         <section className="faceit-empty-room">
-          <strong>暂无比赛房间</strong>
-          <span>等待匹配成功后进入 Matchroom。</span>
+          <strong>{t("player.match.roomEmpty")}</strong>
+          <span>{t("player.match.roomWaiting")}</span>
         </section>
       ) : (
         <div className="faceit-match-grid">
-          {renderTeam(room.teamA, "left", account?.id, room.phase)}
+          {renderTeam(room.teamA, "left", account?.id, room.phase, t)}
 
           <main className="faceit-center-panel">
             <div className="faceit-progress-line" />
 
             {selectedMap ? (
-              <section className="faceit-final-map-preview" aria-label="最终地图">
-                <span>最终地图</span>
+              <section className="faceit-final-map-preview" aria-label={t("player.match.finalMap")}>
+                <span>{t("player.match.finalMap")}</span>
                 <strong>{formatMapName(selectedMap)}</strong>
                 <span
                   className="faceit-final-map-thumb"
@@ -187,42 +195,42 @@ export function MatchRoomPage({
 
             {room.phase === "queue" ? (
               <section className="faceit-connect-panel" aria-live="polite">
-                <span>正在匹配</span>
+                <span>{t("common.state.matching")}</span>
                 <strong className="faceit-countdown"><Spin /></strong>
-                <small>正在确认匹配结果，请稍候。</small>
+                <small>{t("player.match.waitingForResult")}</small>
               </section>
             ) : null}
 
             {room.phase === "ready" ? (
               <section className="faceit-connect-panel">
-                <span>{readyCountdownStarted ? "准备倒计时" : "准备倒计时启动中"}</span>
+                <span>{readyCountdownStarted ? t("player.match.readyCountdown") : t("player.match.readyCountdownStarting")}</span>
                 <strong className="faceit-countdown">{readyCountdownStarted ? formatReadyCountdown(room.readyDeadlineAt, nowMs) : "--:--"}</strong>
                 <div className="faceit-ready-list">
                   {(room.ready ?? []).map((entry) => (
                     <div className="faceit-ready-row" key={entry.accountId}>
                       <span>{participantNames.get(entry.accountId) ?? entry.accountId}</span>
-                      <strong>{entry.ready ? "已准备" : "等待中"}</strong>
+                      <strong>{entry.ready ? t("common.state.ready") : t("common.state.waiting")}</strong>
                     </div>
                   ))}
                 </div>
                 {canUseReadyActions ? (
                   <div className="faceit-action-row">
                     <Button
-                      aria-label="准备"
+                      aria-label={t("player.match.ready")}
                       type="primary"
                       onClick={() => void handleAcceptReady()}
                       disabled={!onAcceptReady || !readyCountdownStarted || selfReady || Boolean(readyActionPending)}
                       loading={readyActionPending === "accept"}
                     >
-                      准备
+                      {t("player.match.ready")}
                     </Button>
                     <Button
-                      aria-label="拒绝本场"
+                      aria-label={t("player.match.decline")}
                       onClick={() => void handleDeclineReady()}
                       disabled={!onDeclineReady || !readyCountdownStarted || selfReady || Boolean(readyActionPending)}
                       loading={readyActionPending === "decline"}
                     >
-                      拒绝本场
+                      {t("player.match.decline")}
                     </Button>
                   </div>
                 ) : null}
@@ -234,18 +242,18 @@ export function MatchRoomPage({
                 ? <RandomMapReel mapSelection={room.mapSelection} onSettled={onMapRevealComplete} />
                 : (
                     <section className="faceit-connect-panel" aria-live="polite">
-                      <span>地图阶段</span>
-                      <strong>等待所有玩家进入</strong>
-                      <small>所有客户端完成页面切换后，服务器会同步启动随机地图。</small>
+                      <span>{t("player.match.mapStage")}</span>
+                      <strong>{t("player.match.waitingPlayers")}</strong>
+                      <small>{t("player.match.mapStageWaiting")}</small>
                     </section>
                   )
             ) : null}
 
             {room.phase === "match_room" || room.phase === "server_prepare" ? (
               <section className="faceit-connect-panel">
-                <span>{room.phase === "server_prepare" ? "Server" : "Match"}</span>
-                <strong>{room.phase === "server_prepare" ? "服务器准备中" : "最终分队"}</strong>
-                <small>等待 get5 比赛配置加载完成。</small>
+                <span>{room.phase === "server_prepare" ? t("common.labels.server") : t("common.labels.match")}</span>
+                <strong>{room.phase === "server_prepare" ? t("player.match.phase.serverPrepare") : t("player.match.finalTeams")}</strong>
+                <small>{t("player.match.waitingGet5")}</small>
               </section>
             ) : null}
 
@@ -253,30 +261,30 @@ export function MatchRoomPage({
               <section className="faceit-connect-panel">
                 {connect ? (
                   <Button
-                    aria-label="复制进服指令"
+                    aria-label={t("player.match.copyConnectCommand")}
                     type="primary"
                     className="faceit-connect-button"
                     onClick={() => void onCopyText?.(connect.connectCommand)}
                     disabled={!onCopyText}
                   >
-                    复制进服指令
+                    {t("player.match.copyConnectCommand")}
                   </Button>
                 ) : (
-                  <small>连接信息尚未下发。</small>
+                  <small>{t("player.match.connectUnavailable")}</small>
                 )}
               </section>
             ) : null}
 
             {room.phase === "completed" || room.phase === "failed" ? (
               <section className="faceit-connect-panel">
-                <span>{room.phase === "completed" ? "Match Completed" : "Match Failed"}</span>
-                <strong>{room.phase === "completed" ? "比赛已结束" : "比赛已关闭"}</strong>
-                <small>本场已结束，进服指令已失效。</small>
+                <span>{room.phase === "completed" ? t("common.status.matchCompleted") : t("common.status.matchFailed")}</span>
+                <strong>{room.phase === "completed" ? t("player.match.completedTitle") : t("player.match.failedTitle")}</strong>
+                <small>{t("player.match.endedConnectInvalid")}</small>
               </section>
             ) : null}
           </main>
 
-          {renderTeam(room.teamB, "right", account?.id, room.phase)}
+          {renderTeam(room.teamB, "right", account?.id, room.phase, t)}
         </div>
       )}
     </div>

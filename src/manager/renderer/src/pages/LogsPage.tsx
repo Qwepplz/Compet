@@ -3,10 +3,13 @@ import { Alert, Button, Input, Select, Tooltip, message } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogEntry, LogLevel, LogSource } from "../../../shared/types.js";
 import { logApi } from "../api/managerApi.js";
+import { displayError } from "../../../../language/displayError.js";
+import { useLanguage } from "../../../../language/react.js";
 
 const MAX_VISIBLE_LOGS = 2_000;
 
 export function LogsPage() {
+  const { formatDateTime, t } = useLanguage();
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [query, setQuery] = useState("");
   const [level, setLevel] = useState<LogLevel>();
@@ -29,7 +32,7 @@ export function LogsPage() {
       followTailRef.current = true;
     } catch (caught) {
       if (requestId !== requestIdRef.current) return;
-      const text = caught instanceof Error ? caught.message : "读取日志失败";
+      const text = displayError(caught, t, "errors.logsLoadFailed");
       setError(text);
       message.error(text);
     } finally {
@@ -69,11 +72,11 @@ export function LogsPage() {
   return (
     <div className="logs-page">
       <div className="logs-header">
-        <h1 className="page-title">日志</h1>
+        <h1 className="page-title">{t("manager.logs.title")}</h1>
         <div className="logs-toolbar">
           <Select<LogLevel>
             allowClear
-            placeholder="级别"
+            placeholder={t("manager.logs.level")}
             value={level}
             options={["debug", "info", "warn", "error"].map((value) => ({ value: value as LogLevel, label: value.toUpperCase() }))}
             className="logs-level-select"
@@ -81,7 +84,7 @@ export function LogsPage() {
           />
           <Select<LogSource>
             allowClear
-            placeholder="来源"
+            placeholder={t("manager.logs.source")}
             value={source}
             options={sources.map((value) => ({ value, label: value }))}
             className="logs-source-select"
@@ -89,7 +92,7 @@ export function LogsPage() {
           />
           <Input
             allowClear
-            placeholder="用户名"
+            placeholder={t("manager.logs.username")}
             value={username}
             className="logs-username"
             onChange={(event) => setUsername(event.target.value)}
@@ -97,13 +100,13 @@ export function LogsPage() {
           <Input
             allowClear
             prefix={<SearchOutlined />}
-            placeholder="筛选日志"
+            placeholder={t("manager.logs.filter")}
             value={query}
             className="logs-search"
             onChange={(event) => setQuery(event.target.value)}
           />
-          <Tooltip title="刷新">
-            <Button aria-label="刷新" icon={<ReloadOutlined />} loading={loading} onClick={() => void load()} />
+          <Tooltip title={t("manager.logs.refresh")}>
+            <Button aria-label={t("manager.logs.refresh")} icon={<ReloadOutlined />} loading={loading} onClick={() => void load()} />
           </Tooltip>
         </div>
       </div>
@@ -117,15 +120,15 @@ export function LogsPage() {
         }}
       >
         {loading && logs.length === 0 ? (
-          <div className="logs-empty">读取中...</div>
+          <div className="logs-empty">{t("manager.logs.loading")}</div>
         ) : visibleLogs.length === 0 ? (
-          <div className="logs-empty">暂无日志</div>
+          <div className="logs-empty">{t("manager.logs.empty")}</div>
         ) : visibleLogs.map((entry) => (
-          <div key={entry.id} className={`log-line log-line--${entry.level}`} title={entry.timestamp}>
-            <span className="log-time">{formatTime(entry.timestamp)}</span>
+          <div key={entry.id} className={`log-line log-line--${entry.level}`} title={formatLogTimestamp(entry.timestamp, formatDateTime)}>
+            <span className="log-time">{formatLogTimestamp(entry.timestamp, formatDateTime)}</span>
             <span className="log-level">{entry.level.toUpperCase()}</span>
             <span className="log-source">{entry.source}</span>
-            <span className="log-actor" title={formatActorTitle(entry)}>{formatActorLabel(entry)}</span>
+            <span className="log-actor" title={formatActorTitle(entry, t)}>{formatActorLabel(entry)}</span>
             <span className="log-message">{entry.message}</span>
             {entry.context && <span className="log-context">{formatContext(entry.context)}</span>}
           </div>
@@ -135,10 +138,10 @@ export function LogsPage() {
   );
 }
 
-function formatTime(timestamp: string): string {
+function formatLogTimestamp(timestamp: string, formatDateTime: (value: string | number | Date) => string): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return timestamp;
-  return `${date.toLocaleTimeString("zh-CN", { hour12: false })}.${String(date.getMilliseconds()).padStart(3, "0")}`;
+  return `${formatDateTime(date)}.${String(date.getMilliseconds()).padStart(3, "0")}`;
 }
 
 function formatContext(context: NonNullable<LogEntry["context"]>): string {
@@ -150,8 +153,8 @@ function formatActorLabel(entry: LogEntry): string {
   return entry.actor.role ? `${entry.actor.username} (${entry.actor.role})` : entry.actor.username;
 }
 
-function formatActorTitle(entry: LogEntry): string {
-  if (!entry.actor) return "无操作者";
+function formatActorTitle(entry: LogEntry, t: ReturnType<typeof useLanguage>["t"]): string {
+  if (!entry.actor) return t("manager.logs.noActor");
   return [formatActorLabel(entry), entry.actor.accountId, entry.actor.steam64].filter(Boolean).join(" · ");
 }
 

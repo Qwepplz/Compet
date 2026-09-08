@@ -1,9 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { ServiceStatus } from "../shared/types.js";
+import type { SupportedLanguage } from "../../language/types.js";
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(channel, ...args);
 
 export const managerApi = {
+  loadLanguage: (): Promise<SupportedLanguage> => invoke("language:load"),
+  saveLanguage: (language: SupportedLanguage): Promise<void> => invoke("language:save", language),
   loadConfig: () => invoke("config:load"),
   saveConfig: (config: unknown) => invoke("config:save", config),
   selectServerRoot: () => invoke("config:selectServerRoot"),

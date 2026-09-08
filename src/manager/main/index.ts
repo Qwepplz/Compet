@@ -1,6 +1,7 @@
 import path from "node:path";
 import { app, BrowserWindow, dialog } from "electron";
 import { SavedLoginStore } from "../../desktop/main/savedLoginStore.js";
+import { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
 import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
 import { configureRemoteDesktopRendering } from "../../desktop/main/remoteRendering.js";
 import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main/windowEntry.js";
@@ -10,6 +11,7 @@ import { ManagedServiceProcess } from "./serviceProcess.js";
 import { ServiceApiClient } from "./serviceApiClient.js";
 import { registerManagerIpc } from "./ipc.js";
 import { ensureManagerUserDataPath } from "./userDataPath.js";
+import { translate } from "../../language/translate.js";
 
 const bootLogFile = "compet-server-manager-boot.log";
 appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`);
@@ -31,6 +33,7 @@ if (isPackagedRuntime) app.setPath("userData", managerUserDataPath);
 
 const configStore = new FileConfigStore(path.join(managerUserDataPath, "manager-config.json"), appRoot);
 const credentialStore = new SavedLoginStore(path.join(managerUserDataPath, "manager-login.json"));
+const languageStore = new LanguagePreferenceStore(path.join(managerUserDataPath, "language.json"));
 const logDir = path.join(appRoot, "server-data", "logs");
 const sevenZipPath = isPackagedRuntime
   ? path.join(appRoot, "runtime", "7z", "7zr.exe")
@@ -45,6 +48,7 @@ const { closeOfflineAccounts, stopService } = registerManagerIpc({
   logStore,
   service,
   getApiClient: () => apiClient,
+  languageStore,
   loadSavedLogin: async () => {
     const saved = await credentialStore.load();
     if (!saved?.username && !saved?.password) return null;
@@ -103,7 +107,7 @@ async function createWindow(): Promise<void> {
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`);
   });
-  await loadDesktopWindow(win, __dirname);
+  await loadDesktopWindow(win, __dirname, languageStore.load());
   appendBootLog(bootLogFile, "desktop window load requested");
 }
 
@@ -115,7 +119,18 @@ app.on("before-quit", (event) => {
   void (async () => {
     try {
       if (service.status().state === "running") {
-        const choice = await dialog.showMessageBox({ type: "question", buttons: ["停止服务后退出", "保持服务运行并退出", "取消"], defaultId: 0, cancelId: 2, message: "托管服务仍在运行" });
+        const language = languageStore.load();
+        const choice = await dialog.showMessageBox({
+          type: "question",
+          buttons: [
+            translate(language, "manager.window.stopServiceAndExit"),
+            translate(language, "manager.window.keepServiceRunningAndExit"),
+            translate(language, "manager.window.cancelExit"),
+          ],
+          defaultId: 0,
+          cancelId: 2,
+          message: translate(language, "manager.window.serviceRunning"),
+        });
         if (choice.response === 2) return;
 
         if (choice.response === 0) await stopService();
@@ -147,7 +162,7 @@ app.whenReady().then(async () => {
   console.error("Failed to start Compet Server Manager", message);
   appendBootLog(bootLogFile, "startup failed", error);
   appendLog({ source: "manager", level: "error", message: "Manager startup failed", context: { errorCode: "startup_error" } });
-  dialog.showErrorBox("Compet Server Manager 启动失败", message);
+  dialog.showErrorBox(translate(languageStore.load(), "manager.window.startupFailed"), message);
   app.exit(1);
 });
 

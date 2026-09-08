@@ -10,12 +10,15 @@ import { LoginPage } from "./pages/LoginPage.js";
 import { LogsPage } from "./pages/LogsPage.js";
 import { OverviewPage } from "./pages/OverviewPage.js";
 import { SettingsPage } from "./pages/SettingsPage.js";
+import { displayError } from "../../../language/displayError.js";
+import { useLanguage } from "../../../language/react.js";
 
 const initialStatus: ServiceStatus = { state: "stopped", baseUrl: "https://127.0.0.1:18443" };
 const initialMatchmakingOccupancy: MatchmakingOccupancy = { activeCount: 0 };
 const MATCHMAKING_OCCUPANCY_POLL_MS = 2_000;
 
 export function App() {
+  const { t } = useLanguage();
   const [status, setStatus] = useState<ServiceStatus>(initialStatus);
   const [page, setPage] = useState("overview");
   const [loggedIn, setLoggedIn] = useState(false);
@@ -37,12 +40,12 @@ export function App() {
       setPasswordChangeRequired(false);
       setPage("overview");
       setMatchmakingOccupancy(initialMatchmakingOccupancy);
-      message.warning("登录已失效，请重新登录");
+      message.warning(t("manager.auth.loginExpired"));
     };
 
     managerApi.onAuthRequired(handleAuthRequired);
     return () => managerApi.removeAuthRequiredListener();
-  }, []);
+  }, [t]);
 
   useEffect(() => {
     if (!loggedIn || status.state !== "running") {
@@ -79,7 +82,7 @@ export function App() {
     try {
       setStatus(await managerApi.serviceStatus());
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "读取服务状态失败");
+      message.error(displayError(error, t, "errors.serviceStatusLoadFailed"));
     }
   }
   async function refreshBootstrapRequired() {
@@ -87,7 +90,7 @@ export function App() {
       setBootstrapRequired(await managerApi.bootstrapRequired());
     } catch (error) {
       setBootstrapRequired(false);
-      message.error(error instanceof Error ? error.message : "读取管理员初始化状态失败");
+      message.error(displayError(error, t, "errors.bootstrapStatusLoadFailed"));
     }
   }
 
@@ -101,7 +104,7 @@ export function App() {
         await reauthenticateAfterServiceRestart();
       }
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "启动服务失败");
+      message.error(displayError(error, t, "errors.serviceStartFailed"));
       await refreshStatus();
     } finally {
       setServiceActionPending(false);
@@ -114,7 +117,7 @@ export function App() {
     try {
       setStatus(await managerApi.stopService());
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "停止服务失败");
+      message.error(displayError(error, t, "errors.serviceStopFailed"));
       await refreshStatus();
     } finally {
       setServiceActionPending(false);
@@ -131,7 +134,7 @@ export function App() {
         await reauthenticateAfterServiceRestart();
       }
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "重启服务失败");
+      message.error(displayError(error, t, "errors.serviceRestartFailed"));
       await refreshStatus();
     } finally {
       setServiceActionPending(false);
@@ -145,7 +148,7 @@ export function App() {
     try {
       await managerApi.writeBootstrap(input);
       bootstrapWritten = true;
-      message.success("已写入 bootstrap 管理员文件");
+      message.success(t("manager.auth.bootstrapWritten"));
       const nextStatus = await managerApi.startService();
       setStatus(nextStatus);
       if (nextStatus.state === "running") {
@@ -157,7 +160,7 @@ export function App() {
         await refreshStatus();
         setBootstrapRequired(false);
       }
-      message.error(error instanceof Error ? error.message : "初始化管理员失败");
+      message.error(displayError(error, t, "errors.bootstrapFailed"));
     } finally {
       setServiceActionPending(false);
     }
@@ -169,12 +172,12 @@ export function App() {
         const nextStatus = await managerApi.startService();
         setStatus(nextStatus);
         if (nextStatus.state !== "running") {
-          message.error(nextStatus.lastError ?? "启动服务失败");
+          message.error(t("errors.serviceStartFailed"));
           return;
         }
       } catch (error) {
         await refreshStatus();
-        message.error(error instanceof Error ? error.message : "启动服务失败");
+        message.error(displayError(error, t, "errors.serviceStartFailed"));
         return;
       }
     }
@@ -184,14 +187,14 @@ export function App() {
       setSavedLogin({ username, password });
       if (result.account.mustChangePassword) {
         setPasswordChangeRequired(true);
-        message.warning("请先修改初始密码");
+        message.warning(t("manager.auth.changePasswordRequired"));
         return;
       }
       setPasswordChangeRequired(false);
       setLoggedIn(true);
       setPage("overview");
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "登录失败");
+      message.error(displayError(error, t, "errors.loginFailed"));
     }
   }
 
@@ -201,7 +204,7 @@ export function App() {
       setLoggedIn(false);
       setPasswordChangeRequired(false);
       setPage("overview");
-      message.warning("服务已重启，请重新登录");
+      message.warning(t("errors.restartReauthFailed"));
       return;
     }
 
@@ -212,7 +215,7 @@ export function App() {
         setLoggedIn(false);
         setPasswordChangeRequired(true);
         setPage("overview");
-        message.warning("服务已重启，请先修改密码");
+        message.warning(t("errors.restartReauthFailed"));
         return;
       }
       setPasswordChangeRequired(false);
@@ -221,20 +224,20 @@ export function App() {
       setLoggedIn(false);
       setPasswordChangeRequired(false);
       setPage("overview");
-      message.error(error instanceof Error ? `服务已重启，请重新登录：${error.message}` : "服务已重启，请重新登录");
+      message.error(displayError(error, t, "errors.restartReauthFailed"));
     }
   }
 
   async function changePassword(currentPassword: string, newPassword: string) {
     try {
       await managerApi.changePassword(currentPassword, newPassword);
-      message.success("密码已更新");
+      message.success(t("manager.auth.passwordUpdated"));
       setSavedLogin((credentials) => credentials ? { ...credentials, password: newPassword } : credentials);
       setPasswordChangeRequired(false);
       setLoggedIn(true);
       setPage("overview");
     } catch (error) {
-      if (!isManagerAuthRequired()) message.error(error instanceof Error ? error.message : "修改密码失败");
+      if (!isManagerAuthRequired()) message.error(displayError(error, t, "errors.passwordChangeFailed"));
     }
   }
 
@@ -273,18 +276,19 @@ export function App() {
 }
 
 function FailedStatusPage({ status, onStart, onRefresh }: { status: ServiceStatus; onStart: () => Promise<void>; onRefresh: () => Promise<void> }) {
+  const { t } = useLanguage();
   return (
     <div className="auth-page">
-      <Card className="auth-card" title="服务启动失败">
+      <Card className="auth-card" title={t("manager.service.startFailedTitle")}>
         <Typography.Paragraph type="secondary">
-          服务当前处于 failed 状态，请检查错误信息后重试。
+          {t("manager.service.startFailedDescription")}
         </Typography.Paragraph>
         <Typography.Paragraph className="error-text">
-          {status.lastError ?? "未提供错误详情"}
+          {status.lastError ?? t("manager.service.noErrorDetails")}
         </Typography.Paragraph>
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Button type="primary" block onClick={onStart}>启动/重试服务</Button>
-          <Button block onClick={onRefresh}>刷新状态</Button>
+          <Button type="primary" block onClick={onStart}>{t("manager.service.startRetry")}</Button>
+          <Button block onClick={onRefresh}>{t("manager.service.refreshStatus")}</Button>
         </Space>
       </Card>
     </div>

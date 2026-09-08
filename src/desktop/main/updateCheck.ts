@@ -35,6 +35,14 @@ interface LoadedUpdate {
   files: ManifestFile[];
 }
 
+type CodedUpdateError = Error & { code: string };
+
+function updateError(code: string, message: string, ErrorType: ErrorConstructor = Error): CodedUpdateError {
+  const error = new ErrorType(message) as CodedUpdateError;
+  error.code = code;
+  return error;
+}
+
 const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 const latestUrls: Record<string, string> = {
   "compet-player-client": "https://qwepplz111.site/update/client/latest.json",
@@ -106,7 +114,7 @@ export async function installUpdate(appId: string, exeName: string): Promise<Upd
     ensureSameOrigin(loaded.manifestUrl, downloadUrl);
     await downloadFile(downloadUrl, source);
     if (!(await hasSameFileHash(source, file.sha256, file.size))) {
-      throw new Error(`更新文件校验失败: ${file.path}`);
+      throw updateError("update_file_hash_mismatch", `Update file hash verification failed: ${file.path}`);
     }
     planFiles.push({ source, path: file.path });
   }
@@ -148,10 +156,10 @@ export function getCurrentVersion(): string {
 
 async function loadUpdate(appId: string, timeoutMs?: number): Promise<LoadedUpdate> {
   const latestUrl = latestUrls[appId];
-  if (!latestUrl) throw new Error("未知更新源");
+  if (!latestUrl) throw updateError("update_source_unknown", "Unknown update source");
 
   if (timeoutMs !== undefined && (!Number.isFinite(timeoutMs) || timeoutMs <= 0)) {
-    throw new RangeError("timeoutMs must be a finite positive number");
+    throw updateError("update_timeout_invalid", "timeoutMs must be a finite positive number", RangeError);
   }
 
   const currentVersion = app.getVersion();
@@ -165,9 +173,9 @@ async function loadUpdate(appId: string, timeoutMs?: number): Promise<LoadedUpda
 
   try {
     const latest = await fetchJson<LatestPayload>(latestUrl, signal);
-    if (signal?.aborted) throw signal.reason;
-    if (typeof latest.version !== "string" || !isSemver(latest.version)) throw new Error("更新版本号无效");
-    if (typeof latest.manifestUrl !== "string") throw new Error("更新清单地址无效");
+    if (signal?.aborted) throw updateError("update_check_timeout", "Update check aborted");
+    if (typeof latest.version !== "string" || !isSemver(latest.version)) throw updateError("update_version_invalid", "Invalid update version");
+    if (typeof latest.manifestUrl !== "string") throw updateError("update_manifest_url_invalid", "Invalid update manifest URL");
     const manifestUrl = new URL(latest.manifestUrl, latestUrl).toString();
     ensureSameOrigin(latestUrl, manifestUrl);
 
@@ -176,14 +184,14 @@ async function loadUpdate(appId: string, timeoutMs?: number): Promise<LoadedUpda
     }
 
     const manifest = await fetchJson<ManifestPayload>(manifestUrl, signal);
-    if (signal?.aborted) throw signal.reason;
-    if (manifest.appId !== appId) throw new Error("更新清单不适用于当前程序");
-    if (manifest.version !== latest.version) throw new Error("更新版本与清单不一致");
-    if (manifest.platform !== "win32-x64") throw new Error("更新清单不适用于当前平台");
-    if (!Array.isArray(manifest.files)) throw new Error("更新文件列表无效");
+    if (signal?.aborted) throw updateError("update_check_timeout", "Update check aborted");
+    if (manifest.appId !== appId) throw updateError("update_manifest_app_mismatch", "Update manifest does not target this application");
+    if (manifest.version !== latest.version) throw updateError("update_manifest_version_mismatch", "Update version does not match manifest");
+    if (manifest.platform !== "win32-x64") throw updateError("update_manifest_platform_mismatch", "Update manifest does not target this platform");
+    if (!Array.isArray(manifest.files)) throw updateError("update_manifest_files_invalid", "Invalid update file list");
     return { currentVersion, latestVersion: latest.version, manifestUrl, files: manifest.files.map(parseManifestFile) };
   } catch (error) {
-    if (signal?.aborted) throw signal.reason;
+    if (signal?.aborted) throw updateError("update_check_timeout", "Update check aborted");
     throw error;
   } finally {
     if (deadlineTimer !== undefined) clearTimeout(deadlineTimer);
@@ -196,7 +204,7 @@ async function listChangedFiles(files: ManifestFile[]): Promise<{ files: Manifes
   let bytes = 0;
   for (const file of files) {
     const absolutePath = path.resolve(installRoot, file.path);
-    if (!absolutePath.startsWith(installRoot + path.sep)) throw new Error("更新清单包含非法路径");
+    if (!absolutePath.startsWith(installRoot + path.sep)) throw updateError("update_manifest_path_invalid", "Update manifest contains an invalid path");
     if (!(await hasSameFileHash(absolutePath, file.sha256, file.size))) {
       changed.push(file);
       bytes += file.size;
@@ -214,13 +222,13 @@ async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {
     redirect: "error",
     ...(signal === undefined ? {} : { signal }),
   });
-  if (!response.ok) throw new Error(`更新服务器返回 ${response.status}`);
+  if (!response.ok) throw updateError("update_server_error", `Update server returned ${response.status}`);
   return (await response.json()) as T;
 }
 
 async function downloadFile(url: string, filePath: string): Promise<void> {
   const response = await fetch(url, { redirect: "error" });
-  if (!response.ok) throw new Error(`下载更新文件失败 ${response.status}`);
+  if (!response.ok) throw updateError("update_download_failed", `Failed to download update file: ${response.status}`);
   const data = Buffer.from(await response.arrayBuffer());
   await writeFile(filePath, data);
 }
@@ -228,20 +236,20 @@ async function downloadFile(url: string, filePath: string): Promise<void> {
 function ensureSameOrigin(baseUrl: string, nextUrl: string): void {
   const base = new URL(baseUrl);
   const next = new URL(nextUrl);
-  if (base.origin !== next.origin) throw new Error("更新清单地址必须与更新源同域");
+  if (base.origin !== next.origin) throw updateError("update_manifest_origin_invalid", "Update manifest URL must use the update source origin");
 }
 
 function parseManifestFile(value: unknown): ManifestFile {
   const file = value as Partial<ManifestFile>;
   if (!file || typeof file.path !== "string" || typeof file.sha256 !== "string" || typeof file.size !== "number" || typeof file.url !== "string") {
-    throw new Error("更新文件条目无效");
+    throw updateError("update_manifest_file_invalid", "Invalid update file entry");
   }
   const normalizedPath = file.path.replaceAll("\\", "/");
   if (path.isAbsolute(normalizedPath) || normalizedPath.split("/").includes("..") || !/^[a-f0-9]{64}$/i.test(file.sha256) || file.size < 0) {
-    throw new Error("更新文件条目非法");
+    throw updateError("update_manifest_path_or_hash_invalid", "Invalid update file entry path or hash");
   }
   if (file.url.includes("..") || file.url.startsWith("/") || /^[a-z]+:/i.test(file.url)) {
-    throw new Error("更新文件地址非法");
+    throw updateError("update_file_url_invalid", "Invalid update file URL");
   }
   return { path: normalizedPath, sha256: file.sha256.toUpperCase(), size: file.size, url: file.url };
 }
@@ -274,7 +282,7 @@ function isSemver(version: string): boolean {
 function compareSemver(a: string, b: string): number {
   const left = a.match(semverPattern);
   const right = b.match(semverPattern);
-  if (!left || !right) throw new Error("版本号无效");
+  if (!left || !right) throw updateError("update_version_invalid", "Invalid version");
   for (let i = 1; i <= 3; i += 1) {
     const diff = Number(left[i]) - Number(right[i]);
     if (diff !== 0) return diff;

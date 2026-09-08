@@ -1,6 +1,8 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import type { BrowserWindow } from "electron";
+import { DEFAULT_LANGUAGE, translate } from "../../language/translate.js";
+import type { SupportedLanguage } from "../../language/types.js";
 
 interface DesktopWindowEntry {
   preloadPath: string;
@@ -14,16 +16,20 @@ export function resolveDesktopWindowEntry(bundleDir: string): DesktopWindowEntry
   const rendererPath = path.join(bundleDir, "../renderer/index.html");
   const problems: string[] = [];
 
-  if (!existsSync(preloadPath)) problems.push(`缺少 preload 入口: ${preloadPath}`);
-  if (!existsSync(rendererPath)) problems.push(`缺少 renderer 入口: ${rendererPath}`);
+  if (!existsSync(preloadPath)) problems.push(`desktop_preload_missing: Missing preload entry: ${preloadPath}`);
+  if (!existsSync(rendererPath)) problems.push(`desktop_renderer_missing: Missing renderer entry: ${rendererPath}`);
 
   return { preloadPath, rendererPath, problems };
 }
 
-export async function loadDesktopWindow(win: BrowserWindow, bundleDir: string): Promise<void> {
+export async function loadDesktopWindow(
+  win: BrowserWindow,
+  bundleDir: string,
+  language: SupportedLanguage = DEFAULT_LANGUAGE,
+): Promise<void> {
   const entry = resolveDesktopWindowEntry(bundleDir);
   if (entry.problems.length > 0) {
-    await win.loadURL(startupFailureUrl(entry.problems));
+    await win.loadURL(startupFailureUrl(entry.problems, language));
     return;
   }
 
@@ -32,7 +38,10 @@ export async function loadDesktopWindow(win: BrowserWindow, bundleDir: string): 
       await win.loadURL(process.env.ELECTRON_RENDERER_URL);
       return;
     } catch (error) {
-      await win.loadURL(startupFailureUrl([`渲染器开发地址加载失败: ${process.env.ELECTRON_RENDERER_URL}`, errorMessage(error)]));
+      await win.loadURL(startupFailureUrl([
+        `desktop_renderer_dev_url_failed: Failed to load renderer development URL: ${process.env.ELECTRON_RENDERER_URL}`,
+        errorMessage(error),
+      ], language));
       return;
     }
   }
@@ -40,17 +49,20 @@ export async function loadDesktopWindow(win: BrowserWindow, bundleDir: string): 
   try {
     await win.loadFile(entry.rendererPath);
   } catch (error) {
-    await win.loadURL(startupFailureUrl([`渲染器文件加载失败: ${entry.rendererPath}`, errorMessage(error)]));
+    await win.loadURL(startupFailureUrl([
+      `desktop_renderer_file_failed: Failed to load renderer file: ${entry.rendererPath}`,
+      errorMessage(error),
+    ], language));
   }
 }
 
-function startupFailureUrl(problems: string[]): string {
+function startupFailureUrl(problems: string[], language: SupportedLanguage): string {
   const items = problems.map((problem) => `<li>${escapeHtml(problem)}</li>`).join("");
   return `data:text/html;charset=utf-8,${encodeURIComponent(`<!doctype html>
-<html lang="zh-CN">
+<html lang="${language}">
   <head>
     <meta charset="UTF-8" />
-    <title>Compet 启动失败</title>
+    <title>${escapeHtml(translate(language, "desktop.startup.title"))}</title>
     <style>
       body {
         margin: 0;
@@ -90,8 +102,8 @@ function startupFailureUrl(problems: string[]): string {
   </head>
   <body>
     <main>
-      <h1>Compet 桌面程序启动失败</h1>
-      <p>当前应用没有找到可用的桌面入口文件。请重新解压 ZIP，或重新生成打包产物后再启动。</p>
+      <h1>${escapeHtml(translate(language, "desktop.startup.heading"))}</h1>
+      <p>${escapeHtml(translate(language, "desktop.startup.description"))}</p>
       <ul>${items}</ul>
     </main>
   </body>

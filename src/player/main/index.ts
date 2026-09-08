@@ -4,6 +4,7 @@ import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootL
 import { delay } from "../../shared/async.js";
 import { configureRemoteDesktopRendering } from "../../desktop/main/remoteRendering.js";
 import { SavedLoginStore, type SavedLoginRecord } from "../../desktop/main/savedLoginStore.js";
+import { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
 import { loadDesktopWindow, resolveDesktopWindowEntry } from "../../desktop/main/windowEntry.js";
 import type {
   PlayerRealtimeEvent,
@@ -17,6 +18,7 @@ import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
 import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
 import { getRealtimeStatusAfterPollFailure, shouldApplyRealtimePollFailure } from "./realtimeStatus.js";
 import { revokePlayerSessionForExit } from "./sessionShutdown.js";
+import { translate } from "../../language/translate.js";
 
 const bootLogFile = "compet-player-client-boot.log";
 appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`);
@@ -27,6 +29,7 @@ configureRemoteDesktopRendering();
 
 const sessionFile = path.join(app.getPath("userData"), "player-session.json");
 const sessionStore = new SavedLoginStore(sessionFile);
+const languageStore = new LanguagePreferenceStore(path.join(app.getPath("userData"), "language.json"));
 const realtimeClient = new PlayerRealtimeClient();
 const realtimeStatusChannel = "player:realtime:status";
 const realtimeEventChannel = "player:realtime:event";
@@ -122,7 +125,7 @@ async function createWindow(): Promise<void> {
   win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`);
   });
-  await loadDesktopWindow(win, __dirname);
+  await loadDesktopWindow(win, __dirname, languageStore.load());
   appendBootLog(bootLogFile, "desktop window load requested");
 }
 
@@ -447,6 +450,7 @@ if (!gotSingleInstanceLock) {
       connectRealtime,
       disconnectRealtime,
       getApiClient: currentApiClient,
+      languageStore,
       loadSession,
       refreshRealtimeSnapshot,
       saveSession,
@@ -468,7 +472,7 @@ if (!gotSingleInstanceLock) {
     const message = error instanceof Error ? error.stack ?? error.message : String(error);
     console.error("Failed to start Compet Player Client", message);
     appendBootLog(bootLogFile, "startup failed", error);
-    dialog.showErrorBox("Compet Player Client 启动失败", message);
+    dialog.showErrorBox(translate(languageStore.load(), "desktop.startup.title"), message);
     app.exit(1);
   });
 }

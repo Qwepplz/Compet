@@ -783,8 +783,8 @@ export class MatchmakingService {
           await this.emitRoomUpdated(randomizingRoom);
           return this.toPublicRoom(randomizingRoom);
         } catch (error) {
-          const failure = error instanceof Error ? error.message : String(error);
-          return this.toPublicRoom(await this.failMatchRoom(rooms, acknowledgedRoom, failure));
+          process.stderr.write(`Map selection failed for ${acknowledgedRoom.id}: ${error instanceof Error ? error.message : String(error)}\n`);
+          return this.toPublicRoom(await this.failMatchRoom(rooms, acknowledgedRoom, "match_failed"));
         }
       }
 
@@ -871,7 +871,7 @@ export class MatchmakingService {
       );
       if (!declinedParticipant) throw new Error("ready participant not found for account");
       const readyDeclinedByDisplayName = this.displayNameForSteam64(declinedParticipant.steam64 ?? "");
-      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "ready declined", readyDeclinedByDisplayName));
+      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed", readyDeclinedByDisplayName));
     });
   }
 
@@ -880,7 +880,7 @@ export class MatchmakingService {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId && candidate.phase === "ready");
       if (!room) throw new Error(`ready room not found: ${roomId}`);
-      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "ready timed out"));
+      return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
     });
   }
 
@@ -1006,7 +1006,7 @@ export class MatchmakingService {
       if (report.get5Result.status !== "normal") {
         const restoreError = await this.restoreMatchDatabase(matchId);
         if (restoreError) return this.toPublicRoom(room);
-        return this.toPublicRoom(await this.failMatchRoom(rooms, room, "比赛异常结束"));
+        return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
       }
 
       let result: MatchSeriesResult;
@@ -1030,10 +1030,10 @@ export class MatchmakingService {
           players,
         } as MatchSeriesResult;
       } catch (error) {
-        const failure = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`Match result processing failed for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`);
         const restoreError = await this.restoreMatchDatabase(matchId);
         if (restoreError) return this.toPublicRoom(room);
-        return this.toPublicRoom(await this.failMatchRoom(rooms, room, failure));
+        return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
       }
       const completedStatus = { phase: "completed", completedAt: result.completedAt, result, serverExit: report.exitInfo };
       try {
@@ -1050,10 +1050,10 @@ export class MatchmakingService {
         if (committedAfterFailure) {
           return this.finalizeCommittedMatch(rooms, room, committedAfterFailure);
         }
-        const failure = error instanceof Error ? error.message : String(error);
+        process.stderr.write(`Match result persistence failed for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`);
         const restoreError = await this.restoreMatchDatabase(matchId);
         if (restoreError) return this.toPublicRoom(room);
-        return this.toPublicRoom(await this.failMatchRoom(rooms, room, failure));
+        return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
       }
       let committedRecord: Pick<CompletedMatchRecord, "plan" | "result" | "completionEventPublished"> | undefined;
       try {
@@ -1070,7 +1070,7 @@ export class MatchmakingService {
       if (!committedRecord) {
         const restoreError = await this.restoreMatchDatabase(matchId);
         if (restoreError) return this.toPublicRoom(room);
-        return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match plan unavailable"));
+        return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
       }
       return this.finalizeCommittedMatch(rooms, room, committedRecord);
     });
@@ -1108,7 +1108,7 @@ export class MatchmakingService {
           continue;
         }
 
-        const failed = await this.failMatchRoom(latestRooms, latestRoom, "比赛异常结束");
+        const failed = await this.failMatchRoom(latestRooms, latestRoom, "match_failed");
         failedRooms.push(failed);
       }
 
@@ -1479,7 +1479,7 @@ export class MatchmakingService {
 
   private async saveRoomAfterMapSelected(rooms: MatchRoomRecord[], room: MatchRoomRecord, finalMap: string): Promise<MatchRoomRecord> {
     if (rooms.some((candidate) => candidate.id !== room.id && isServerManagedPhase(candidate.phase))) {
-      return this.failMatchRoom(rooms, room, "game server is already active");
+      return this.failMatchRoom(rooms, room, "match_failed");
     }
 
     const preparing: MatchRoomRecord = { ...room, phase: "server_prepare", connect: undefined };
@@ -1522,12 +1522,12 @@ export class MatchmakingService {
       await this.emit({ type: "connect_ready", matchId: room.id, accountIds: this.roomAudience(connected), connect }, room.id);
       return connected;
     } catch (error) {
-      const failure = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`Game server preparation failed for ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
       if (databaseBackupCreated) {
         const restoreError = await this.restoreMatchDatabase(room.id);
         if (restoreError) return preparing;
       }
-      return this.failMatchRoom(rooms, preparing, failure);
+      return this.failMatchRoom(rooms, preparing, "match_failed");
     }
   }
 
@@ -1660,7 +1660,7 @@ export class MatchmakingService {
   private displayNameForSteam64(steam64: string): string {
     const normalized = steam64.trim();
     const resolved = normalized ? this.deps.steamPersonas?.displayName(normalized)?.trim() : "";
-    return resolved || normalized || "未知玩家";
+    return resolved || normalized || "";
   }
 
   private displayNameForInvitationAccount(account: AccountRecord | null | undefined): string {
@@ -1841,7 +1841,7 @@ export class MatchmakingService {
       const room = rooms.find((candidate) => candidate.id === roomId);
       if (!room?.stageBarrier) return;
       if (room.stageBarrier.stage !== expectedStage || room.stageBarrier.deadlineAt !== expectedDeadlineAt) return;
-      await this.failMatchRoom(rooms, room, `client stage timed out: ${expectedStage}`);
+      await this.failMatchRoom(rooms, room, "match_failed");
     });
   }
 
@@ -1901,7 +1901,7 @@ export class MatchmakingService {
     return {
       id: participant.id,
       kind: participant.kind,
-      displayName: "已匹配玩家",
+      displayName: "",
       steam64: undefined,
       steamPersonaName: undefined,
       steamAvatarUrl: undefined,
@@ -1960,7 +1960,7 @@ export class MatchmakingService {
   private async failMatchRoom(
     rooms: MatchRoomRecord[],
     room: MatchRoomRecord,
-    reason: string,
+    reason: "match_failed",
     readyDeclinedByDisplayName?: string,
   ): Promise<MatchRoomRecord> {
     const failedAt = this.now();

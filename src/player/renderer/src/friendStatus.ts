@@ -1,7 +1,8 @@
 export type FriendStatusTone = "online" | "offline" | "online-game" | "offline-game";
+export type FriendStatusLabel = "online" | "offline" | "inGame";
 
 export interface FriendStatus {
-  label: "在线" | "离线" | "游戏中";
+  label: FriendStatusLabel;
   tone: FriendStatusTone;
   inviteable: boolean;
 }
@@ -9,13 +10,13 @@ export interface FriendStatus {
 export function resolveFriendStatus(friend: { online: boolean; inGame: boolean }): FriendStatus {
   if (friend.inGame) {
     return {
-      label: "游戏中",
+      label: "inGame",
       tone: friend.online ? "online-game" : "offline-game",
       inviteable: false,
     };
   }
   if (friend.online) {
-    return { label: "在线", tone: "online", inviteable: true };
+    return { label: "online", tone: "online", inviteable: true };
   }
-  return { label: "离线", tone: "offline", inviteable: false };
+  return { label: "offline", tone: "offline", inviteable: false };
 }

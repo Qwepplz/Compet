@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties } from "react";
-import { Button, Card, Form, Input, Modal, Spin, Switch, Tabs, message } from "antd";
+import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message } from "antd";
 import { ArrowLeftOutlined, CloseOutlined, MinusOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
@@ -20,6 +20,7 @@ import type {
 } from "../../shared/types.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
 import { SteamAvatar } from "./components/SteamAvatar.js";
+import { LanguageSelector } from "../../../language/LanguageSelector.js";
 import {
   getActiveMatchRoom,
   getDisplayedMatchRoom,
@@ -42,6 +43,9 @@ import { randomMatchmakingDelayMs } from "./matchTimers.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import { preloadMapImages } from "./mapAssets.js";
 import { serverSyncedNowMs, updateServerClockOffset } from "./serverClock.js";
+import { displayError } from "../../../language/displayError.js";
+import { useLanguage, type LanguageContextValue } from "../../../language/react.js";
+import type { TranslationKey } from "../../../language/types.js";
 import {
   mergeFriendListSnapshot,
   mergePartyInvitationsSnapshot,
@@ -96,6 +100,17 @@ function updateFriendPresenceEntries(
 
 function remainingStartupMs(deadline: number): number {
   return Math.max(0, Math.ceil(deadline - performance.now()));
+}
+
+function realtimeConnectionLabel(connection: PlayerRealtimeStatusDto["connection"], t: LanguageContextValue["t"]): string {
+  switch (connection) {
+    case "connected":
+      return t("common.status.online");
+    case "connecting":
+      return t("common.state.connectingServer");
+    case "disconnected":
+      return t("common.status.offline");
+  }
 }
 
 function HistoryChartIcon() {
@@ -220,10 +235,10 @@ function buildKnownPlayerProfiles(account: AccountView | null, friends: PlayerFr
   return profiles;
 }
 
-function partyMemberDisplayName(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): string {
+function partyMemberDisplayName(accountId: string, account: AccountView | null, friends: PlayerFriendListDto, fallback: string): string {
   if (accountId === account?.id) return playerAccountLabel(account);
   const friend = friends.friends.find((entry) => entry.accountId === accountId);
-  return friend?.steamPersonaName ?? friend?.displayName ?? "玩家";
+  return friend?.steamPersonaName ?? friend?.displayName ?? fallback;
 }
 
 function partyInviteAvatarUrl(
@@ -261,6 +276,7 @@ function notifyPartyMembershipChange(
   currentAccountId: string | undefined,
   account: AccountView | null,
   friends: PlayerFriendListDto,
+  t: LanguageContextValue["t"],
   suppressedJoinedAccountIds?: Set<string>,
 ): void {
   if (!previous || !currentAccountId || previous.id !== next?.id) return;
@@ -270,10 +286,14 @@ function notifyPartyMembershipChange(
 
   for (const joinedAccountId of nextMembers.filter((memberId) => !previousMembers.includes(memberId) && memberId !== currentAccountId)) {
     if (suppressedJoinedAccountIds?.delete(joinedAccountId)) continue;
-    void message.info(`${partyMemberDisplayName(joinedAccountId, account, friends)} 已加入队伍`);
+    void message.info(t("player.party.memberJoined", {
+      name: partyMemberDisplayName(joinedAccountId, account, friends, t("common.player.unknown")),
+    }));
   }
   for (const leftAccountId of previousMembers.filter((memberId) => !nextMembers.includes(memberId) && memberId !== currentAccountId)) {
-    void message.info(`${partyMemberDisplayName(leftAccountId, account, friends)} 已退出队伍`);
+    void message.info(t("player.party.memberLeft", {
+      name: partyMemberDisplayName(leftAccountId, account, friends, t("common.player.unknown")),
+    }));
   }
 }
 
@@ -298,6 +318,7 @@ function PartyInviteToasts({
   onDecline,
   onIgnore,
 }: PartyInviteToastsProps) {
+  const { t } = useLanguage();
   if (invitations.length === 0) return null;
 
   return (
@@ -316,12 +337,12 @@ function PartyInviteToasts({
               <SteamAvatar className="player-party-invite-avatar" avatarUrl={inviterAvatarUrl} label={inviterLabel} />
               <div className="player-party-invite-copy">
                 <strong>{inviterLabel}</strong>
-                <span>邀请你加入队伍</span>
+                <span>{t("player.invite.joinParty")}</span>
               </div>
               <div className="player-party-invite-actions">
-                <Button autoInsertSpace={false} size="small" type="primary" loading={busy} disabled={busy} onClick={() => void onAccept(invitation.id)}>接受</Button>
-                <Button autoInsertSpace={false} size="small" loading={busy} disabled={busy} onClick={() => void onDecline(invitation.id)}>拒绝</Button>
-                <Button autoInsertSpace={false} size="small" disabled={busy} onClick={() => void onIgnore(invitation.id)}>忽略</Button>
+                <Button autoInsertSpace={false} size="small" type="primary" loading={busy} disabled={busy} onClick={() => void onAccept(invitation.id)}>{t("player.invite.accept")}</Button>
+                <Button autoInsertSpace={false} size="small" loading={busy} disabled={busy} onClick={() => void onDecline(invitation.id)}>{t("player.invite.decline")}</Button>
+                <Button autoInsertSpace={false} size="small" disabled={busy} onClick={() => void onIgnore(invitation.id)}>{t("player.invite.ignore")}</Button>
               </div>
             </div>
           </div>
@@ -332,8 +353,9 @@ function PartyInviteToasts({
 }
 
 export function App() {
+  const { language, setLanguage, t } = useLanguage();
   const [loading, setLoading] = useState(true);
-  const [loadingMessage, setLoadingMessage] = useState("正在检查更新");
+  const [loadingMessageKey, setLoadingMessageKey] = useState<TranslationKey>("common.state.checkingUpdates");
   const [activeView, setActiveView] = useState<PlayerView>("login");
   const [baseUrl, setBaseUrl] = useState(defaultBaseUrl);
   const [account, setAccount] = useState<AccountView | null>(null);
@@ -358,6 +380,7 @@ export function App() {
   const [changePasswordPending, setChangePasswordPending] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [languageSaving, setLanguageSaving] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
@@ -394,10 +417,22 @@ export function App() {
   const hasVisibleMatchResult = activeView === "match-result" && matchResult !== null && matchResultMatchId !== null;
   const viewingMatchHistory = activeView === "match-history" || (activeView === "match-result" && matchResultBackView === "match-history");
   const headerAccount = viewingMatchHistory ? matchHistoryPlayer ?? account : account;
-  const accountLabel = playerAccountLabel(headerAccount);
+  const accountLabel = playerAccountLabel(headerAccount, t("common.player.unknown"));
   const headerRankmeScore = viewingMatchHistory ? matchHistory?.rankmeScore ?? null : rankmeScore;
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
   const syncedNowMs = serverSyncedNowMs(serverClockOffsetMs, clockNowMs);
+
+  async function handleLanguageChange(nextLanguage: typeof language) {
+    if (nextLanguage === language || languageSaving) return;
+    setLanguageSaving(true);
+    try {
+      await setLanguage(nextLanguage);
+    } catch {
+      void message.error(t("errors.languageSaveFailed"));
+    } finally {
+      setLanguageSaving(false);
+    }
+  }
 
   function updateServerClock(serverNow: string | undefined, localNowMs = Date.now()) {
     setServerClockOffsetMs((current) => updateServerClockOffset(current, serverNow, localNowMs));
@@ -500,7 +535,7 @@ export function App() {
       unsubscribeEvent();
       unsubscribeAccount();
     };
-  }, [account]);
+  }, [account, t]);
 
   useEffect(() => {
     if (!account || !hasVisibleMatchResult || !matchResultMatchId) return;
@@ -571,7 +606,7 @@ export function App() {
     try {
       await api.refreshRealtimeSnapshot();
     } catch {
-      // 保持恢复后的基础状态，不把实时快照失败当成登录失败。
+      // Keep the restored base state; a realtime snapshot failure is not a login failure.
     }
   }
 
@@ -698,7 +733,7 @@ export function App() {
         if (event.request.toAccountId === account?.id) {
           void message.info({
             key: `friend-request-${event.request.id}`,
-            content: `收到来自 ${event.request.displayName} 的好友请求`,
+            content: t("player.invite.received", { name: event.request.displayName }),
           });
         }
         return;
@@ -724,7 +759,7 @@ export function App() {
       case "party_updated":
         setParty((current) => {
           const nextParty = event.party ? mergePartySnapshot(current, event.party) : null;
-          notifyPartyMembershipChange(current, nextParty, account?.id, account, friends, acceptedInviteJoinMessageAccountIds.current);
+          notifyPartyMembershipChange(current, nextParty, account?.id, account, friends, t, acceptedInviteJoinMessageAccountIds.current);
           return nextParty;
         });
         setMatchmaking((current) => ({
@@ -752,11 +787,11 @@ export function App() {
           const invitee = event.invitation.toDisplayName;
           if (event.invitation.status === "accepted") {
             acceptedInviteJoinMessageAccountIds.current.add(event.invitation.toAccountId);
-            void message.success(`${invitee}接受了你的邀请`);
+            void message.success(t("player.party.inviteeAccepted", { name: invitee }));
           } else if (event.invitation.status === "declined") {
-            void message.info(`${invitee}拒绝了你的邀请`);
+            void message.info(t("player.party.inviteeDeclined", { name: invitee }));
           } else if (event.invitation.status === "timed_out") {
-            void message.info(`${invitee}超时未响应`);
+            void message.info(t("player.party.inviteeTimedOut", { name: invitee }));
           }
         }
         if (
@@ -843,7 +878,7 @@ export function App() {
           setMatchResultPlayerSteam64(account?.steam64);
           setMatchResultBackView("home");
           void refreshRankmeScore();
-          void message.success("比赛已结束");
+          void message.success(t("common.status.matchCompleted"));
           setActiveView("match-result");
           return;
         }
@@ -852,7 +887,7 @@ export function App() {
         setMatchResultPlayerSteam64(undefined);
         setMatchResultBackView("home");
         void refreshRankmeScore();
-        void message.success("比赛已结束");
+        void message.success(t("common.status.matchCompleted"));
         setActiveView("home");
         return;
       case "match_failed":
@@ -867,9 +902,9 @@ export function App() {
         setMatchResultPlayerSteam64(undefined);
         setMatchResultBackView("home");
         if (event.readyDeclinedByDisplayName) {
-          void message.info(`${event.readyDeclinedByDisplayName}拒绝了比赛`);
+          void message.info(t("player.party.inviteeDeclined", { name: event.readyDeclinedByDisplayName }));
         } else {
-          void message.error("比赛异常结束");
+          void message.error(t("errors.matchFailed"));
         }
         setActiveView("home");
         return;
@@ -939,7 +974,7 @@ export function App() {
       const nextFriends = await api.listFriends();
       setFriends((current) => mergeFriendListSnapshot(current, nextFriends, resolvedFriendRequestIds.current));
     } catch {
-      // 刷新失败时保留当前列表，等待下一次快照或事件。
+      // Keep the current list after a refresh failure and wait for the next snapshot or event.
     }
   }
 
@@ -958,7 +993,7 @@ export function App() {
       setMatchHistory(nextHistory);
       if (!player) setRankmeScore(nextHistory.rankmeScore);
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "加载历史战绩失败");
+      message.error(displayError(error, t, "errors.matchHistoryLoadFailed"));
     } finally {
       setMatchHistoryLoading(false);
     }
@@ -1008,7 +1043,7 @@ export function App() {
       setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
       setActiveView("match-history");
-      message.error(error instanceof Error ? error.message : "加载比赛详情失败");
+      message.error(displayError(error, t, "errors.matchDetailsLoadFailed"));
     }
   }
 
@@ -1018,7 +1053,7 @@ export function App() {
       await loadSavedLogin();
       const startupTimeoutMs = startupDeadline === undefined ? undefined : remainingStartupMs(startupDeadline);
       if (startupTimeoutMs !== undefined && startupTimeoutMs > 0) {
-        setLoadingMessage("正在连接服务器");
+        setLoadingMessageKey("common.state.connectingServer");
       }
       const restored = startupTimeoutMs === undefined
         ? await window.playerApi.restoreSession()
@@ -1054,7 +1089,7 @@ export function App() {
       void hydrateRealtimeState();
       void refreshRankmeScore();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "恢复会话失败");
+      message.error(displayError(error, t, "errors.sessionRestoreFailed"));
       setMatchResult(null);
       setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
@@ -1134,7 +1169,7 @@ export function App() {
       void hydrateRealtimeState();
       void refreshRankmeScore();
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "登录失败");
+      message.error(displayError(error, t, "errors.loginFailed"));
     } finally {
       setLoginPending(false);
     }
@@ -1143,7 +1178,7 @@ export function App() {
   async function changePassword(values: PasswordChangeValues, options: { refreshSession: boolean } = { refreshSession: true }) {
     if (changePasswordPending) return;
     if (values.newPassword !== values.confirmPassword) {
-      message.error("两次输入的新密码不一致");
+      message.error(t("player.auth.confirmPasswordMismatch"));
       return;
     }
     setChangePasswordPending(true);
@@ -1182,9 +1217,9 @@ export function App() {
       } else {
         setPasswordModalOpen(false);
       }
-      message.success("密码已更新");
+      message.success(t("player.auth.passwordUpdated"));
     } catch (error) {
-      message.error(error instanceof Error ? error.message : "修改密码失败");
+      message.error(displayError(error, t, "errors.passwordChangeFailed"));
     } finally {
       setChangePasswordPending(false);
     }
@@ -1231,12 +1266,12 @@ export function App() {
     for (let attempt = 0; attempt < STARTUP_UPDATE_MAX_ATTEMPTS; attempt += 1) {
       const timeoutMs = remainingStartupMs(startupDeadline);
       if (timeoutMs <= 0) return false;
-      setLoadingMessage("正在检查更新");
+      setLoadingMessageKey("common.state.checkingUpdates");
       try {
         const result = await window.playerApi.checkUpdate(timeoutMs) as UpdateCheckResult;
         if (!result.updateAvailable) return false;
 
-        setLoadingMessage("正在安装更新");
+        setLoadingMessageKey("common.state.installingUpdate");
         const installResult = await window.playerApi.installUpdate() as UpdateInstallResult;
         if (installResult.installing) return true;
         if (!installResult.updateAvailable) return false;
@@ -1268,10 +1303,10 @@ export function App() {
       const nextFriends = await api.acceptFriendRequest(requestId);
       resolvedFriendRequestIds.current.add(requestId);
       setFriends(nextFriends);
-      void message.success("已接受好友请求");
+      void message.success(t("common.actions.accept"));
       void refreshFriendsList();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : "接受好友请求失败");
+      void message.error(displayError(error, t, "errors.friendRequestAcceptFailed"));
     }
   }
 
@@ -1291,10 +1326,10 @@ export function App() {
         ...current,
         friends: current.friends.filter((friend) => friend.friendshipId !== friendshipId),
       }));
-      void message.success("已删除好友");
+      void message.success(t("common.actions.delete"));
       void refreshFriendsList();
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : "删除好友失败");
+      void message.error(displayError(error, t, "errors.friendRemoveFailed"));
     }
   }
 
@@ -1317,7 +1352,7 @@ export function App() {
     }
     const invitation = await api.inviteToParty(targetAccountId);
     updateServerClock(invitation.serverNow);
-    void message.success("队伍邀请已发送");
+    void message.success(t("player.party.inviteSent"));
   }
 
   async function acceptPartyInvite(invitationId: string) {
@@ -1333,7 +1368,7 @@ export function App() {
         party: nextParty,
         partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
       }));
-      void message.success("已加入队伍");
+      void message.success(t("player.party.joined"));
     } finally {
       setBusyPartyInvitationId(null);
     }
@@ -1349,7 +1384,7 @@ export function App() {
         ...current,
         partyInvitations: removePartyInvitation(current.partyInvitations, invitationId),
       }));
-      void message.info("已拒绝队伍邀请");
+      void message.info(t("player.party.inviteDeclined"));
     } finally {
       setBusyPartyInvitationId(null);
     }
@@ -1364,9 +1399,9 @@ export function App() {
         ...current,
         party: null,
       }));
-      void message.success("已退出队伍");
+      void message.success(t("player.party.left"));
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : "退出队伍失败");
+      void message.error(displayError(error, t, "errors.partyLeaveFailed"));
     }
   }
 
@@ -1415,7 +1450,7 @@ export function App() {
         }
       }
       setMatchmakingFeedbackPending(false);
-      message.error(error instanceof Error ? error.message : "开始匹配失败");
+      message.error(displayError(error, t, "errors.matchmakingStartFailed"));
     }
   }
 
@@ -1439,7 +1474,7 @@ export function App() {
 
   async function copyText(text: string) {
     await api.copyText(text);
-    message.success("已复制");
+    message.success(t("common.actions.copy"));
   }
 
   function backFromMatchHistory() {
@@ -1475,13 +1510,13 @@ export function App() {
             <section className="match-result-content match-result-loading-content">
               <Button
                 className="match-result-back-button"
-                aria-label="返回大厅"
+                aria-label={t("common.navigation.backToHome")}
                 icon={<ArrowLeftOutlined />}
                 onClick={backFromMatchResult}
               />
               <div className="match-result-loading-state" role="status" aria-live="polite">
                 <Spin size="large" />
-                <span>正在加载比赛详情</span>
+                <span>{t("player.match.loadingDetails")}</span>
               </div>
             </section>
           </div>
@@ -1532,23 +1567,23 @@ export function App() {
       <div className="player-loading-screen">
         <div className="player-loading-content">
           <Spin size="large" />
-          <span>{loadingMessage}</span>
+          <span>{t(loadingMessageKey)}</span>
         </div>
       </div>
     );
   }
 
   const windowControls = (
-    <div className="player-window-controls" aria-label="窗口控制">
+    <div className="player-window-controls" aria-label={t("common.navigation.windowControls")}>
       <Button
-        aria-label="最小化窗口"
+        aria-label={t("common.navigation.minimize")}
         className="player-window-control"
         icon={<MinusOutlined />}
         type="text"
         onClick={() => void api.minimizeWindow()}
       />
       <Button
-        aria-label="关闭窗口"
+        aria-label={t("common.navigation.close")}
         className="player-window-control player-window-control--close"
         icon={<CloseOutlined />}
         type="text"
@@ -1573,17 +1608,17 @@ export function App() {
           }}
           onFinish={(values) => void login(values)}
         >
-          <Form.Item label="服务器地址" name="baseUrl" rules={[{ required: true, message: "请输入服务器地址" }]}>
+          <Form.Item label={t("common.labels.serverAddress")} name="baseUrl" rules={[{ required: true, message: t("common.labels.serverAddress") }]}>
             <Input onChange={(event) => setBaseUrl(event.target.value)} />
           </Form.Item>
-          <Form.Item label="用户名" name="username" rules={[{ required: true, message: "请输入用户名" }]}>
+          <Form.Item label={t("common.labels.username")} name="username" rules={[{ required: true, message: t("common.labels.username") }]}>
             <Input />
           </Form.Item>
-          <Form.Item label="密码" name="password" rules={[{ required: true, message: "请输入密码" }]}>
+          <Form.Item label={t("common.labels.password")} name="password" rules={[{ required: true, message: t("common.labels.password") }]}>
             <Input.Password />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={loginPending} disabled={loginPending}>
-            登录
+            {t("common.actions.login")}
           </Button>
         </Form>
       </div>
@@ -1597,31 +1632,31 @@ export function App() {
         <div className="player-auth-chrome">{windowControls}</div>
         <Card className="player-card">
           <div className="player-header">
-            <div className="player-kicker">Security</div>
-            <h2 className="player-title">修改初始密码</h2>
-            <p className="player-copy">当前账号必须先修改密码，完成后再进入玩家主页。</p>
+            <div className="player-kicker">{t("player.auth.security")}</div>
+            <h2 className="player-title">{t("player.auth.changeInitialPassword")}</h2>
+            <p className="player-copy">{t("player.auth.mustChangePassword")}</p>
           </div>
           <Form
             layout="vertical"
             initialValues={{ currentPassword }}
             onFinish={(values) => void changePassword(values)}
           >
-            <Form.Item label="当前密码" name="currentPassword" rules={[{ required: true, message: "请输入当前密码" }]}>
+            <Form.Item label={t("common.labels.currentPassword")} name="currentPassword" rules={[{ required: true, message: t("common.labels.currentPassword") }]}>
               <Input.Password />
             </Form.Item>
-            <Form.Item label="新密码" name="newPassword" rules={[{ required: true, message: "请输入新密码" }]}>
+            <Form.Item label={t("common.labels.newPassword")} name="newPassword" rules={[{ required: true, message: t("common.labels.newPassword") }]}>
               <Input.Password />
             </Form.Item>
             <Form.Item
               dependencies={["newPassword"]}
-              label="确认新密码"
+              label={t("common.labels.confirmPassword")}
               name="confirmPassword"
               rules={[
-                { required: true, message: "请再次输入新密码" },
+                { required: true, message: t("common.labels.confirmPassword") },
                 ({ getFieldValue }) => ({
                   validator(_, value) {
                     if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
-                    return Promise.reject(new Error("两次输入的新密码不一致"));
+                    return Promise.reject(new Error(t("player.auth.confirmPasswordMismatch")));
                   },
                 }),
               ]}
@@ -1635,7 +1670,7 @@ export function App() {
               loading={changePasswordPending}
               disabled={changePasswordPending}
             >
-              保存并进入
+              {t("common.actions.saveAndEnter")}
             </Button>
           </Form>
         </Card>
@@ -1651,7 +1686,7 @@ export function App() {
           <div className="player-app-brand">
             <SteamAvatar className="player-app-avatar" avatarUrl={headerAccount?.steamAvatarUrl} label={accountLabel} />
             <div className="player-app-brand-copy">
-              <div className="player-kicker">Compet Player</div>
+              <div className="player-kicker">{t("player.window.title")}</div>
               <div className="player-app-name-line">
                 <strong>{accountLabel}</strong>
                 <span className="player-rankme-score">{formatRankmeScore(headerRankmeScore)}</span>
@@ -1662,19 +1697,21 @@ export function App() {
 
         <div className="player-app-chrome">
           <div className="player-app-meta">
-            <span aria-label="当前服务器地址" className="player-status-pill player-status-pill--server">
+            <span aria-label={t("common.labels.serverAddress")} className="player-status-pill player-status-pill--server">
               {baseUrl}
             </span>
-            <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>{realtimeStatus.connection}</span>
+            <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>
+              {realtimeConnectionLabel(realtimeStatus.connection, t)}
+            </span>
             <Button
-              aria-label="历史战绩"
+              aria-label={t("common.navigation.history")}
               className={`player-app-settings-button player-app-history-button${viewingMatchHistory ? " player-app-history-button--active" : ""}`}
               icon={<HistoryChartIcon />}
               type="text"
               onClick={() => void openMatchHistory()}
             />
             <Button
-              aria-label="设置"
+              aria-label={t("common.navigation.settings")}
               className="player-app-settings-button"
               icon={<SettingsToolIcon />}
               type="text"
@@ -1721,7 +1758,7 @@ export function App() {
           centered
           footer={null}
           open={passwordModalOpen}
-          title="修改密码"
+          title={t("common.actions.changePassword")}
           onCancel={() => setPasswordModalOpen(false)}
         >
           <Form
@@ -1729,22 +1766,22 @@ export function App() {
             initialValues={{ currentPassword }}
             onFinish={(values) => void changePassword(values, { refreshSession: false })}
           >
-            <Form.Item label="当前密码" name="currentPassword" rules={[{ required: true, message: "请输入当前密码" }]}>
+            <Form.Item label={t("common.labels.currentPassword")} name="currentPassword" rules={[{ required: true, message: t("common.labels.currentPassword") }]}>
               <Input.Password />
             </Form.Item>
-            <Form.Item label="新密码" name="newPassword" rules={[{ required: true, message: "请输入新密码" }]}>
+            <Form.Item label={t("common.labels.newPassword")} name="newPassword" rules={[{ required: true, message: t("common.labels.newPassword") }]}>
               <Input.Password />
             </Form.Item>
             <Form.Item
               dependencies={["newPassword"]}
-              label="确认新密码"
+              label={t("common.labels.confirmPassword")}
               name="confirmPassword"
               rules={[
-                { required: true, message: "请再次输入新密码" },
+                { required: true, message: t("common.labels.confirmPassword") },
                 ({ getFieldValue }) => ({
                   validator(_, value) {
                     if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
-                    return Promise.reject(new Error("两次输入的新密码不一致"));
+                    return Promise.reject(new Error(t("player.auth.confirmPasswordMismatch")));
                   },
                 }),
               ]}
@@ -1752,7 +1789,7 @@ export function App() {
               <Input.Password />
             </Form.Item>
             <Button type="primary" htmlType="submit" block loading={changePasswordPending} disabled={changePasswordPending}>
-              保存新密码
+              {t("common.actions.saveNewPassword")}
             </Button>
           </Form>
         </Modal>
@@ -1760,7 +1797,7 @@ export function App() {
           centered
           footer={null}
           open={settingsModalOpen}
-          title="设置"
+          title={t("player.settings.title")}
           onCancel={() => setSettingsModalOpen(false)}
         >
           <div className="player-settings">
@@ -1768,28 +1805,35 @@ export function App() {
               items={[
                 {
                   key: "general",
-                  label: "常规",
+                  label: t("player.settings.general"),
                   children: (
                     <div className="player-settings-pane">
                       <label className="player-settings-row">
-                        <span>匹配音效</span>
+                        <span>{t("player.settings.language")}</span>
+                        <LanguageSelector
+                          disabled={languageSaving}
+                          onChange={(value) => void handleLanguageChange(value)}
+                        />
+                      </label>
+                      <label className="player-settings-row">
+                        <span>{t("player.settings.matchSound")}</span>
                         <Switch
-                          aria-label="匹配音效"
+                          aria-label={t("player.settings.matchSound")}
                           checked={matchSoundEnabled}
-                          checkedChildren="开"
-                          unCheckedChildren="关"
+                          checkedChildren={t("player.settings.toggleOn")}
+                          unCheckedChildren={t("player.settings.toggleOff")}
                           onChange={setMatchSoundEnabled}
                           size="small"
                         />
                       </label>
                       {account?.dev ? (
                         <label className="player-settings-row">
-                          <span>开发模式（固定阵容）</span>
+                          <span>{t("common.labels.devMode")}</span>
                           <Switch
-                            aria-label="开发模式"
+                            aria-label={t("common.labels.devMode")}
                             checked={devModeEnabled}
-                            checkedChildren="开"
-                            unCheckedChildren="关"
+                            checkedChildren={t("player.settings.toggleOn")}
+                            unCheckedChildren={t("player.settings.toggleOff")}
                             onChange={setDevModeEnabled}
                             size="small"
                           />
@@ -1802,10 +1846,10 @@ export function App() {
                             setPasswordModalOpen(true);
                           }}
                         >
-                          修改密码
+                          {t("player.settings.changePassword")}
                         </Button>
                         <Button onClick={() => void logout()}>
-                          退出登录
+                          {t("player.settings.logOut")}
                         </Button>
                       </div>
                     </div>
@@ -1813,11 +1857,11 @@ export function App() {
                 },
                 {
                   key: "about",
-                  label: "关于",
+                  label: t("player.settings.about"),
                   children: (
                     <div className="player-settings-pane">
                       <div className="player-settings-update">
-                        <div className="player-settings-version">当前版本：{currentVersion || "读取中"}</div>
+                        <div className="player-settings-version">{t("player.settings.currentVersion", { version: currentVersion || t("common.state.loading") })}</div>
                       </div>
                     </div>
                   ),

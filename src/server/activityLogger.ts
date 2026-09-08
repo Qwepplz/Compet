@@ -98,7 +98,7 @@ export function logRealtimeCommand(account: AccountRecord, command: RealtimeComm
     context: {
       ...context,
       result: ack.ok ? "ok" : "failed",
-      ...(!ack.ok ? { statusCode: ack.error.statusCode, errorCode: "command_error" } : {}),
+      ...(!ack.ok ? { statusCode: ack.error.statusCode, errorCode: ack.error.code } : {}),
     },
   });
 }

@@ -35,6 +35,7 @@ export interface RealtimeCommandAckFailure {
   commandId: string;
   ok: false;
   error: {
+    code?: string;
     message: string;
     statusCode?: number;
   };
@@ -195,6 +196,7 @@ export async function executeRealtimeCommand(
       commandId: command.commandId,
       ok: false,
       error: {
+        code: typeof (error as { code?: unknown })?.code === "string" ? (error as { code: string }).code : "bad_request",
         message: error instanceof Error ? error.message : String(error),
         statusCode: typeof (error as { statusCode?: unknown })?.statusCode === "number" ? (error as { statusCode: number }).statusCode : 400,
       },
@@ -213,6 +215,6 @@ function commandUnavailable(commandId: string): RealtimeCommandAckFailure {
     type: "command_ack",
     commandId,
     ok: false,
-    error: { message: "Realtime command unavailable", statusCode: 503 },
+    error: { code: "service_unavailable", message: "Realtime command unavailable", statusCode: 503 },
   };
 }

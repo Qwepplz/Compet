@@ -1,18 +1,32 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
-import { ConfigProvider } from "antd";
-import zhCN from "antd/es/locale/zh_CN.js";
-import type { Locale } from "antd/es/locale/index.js";
+import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../../language/translate.js";
+import { LanguageProvider } from "../../../language/react.js";
+import type { SupportedLanguage } from "../../../language/types.js";
 import { App } from "./App.js";
 import { theme } from "./theme.js";
 import "./styles.css";
 
-const zhCNLocale = zhCN as unknown as Locale;
+async function loadInitialLanguage(): Promise<SupportedLanguage> {
+  try {
+    const language = await window.managerApi.loadLanguage();
+    return isSupportedLanguage(language) ? language : DEFAULT_LANGUAGE;
+  } catch {
+    return DEFAULT_LANGUAGE;
+  }
+}
 
-ReactDOM.createRoot(document.getElementById("root")!).render(
-  <React.StrictMode>
-    <ConfigProvider locale={zhCNLocale} theme={theme}>
-      <App />
-    </ConfigProvider>
-  </React.StrictMode>,
-);
+void loadInitialLanguage().then((initialLanguage) => {
+  ReactDOM.createRoot(document.getElementById("root")!).render(
+    <React.StrictMode>
+      <LanguageProvider
+        initialLanguage={initialLanguage}
+        saveLanguage={window.managerApi.saveLanguage}
+        theme={theme}
+        documentTitleKey="manager.window.title"
+      >
+        <App />
+      </LanguageProvider>
+    </React.StrictMode>,
+  );
+});

@@ -2,6 +2,9 @@ import { Alert, Button, Form, Input, InputNumber, Space, Spin, message } from "a
 import { useEffect, useState } from "react";
 import type { ManagerConfig } from "../../../shared/types.js";
 import { managerApi, type UpdateCheckResult } from "../api/managerApi.js";
+import { displayError } from "../../../../language/displayError.js";
+import { LanguageSelector } from "../../../../language/LanguageSelector.js";
+import { useLanguage } from "../../../../language/react.js";
 
 interface SettingsFormValues {
   dataDir: string;
@@ -21,6 +24,7 @@ function formatBytes(bytes: number): string {
 }
 
 export function SettingsPage() {
+  const { language, setLanguage, t } = useLanguage();
   const [form] = Form.useForm<SettingsFormValues>();
   const [loadedConfig, setLoadedConfig] = useState<ManagerConfig | null>(null);
   const [loading, setLoading] = useState(false);
@@ -30,6 +34,7 @@ export function SettingsPage() {
   const [checkingUpdate, setCheckingUpdate] = useState(false);
   const [installingUpdate, setInstallingUpdate] = useState(false);
   const [updateResult, setUpdateResult] = useState<UpdateCheckResult | null>(null);
+  const [languageSaving, setLanguageSaving] = useState(false);
 
   async function loadConfig() {
     setLoading(true);
@@ -48,7 +53,7 @@ export function SettingsPage() {
         steamAccountToken: config.steamAccountToken,
       });
     } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "读取配置失败";
+      const messageText = displayError(caught, t, "errors.configLoadFailed");
       setError(messageText);
       message.error(messageText);
     } finally {
@@ -68,14 +73,14 @@ export function SettingsPage() {
         form.setFieldsValue({ serverRoot: selected });
       }
     } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "选择目录失败";
+      const messageText = displayError(caught, t, "errors.configSelectRootFailed");
       message.error(messageText);
     }
   }
 
   async function submit(values: SettingsFormValues) {
     if (!loadedConfig) {
-      message.error("配置尚未加载");
+      message.error(t("manager.settings.notLoaded"));
       return;
     }
     setSubmitting(true);
@@ -95,9 +100,9 @@ export function SettingsPage() {
       };
       await managerApi.saveConfig(nextConfig);
       setLoadedConfig(nextConfig);
-      message.success("配置已保存，重启托管服务后生效");
+      message.success(t("manager.settings.saved"));
     } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "保存配置失败";
+      const messageText = displayError(caught, t, "errors.configSaveFailed");
       setError(messageText);
       message.error(messageText);
     } finally {
@@ -111,9 +116,9 @@ export function SettingsPage() {
     try {
       const result = await managerApi.checkUpdate();
       setUpdateResult(result);
-      message.success(result.updateAvailable ? "发现可用更新" : "当前已是最新版本");
+      message.success(result.updateAvailable ? t("manager.settings.updateFound") : t("manager.settings.latest"));
     } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "检查更新失败";
+      const messageText = displayError(caught, t, "errors.updateCheckFailed");
       message.error(messageText);
     } finally {
       setCheckingUpdate(false);
@@ -124,19 +129,38 @@ export function SettingsPage() {
     setInstallingUpdate(true);
     try {
       await managerApi.installUpdate();
-      message.info("更新已下载，正在重启");
+      message.info(t("manager.settings.updateDownloaded"));
     } catch (caught) {
-      const messageText = caught instanceof Error ? caught.message : "安装更新失败";
+      const messageText = displayError(caught, t, "errors.updateInstallFailed");
       message.error(messageText);
       setInstallingUpdate(false);
     }
   }
 
+  async function changeLanguage(nextLanguage: typeof language) {
+    if (nextLanguage === language || languageSaving) return;
+    setLanguageSaving(true);
+    try {
+      await setLanguage(nextLanguage);
+    } catch {
+      message.error(t("errors.languageSaveFailed"));
+    } finally {
+      setLanguageSaving(false);
+    }
+  }
+
   return (
     <div className="settings-page">
-      <h1 className="page-title">设置</h1>
+      <h1 className="page-title">{t("manager.settings.titleLabel")}</h1>
       {error && <Alert type="error" showIcon message={error} style={{ marginBottom: 12 }} />}
       <div className="settings-body">
+        <div className="manager-language-setting">
+          <span>{t("common.language.label")}</span>
+          <LanguageSelector
+            disabled={languageSaving}
+            onChange={(nextLanguage) => void changeLanguage(nextLanguage)}
+          />
+        </div>
         <Spin spinning={loading}>
           <Form<SettingsFormValues>
             form={form}
@@ -146,58 +170,58 @@ export function SettingsPage() {
             className="settings-form"
             style={{ maxWidth: 560 }}
           >
-            <Form.Item name="dataDir" label="数据目录" rules={[{ required: true, whitespace: true, message: "请输入数据目录" }]}>
+            <Form.Item name="dataDir" label={t("manager.settings.dataDir")} rules={[{ required: true, whitespace: true, message: t("manager.settings.validation.required") }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="host" label="匹配服务绑定 IP" rules={[{ required: true, whitespace: true, message: "请输入匹配服务绑定 IP" }]}>
+            <Form.Item name="host" label={t("manager.settings.host")} rules={[{ required: true, whitespace: true, message: t("manager.settings.validation.required") }]}>
               <Input />
             </Form.Item>
             <Form.Item
               name="port"
-              label="匹配服务端口"
+              label={t("manager.settings.matchPort")}
               rules={[
-                { required: true, message: "请输入端口" },
-                { type: "number", min: 1, max: 65535, message: "端口范围为 1-65535" },
+                { required: true, message: t("manager.settings.validation.port") },
+                { type: "number", min: 1, max: 65535, message: t("manager.settings.validation.portRange") },
               ]}
             >
               <InputNumber min={1} max={65535} precision={0} style={{ width: 180 }} />
             </Form.Item>
             <Form.Item
               name="tokenTtlMinutes"
-              label="Token 有效期分钟"
+              label={t("manager.settings.tokenLifetime")}
               rules={[
-                { required: true, message: "请输入 Token 有效期" },
-                { type: "number", min: 1, message: "Token 有效期至少 1 分钟" },
+                { required: true, message: t("manager.settings.validation.tokenLifetime") },
+                { type: "number", min: 1, message: t("manager.settings.validation.tokenMinimum") },
               ]}
             >
               <InputNumber min={1} precision={0} style={{ width: 180 }} />
             </Form.Item>
-            <Form.Item label="CSGO 服务端目录" required>
+            <Form.Item label={t("manager.settings.serverRoot")} required>
               <Space.Compact style={{ width: "100%" }}>
-                <Form.Item name="serverRoot" noStyle rules={[{ required: true, whitespace: true, message: "请输入 CSGO 服务端目录" }]}>
+                <Form.Item name="serverRoot" noStyle rules={[{ required: true, whitespace: true, message: t("manager.settings.validation.serverRoot") }]}>
                   <Input />
                 </Form.Item>
                 <Button onClick={() => void selectServerRoot()} disabled={loading || submitting}>
-                  选择目录
+                  {t("manager.settings.chooseDirectory")}
                 </Button>
               </Space.Compact>
             </Form.Item>
-            <Form.Item name="publicConnectHost" label="游戏服对外 IP / 域名" rules={[{ required: true, whitespace: true, message: "请输入游戏服对外 IP 或域名" }]}>
+            <Form.Item name="publicConnectHost" label={t("manager.settings.publicHost")} rules={[{ required: true, whitespace: true, message: t("manager.settings.validation.publicHost") }]}>
               <Input />
             </Form.Item>
-            <Form.Item name="steamAccountToken" label="Steam 服务器登录令牌">
+            <Form.Item name="steamAccountToken" label={t("manager.settings.steamToken")}>
               <Input.Password autoComplete="off" />
             </Form.Item>
             <Space size={12} align="start">
-              <Form.Item name="gamePortStart" label="游戏服端口" rules={[{ required: true, message: "请输入端口" }, { type: "number", min: 1, max: 65535, message: "端口范围为 1-65535" }]}>
+              <Form.Item name="gamePortStart" label={t("manager.settings.gamePort")} rules={[{ required: true, message: t("manager.settings.validation.port") }, { type: "number", min: 1, max: 65535, message: t("manager.settings.validation.portRange") }]}>
                 <InputNumber min={1} max={65535} precision={0} style={{ width: 180 }} />
               </Form.Item>
             </Space>
-            <Form.Item label="软件更新">
-              <div className="settings-version">当前版本：{currentVersion || "读取中"}</div>
+            <Form.Item label={t("manager.settings.softwareUpdate")}>
+              <div className="settings-version">{t("manager.settings.currentVersion", { version: currentVersion || t("common.state.loading") })}</div>
               <Space.Compact>
                 <Button size="small" onClick={() => void checkUpdate()} loading={checkingUpdate} disabled={loading || submitting || checkingUpdate}>
-                  检查更新
+                  {t("manager.settings.checkUpdate")}
                 </Button>
                 <Button
                   size="small"
@@ -206,7 +230,7 @@ export function SettingsPage() {
                   loading={installingUpdate}
                   disabled={loading || submitting || checkingUpdate || installingUpdate || updateResult?.updateAvailable !== true}
                 >
-                  下载并安装
+                  {t("manager.settings.downloadInstall")}
                 </Button>
               </Space.Compact>
             </Form.Item>
@@ -216,18 +240,22 @@ export function SettingsPage() {
                 showIcon
                 message={
                   updateResult.updateAvailable
-                    ? `发现 ${updateResult.latestVersion}，需更新 ${updateResult.changedFiles} 个文件，约 ${formatBytes(updateResult.changedBytes)}`
-                    : `当前版本 ${updateResult.currentVersion} 已是最新`
+                    ? t("manager.settings.updateSummary", {
+                        version: updateResult.latestVersion,
+                        files: updateResult.changedFiles,
+                        bytes: formatBytes(updateResult.changedBytes),
+                      })
+                    : t("manager.settings.latestSummary", { version: updateResult.currentVersion })
                 }
               />
             ) : null}
             <div className="settings-actions">
               <Space>
                 <Button type="primary" htmlType="submit" loading={submitting} disabled={loading || submitting || !loadedConfig}>
-                  保存
+                  {t("common.actions.save")}
                 </Button>
                 <Button onClick={() => void loadConfig()} disabled={loading || submitting}>
-                  重新加载
+                  {t("common.actions.reload")}
                 </Button>
               </Space>
             </div>

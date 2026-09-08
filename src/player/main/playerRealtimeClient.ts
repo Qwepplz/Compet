@@ -31,6 +31,7 @@ type PendingCommand = {
 export interface RealtimeCommandServiceError extends Error {
   realtimeCommandServiceError: true;
   statusCode?: number;
+  code?: string;
 }
 
 const DEFAULT_RECONNECT_DELAYS_MS = [1_000, 2_000, 5_000] as const;
@@ -353,7 +354,7 @@ export class PlayerRealtimeClient {
 
   private handleCommandAck(message: unknown): boolean {
     if (typeof message !== "object" || message === null) return false;
-    const ack = message as { type?: unknown; commandId?: unknown; ok?: unknown; result?: unknown; error?: { message?: unknown; statusCode?: unknown } };
+    const ack = message as { type?: unknown; commandId?: unknown; ok?: unknown; result?: unknown; error?: { code?: unknown; message?: unknown; statusCode?: unknown } };
     if (ack.type !== "command_ack" || typeof ack.commandId !== "string") return false;
 
     const pending = this.pendingCommands.get(ack.commandId);
@@ -367,6 +368,7 @@ export class PlayerRealtimeClient {
 
     const error = new Error(typeof ack.error?.message === "string" ? ack.error.message : "Realtime command failed") as RealtimeCommandServiceError;
     error.realtimeCommandServiceError = true;
+    error.code = typeof ack.error?.code === "string" ? ack.error.code : "bad_request";
     if (typeof ack.error?.statusCode === "number") {
       error.statusCode = ack.error.statusCode;
     }

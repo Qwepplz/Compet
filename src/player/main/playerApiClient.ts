@@ -53,7 +53,7 @@ export interface PlayerRealtimeEventsResult {
 type ServerTimedResponse = { serverNow?: string };
 
 export class PlayerApiError extends Error {
-  constructor(message: string, readonly statusCode?: number) {
+  constructor(message: string, readonly statusCode?: number, readonly code?: string) {
     super(message);
     this.name = "PlayerApiError";
   }
@@ -272,7 +272,7 @@ export class PlayerApiClient {
   }
 
   async ackMatchStage(roomId: string, stage: PlayerMatchStageDto): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
-    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503);
+    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503, "service_unavailable");
     const response = await this.realtimeCommandSender<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
       "matchRoom.stageAck",
       { roomId, stage },
@@ -347,7 +347,7 @@ export class PlayerApiClient {
 
   private async enrichAccount(account: AccountView): Promise<AccountView> {
     const profile = await this.resolveSteamProfile(account.steam64);
-    const fallbackName = account.steam64?.trim() || "玩家";
+    const fallbackName = account.steam64?.trim() || "";
     if (!profile) return { ...account, username: "", displayName: fallbackName, steamPersonaName: undefined, steamAvatarUrl: undefined };
     return {
       ...account,
@@ -398,7 +398,7 @@ export class PlayerApiClient {
   private sanitizeFriendDisplay<T extends PlayerFriendSearchResultDto>(item: T): T {
     return {
       ...item,
-      displayName: item.steam64?.trim() || "玩家",
+      displayName: item.steam64?.trim() || "",
       steamPersonaName: undefined,
       steamAvatarUrl: undefined,
     };
@@ -472,7 +472,7 @@ export class PlayerApiClient {
       body,
       token: this.token,
       timeoutMs,
-      createResponseError: (message, statusCode) => new PlayerApiError(message, statusCode),
+      createResponseError: (message, statusCode, code) => new PlayerApiError(message, statusCode, code),
     });
   }
 
@@ -484,7 +484,7 @@ export class PlayerApiClient {
       return await this.realtimeCommandSender<T>(name, payload);
     } catch (error) {
       if (isRealtimeCommandServiceError(error)) {
-        throw new PlayerApiError(error.message, error.statusCode);
+        throw new PlayerApiError(error.message, error.statusCode, error.code);
       }
       return fallback();
     }

@@ -7,6 +7,8 @@ import { VerificationBadge } from "../components/VerificationBadge.js";
 import { resolveFriendStatus } from "../friendStatus.js";
 import { formatMatchmakingElapsed } from "../matchTimers.js";
 import { playerAccountLabel } from "../playerDisplay.js";
+import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
+import type { FriendStatusLabel } from "../friendStatus.js";
 
 interface HomePageProps {
   account: AccountView | null;
@@ -25,15 +27,31 @@ interface HomePageProps {
 const partyMemberSlotOrder = [3, 1, 4, 0];
 const PARTY_SLOT_COUNT = 5;
 
-function memberDisplay(accountId: string, account: AccountView | null, friends: PlayerFriendListDto): { label: string; avatarUrl?: string } {
+function memberDisplay(
+  accountId: string,
+  account: AccountView | null,
+  friends: PlayerFriendListDto,
+  fallback: string,
+): { label: string; avatarUrl?: string } {
   if (accountId === account?.id) {
-    return { label: playerAccountLabel(account), avatarUrl: account.steamAvatarUrl };
+    return { label: playerAccountLabel(account, fallback), avatarUrl: account.steamAvatarUrl };
   }
   const friend = friends.friends.find((entry) => entry.accountId === accountId);
   return {
-    label: friend?.steamPersonaName ?? friend?.displayName ?? "玩家",
+    label: friend?.steamPersonaName ?? friend?.displayName ?? fallback,
     avatarUrl: friend?.steamAvatarUrl,
   };
+}
+
+function friendStatusLabel(status: FriendStatusLabel, t: LanguageContextValue["t"]): string {
+  switch (status) {
+    case "online":
+      return t("player.friends.status.online");
+    case "inGame":
+      return t("player.friends.status.inGame");
+    case "offline":
+      return t("player.friends.status.offline");
+  }
 }
 
 function slotAccountId(index: number, account: AccountView | null, party: PlayerPartyDto | null): string | null {
@@ -63,6 +81,7 @@ export function HomePage({
   onLeaveParty,
   onStartMatchmaking,
 }: HomePageProps) {
+  const { t } = useLanguage();
   const [inviteOpen, setInviteOpen] = useState(false);
   const [busyInviteId, setBusyInviteId] = useState<string | null>(null);
   const [leavingParty, setLeavingParty] = useState(false);
@@ -83,7 +102,7 @@ export function HomePage({
       await onInviteFriend(accountId);
       setInviteOpen(false);
     } catch (error) {
-      void message.error(error instanceof Error ? error.message : "发送队伍邀请失败");
+      void message.error(t("errors.partyInviteFailed"));
     } finally {
       setBusyInviteId(null);
     }
@@ -111,12 +130,12 @@ export function HomePage({
 
   return (
     <div className="faceit-play">
-      <h2 className="player-sr-only">作战中心</h2>
+      <h2 className="player-sr-only">{t("player.home.title")}</h2>
 
       <div className="faceit-party-stage">
         {[0, 1, 2, 3, 4].map((index) => {
           const memberId = slotAccountId(index, account, party);
-          const member = memberId ? memberDisplay(memberId, account, friends) : null;
+          const member = memberId ? memberDisplay(memberId, account, friends, t("common.player.unknown")) : null;
           const label = member?.label ?? "";
           const isSelf = index === 2;
           const isCaptain = Boolean(memberId && party?.ownerAccountId === memberId);
@@ -125,9 +144,9 @@ export function HomePage({
               <SteamAvatar avatarUrl={member?.avatarUrl} label={label} />
               <div className="faceit-party-slot-name">
                 <strong>{label}</strong>
-                <VerificationBadge variant="gold" title="Player" />
+                <VerificationBadge variant="gold" title={t("common.labels.player")} />
                 {isCaptain ? (
-                  <span className="faceit-captain-badge" aria-label="队长" title="队长">
+                  <span className="faceit-captain-badge" aria-label={t("player.home.captain")} title={t("player.home.captain")}>
                     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
                       <path
                         fillRule="evenodd"
@@ -144,7 +163,7 @@ export function HomePage({
             <button
               type="button"
               className="faceit-party-slot"
-              aria-label="邀请好友"
+              aria-label={t("player.home.inviteFriend")}
               onClick={() => setInviteOpen(true)}
               disabled={!onInviteFriend}
               key={index}
@@ -159,14 +178,14 @@ export function HomePage({
         centered
         footer={null}
         open={inviteOpen}
-        title="邀请好友"
+        title={t("player.home.inviteFriend")}
         className="faceit-invite-modal"
         onCancel={() => setInviteOpen(false)}
       >
         <div className="faceit-invite-list">
           {friends.friends.length > 0 ? (
             friends.friends.map((friend) => {
-              const label = friend.displayName || "玩家";
+              const label = friend.displayName || t("common.player.fallback");
               const status = resolveFriendStatus(friend);
               const inviteEnabled = Boolean(onInviteFriend && canInviteFriend(friend, party, account));
               return (
@@ -174,28 +193,28 @@ export function HomePage({
                   <SteamAvatar avatarUrl={friend.steamAvatarUrl} label={label} />
                   <div className="faceit-invite-main">
                     <strong>{label}</strong>
-                    <span>{status.label}</span>
+                    <span>{friendStatusLabel(status.label, t)}</span>
                   </div>
                   <Button
-                    aria-label={`邀请 ${label}`}
+                    aria-label={`${t("player.home.invite")} ${label}`}
                     type="primary"
                     onClick={() => void inviteFriend(friend.accountId)}
                     loading={busyInviteId === friend.accountId}
                     disabled={!inviteEnabled}
                   >
-                    邀请
+                    {t("player.home.invite")}
                   </Button>
                 </div>
               );
             })
           ) : (
-            <div className="player-empty">暂无好友。</div>
+            <div className="player-empty">{t("player.home.emptyFriends")}</div>
           )}
         </div>
       </Modal>
 
       <div className="faceit-queue-bar">
-        {!hasSteamBinding ? <div className="faceit-binding-warning">账号未绑定 Steam64，无法匹配</div> : null}
+        {!hasSteamBinding ? <div className="faceit-binding-warning">{t("player.home.steamBindingWarning")}</div> : null}
         <div className="faceit-queue-actions">
           <Button
             type="primary"
@@ -204,7 +223,7 @@ export function HomePage({
             disabled={primaryDisabled}
           >
             <span className="faceit-matchmaking-content">
-              <span>{isMatchmakingPending ? "正在匹配" : "开始匹配"}</span>
+              <span>{isMatchmakingPending ? t("player.home.matchmaking") : t("player.home.startMatchmaking")}</span>
               {isMatchmakingPending ? (
                 <span className="faceit-matchmaking-indicator" aria-live="polite">
                   <Spin size="small" />
@@ -215,8 +234,8 @@ export function HomePage({
           </Button>
           <div
             className={`faceit-occupancy-indicator faceit-occupancy-indicator--${isMatchmakingOccupied ? "busy" : "available"}`}
-            aria-label={`游戏房间占用 ${occupancyActiveCount}`}
-            title={`游戏房间占用 ${occupancyActiveCount}`}
+            aria-label={t("player.home.occupancy", { count: occupancyActiveCount })}
+            title={t("player.home.occupancy", { count: occupancyActiveCount })}
           >
             <span className="faceit-occupancy-dot" />
             <span className="faceit-occupancy-count">{occupancyActiveCount}</span>
@@ -224,8 +243,8 @@ export function HomePage({
           {party ? (
             <Button
               className="faceit-secondary-cta"
-              aria-label="退出队伍"
-              title="退出队伍"
+              aria-label={t("player.home.leaveParty")}
+              title={t("player.home.leaveParty")}
               onClick={() => void leaveParty()}
               disabled={!onLeaveParty || leavingParty || isMatchmakingPending}
               loading={leavingParty}

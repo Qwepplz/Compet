@@ -1,6 +1,8 @@
 import { Button, Card, Form, Input, Space, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import type { SavedLoginCredentials, ServiceStatus } from "../../../shared/types.js";
+import { useLanguage } from "../../../../language/react.js";
+import { serviceStatusLabel } from "../serviceStatus.js";
 
 interface LoginValues {
   username: string;
@@ -15,6 +17,7 @@ const statusColor: Record<ServiceStatus["state"], string> = {
   failed: "error",
 };
 export function LoginPage({ status, savedLogin, onLogin }: { status: ServiceStatus; savedLogin: SavedLoginCredentials | null; onLogin: (username: string, password: string) => Promise<void> }) {
+  const { t } = useLanguage();
   const [form] = Form.useForm<LoginValues>();
   const [loginPending, setLoginPending] = useState(false);
 
@@ -37,20 +40,20 @@ export function LoginPage({ status, savedLogin, onLogin }: { status: ServiceStat
 
   return (
     <div className="auth-page">
-      <Card className="auth-card" title="管理员登录">
+      <Card className="auth-card" title={t("manager.auth.loginTitle")}>
         <Space className="status-row" style={{ marginBottom: 12 }}>
-          <Tag color={statusColor[status.state]}>{status.state}</Tag>
+          <Tag color={statusColor[status.state]}>{serviceStatusLabel(status.state, t)}</Tag>
           <Typography.Text className="status-url" type="secondary">{status.baseUrl}</Typography.Text>
         </Space>
         <Form<LoginValues> form={form} layout="vertical" onFinish={handleLogin}>
-          <Form.Item name="username" label="用户名" rules={[{ required: true, message: "请输入用户名" }]}> 
+          <Form.Item name="username" label={t("common.labels.username")} rules={[{ required: true, message: t("common.labels.username") }]}>
             <Input autoComplete="username" disabled={loginPending} />
           </Form.Item>
-          <Form.Item name="password" label="密码" rules={[{ required: true, message: "请输入密码" }]}> 
+          <Form.Item name="password" label={t("common.labels.password")} rules={[{ required: true, message: t("common.labels.password") }]}>
             <Input.Password autoComplete="current-password" disabled={loginPending} />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={loginPending} disabled={loginPending}>
-            登录
+            {t("common.actions.login")}
           </Button>
         </Form>
       </Card>

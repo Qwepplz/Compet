@@ -36,9 +36,9 @@ function publicAccount(account: AccountRecord): PublicAccount {
   return rest;
 }
 function readStringField(payload: unknown, field: string): string {
-  if (!payload || typeof payload !== "object" || !(field in payload)) throw badRequest();
+  if (!payload || typeof payload !== "object" || !(field in payload)) throw badRequest("bad_request");
   const value = (payload as Record<string, unknown>)[field];
-  if (typeof value !== "string" || value.length === 0) throw badRequest();
+  if (typeof value !== "string" || value.length === 0) throw badRequest("bad_request");
   return value;
 }
 
@@ -57,30 +57,30 @@ const realtimeEventsQuerySchema = z.object({
 }).default({ afterSeq: 0, timeoutMs: 25_000 });
 
 function mapAccountServiceError(error: unknown): never {
-  if (error instanceof Error && error.message === "account not found") throw notFound();
-  if (error instanceof Error && error.message === "username already exists") throw conflict("Username already exists");
-  if (error instanceof Error && error.message === "steam64 already exists") throw conflict("Steam64 already exists");
-  if (error instanceof Error && error.message === "admin account cannot be deleted") throw forbidden("Cannot delete the server admin account");
+  if (error instanceof Error && error.message === "account not found") throw notFound("resource_not_found", "Account not found");
+  if (error instanceof Error && error.message === "username already exists") throw conflict("username_already_exists", "Username already exists");
+  if (error instanceof Error && error.message === "steam64 already exists") throw conflict("steam64_already_exists", "Steam64 already exists");
+  if (error instanceof Error && error.message === "admin account cannot be deleted") throw forbidden("forbidden", "Cannot delete the server admin account");
   throw error;
 }
 
 function mapClientLoginError(error: unknown): never {
   if (error instanceof Error) {
-    if (error.message === "account already logged in") throw conflict("账号已在另一个客户端登录");
-    if (error.message === "account disabled") throw unauthorized("账号已被禁用");
-    if (error.message === "admin account cannot use client login") throw unauthorized("管理员账号不能登录客户端，请使用服务端管理器登录");
-    if (error.message === "too many login attempts") throw tooManyRequests("登录失败次数过多，请稍后再试");
+    if (error.message === "account already logged in") throw conflict("account_already_logged_in", "Account already logged in");
+    if (error.message === "account disabled") throw unauthorized("account_disabled", "Account disabled");
+    if (error.message === "admin account cannot use client login") throw unauthorized("manager_login_required", "Manager account cannot use player login");
+    if (error.message === "too many login attempts") throw tooManyRequests("login_rate_limited", "Too many login attempts");
   }
-  throw unauthorized("用户名或密码错误");
+  throw unauthorized("invalid_credentials", "Invalid credentials");
 }
 
 function mapManagerLoginError(error: unknown): never {
   if (error instanceof Error) {
-    if (error.message === "account disabled") throw unauthorized("管理员账号已被禁用");
-    if (error.message === "admin account required") throw unauthorized("只有管理员账号可以登录服务端管理器");
-    if (error.message === "too many login attempts") throw tooManyRequests("登录失败次数过多，请稍后再试");
+    if (error.message === "account disabled") throw unauthorized("account_disabled", "Account disabled");
+    if (error.message === "admin account required") throw unauthorized("manager_login_required", "Manager account required");
+    if (error.message === "too many login attempts") throw tooManyRequests("login_rate_limited", "Too many login attempts");
   }
-  throw unauthorized("用户名或密码错误");
+  throw unauthorized("invalid_credentials", "Invalid credentials");
 }
 
 function requireMatchmaking(deps: RouteDeps): MatchmakingService {
@@ -119,18 +119,18 @@ async function resolveMatchHistoryAccount(deps: RouteDeps, authAccount: AccountR
   const targetAccountId = accountId?.trim();
   if (!targetAccountId || targetAccountId === authAccount.id) return authAccount;
   const targetAccount = await deps.accounts.getById(targetAccountId);
-  if (!targetAccount || targetAccount.role !== "player" || !targetAccount.enabled) throw notFound();
+  if (!targetAccount || targetAccount.role !== "player" || !targetAccount.enabled) throw notFound("resource_not_found");
   const friends = requireFriends(deps);
   const friendList = await friends.listFriends(authAccount.id);
-  if (!friendList.friends.some((friend) => friend.accountId === targetAccount.id)) throw forbidden();
+  if (!friendList.friends.some((friend) => friend.accountId === targetAccount.id)) throw forbidden("forbidden");
   return targetAccount;
 }
 
 function mapMatchmakingServiceError(error: unknown): never {
   if (error instanceof Error) {
-    if (error.message.includes("party owner required")) throw forbidden(error.message);
-    if (error.message.includes("steam64 required for matchmaking")) throw badRequest(error.message);
-    if (error.message.includes("matchmaking is already active")) throw conflict(error.message);
+    if (error.message.includes("party owner required")) throw forbidden("party_owner_required", "Party owner required");
+    if (error.message.includes("steam64 required for matchmaking")) throw badRequest("steam64_required_for_matchmaking", "Steam64 is required for matchmaking");
+    if (error.message.includes("matchmaking is already active")) throw conflict("matchmaking_already_active", "Matchmaking is already active");
     if (
       error.message.includes("party not found") ||
       error.message.includes("party invitation not found") ||
@@ -139,7 +139,7 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("room not found") ||
       error.message.includes("account not found")
     ) {
-      throw notFound();
+      throw notFound("resource_not_found");
     }
     if (
       error.message.includes("is not a member of party") ||
@@ -158,7 +158,7 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("Not enough bot candidates") ||
       error.message.includes("dev mode")
     ) {
-      throw badRequest(error.message);
+      throw badRequest("bad_request", error.message);
     }
   }
   throw error;
@@ -166,8 +166,9 @@ function mapMatchmakingServiceError(error: unknown): never {
 
 function mapFriendServiceError(error: unknown): never {
   if (error instanceof Error) {
-    if (error.message.includes("friend request not found") || error.message.includes("friendship not found")) throw notFound();
-    if (error.message.includes("friendship already exists") || error.message.includes("pending friend request already exists")) throw conflict(error.message);
+    if (error.message.includes("friend request not found") || error.message.includes("friendship not found")) throw notFound("resource_not_found");
+    if (error.message.includes("friendship already exists")) throw conflict("friendship_already_exists", "Friendship already exists");
+    if (error.message.includes("pending friend request already exists")) throw conflict("friend_request_already_pending", "Friend request is already pending");
     if (
       error.message.includes("account not found") ||
       error.message.includes("offline") ||
@@ -176,7 +177,7 @@ function mapFriendServiceError(error: unknown): never {
       error.message.includes("does not belong") ||
       error.message.includes("disabled")
     ) {
-      throw badRequest(error.message);
+      throw badRequest("bad_request", error.message);
     }
   }
   throw error;
@@ -222,7 +223,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     try {
       await deps.auth.changePassword(auth.account.id, currentPassword, newPassword);
     } catch {
-      throw badRequest("Invalid current password");
+      throw badRequest("invalid_current_password", "Invalid current password");
     }
     return reply.status(204).send();
   });
@@ -263,7 +264,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requireAdmin(request);
     const { id } = accountIdParamsSchema.parse(request.params);
     const input = patchAccountSchema.parse(request.body);
-    if (id === auth.account.id && input.enabled === false) throw forbidden("Cannot disable current admin");
+    if (id === auth.account.id && input.enabled === false) throw forbidden("forbidden", "Cannot disable current admin");
     try {
       return { account: publicAccount(await deps.accounts.updateAccount(id, input)) };
     } catch (error) {
@@ -289,7 +290,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const auth = await authenticateRequest(request, deps);
     requireAdmin(request);
     const { id } = accountIdParamsSchema.parse(request.params);
-    if (id === auth.account.id) throw forbidden("Cannot delete current admin");
+    if (id === auth.account.id) throw forbidden("forbidden", "Cannot delete current admin");
     try {
       await deps.sessions.revokeSessionsForAccount(id);
     } catch {
@@ -310,7 +311,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const { id } = accountIdParamsSchema.parse(request.params);
     const { page } = matchHistoryQuerySchema.parse(request.query ?? {});
     const account = await deps.accounts.getById(id);
-    if (!account || account.role !== "player") throw notFound();
+    if (!account || account.role !== "player") throw notFound("resource_not_found");
     const completedRecords = await records.listPlayerCompletedMatches(account.steam64, { page, pageSize: MATCH_HISTORY_PAGE_SIZE });
     const matches = completedRecords.matches
       .map((record) => toMatchHistoryEntry(record, account))
@@ -324,9 +325,9 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const records = requireRecords(deps);
     const { id, matchId } = z.object({ id: accountIdSchema, matchId: matchHistoryMatchIdSchema }).parse(request.params);
     const account = await deps.accounts.getById(id);
-    if (!account || account.role !== "player") throw notFound();
+    if (!account || account.role !== "player") throw notFound("resource_not_found");
     const match = await records.readPlayerCompletedMatch(account.steam64, matchId);
-    if (!match) throw notFound();
+    if (!match) throw notFound("resource_not_found");
     return { account: publicAccount(account), result: match.result };
   });
 
@@ -374,7 +375,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const { accountId } = matchHistoryAccountQuerySchema.parse(request.query ?? {});
     const historyAccount = await resolveMatchHistoryAccount(deps, auth.account, accountId);
     const match = await records.readPlayerCompletedMatch(historyAccount.steam64, id);
-    if (!match) throw notFound();
+    if (!match) throw notFound("resource_not_found");
     return { result: match.result };
   });
 
@@ -565,7 +566,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const { partyId } = partyJoinSchema.parse(request.body);
     try {
       const currentParty = await matchmaking.getPartyForAccount(auth.account.id);
-      if (!currentParty || currentParty.id !== partyId) throw badRequest("Use party invitation accept to join a party");
+      if (!currentParty || currentParty.id !== partyId) throw badRequest("bad_request", "Use party invitation accept to join a party");
       return { party: await matchmaking.joinParty(partyId, auth.account.id) };
     } catch (error) {
       mapMatchmakingServiceError(error);

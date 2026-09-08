@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PlayerLiveMatchStateDto } from "../../../shared/types.js";
+import { useLanguage } from "../../../../language/react.js";
 import { formatMapName, mapImageUrl } from "../mapAssets.js";
 import { isMapRandomizingRevealed, mapReelDurationMs, mapReelOffset } from "../randomMapAnimation.js";
 
@@ -9,6 +10,7 @@ const TRAILING_PAD = 2;
 
 export function RandomMapReel({ mapSelection, onSettled }: { mapSelection: MapSelection; onSettled?: () => void }) {
   const { reel, finalMap } = mapSelection;
+  const { t } = useLanguage();
   const winnerIndex = reel.length - 1;
   const tiles = [...reel, ...reel.slice(0, TRAILING_PAD)];
 
@@ -51,10 +53,10 @@ export function RandomMapReel({ mapSelection, onSettled }: { mapSelection: MapSe
 
   return (
     <section className="faceit-connect-panel faceit-reel-panel" aria-live="polite">
-      <span>{settled ? "随机完成" : "随机地图中"}</span>
+      <span>{settled ? t("player.reel.completed") : t("player.reel.randomizing")}</span>
       <div
         className="faceit-reel-viewport"
-        aria-label={settled ? `最终地图 ${formatMapName(finalMap)}` : "随机地图动画"}
+        aria-label={settled ? t("player.reel.finalMapAria", { map: formatMapName(finalMap) }) : t("player.reel.animationAria")}
       >
         <div className="faceit-reel-strip" ref={stripRef}>
           {tiles.map((map, index) => {
@@ -74,7 +76,7 @@ export function RandomMapReel({ mapSelection, onSettled }: { mapSelection: MapSe
         <div className="faceit-reel-marker" aria-hidden="true" />
       </div>
       <strong className="faceit-reel-final-name">{settled ? formatMapName(finalMap) : "??"}</strong>
-      <small>{settled ? "本场地图已确定，正在准备服务器。" : "系统正在随机选择本场地图。"}</small>
+      <small>{settled ? t("player.reel.revealedNote") : t("player.reel.randomizingNote")}</small>
     </section>
   );
 }

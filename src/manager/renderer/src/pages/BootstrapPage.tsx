@@ -1,22 +1,24 @@
 import { Button, Card, Form, Input, Typography } from "antd";
 import type { BootstrapAdminInput } from "../../../shared/types.js";
+import { useLanguage } from "../../../../language/react.js";
 
 export function BootstrapPage({ onSubmit, pending }: { onSubmit: (input: BootstrapAdminInput) => Promise<void>; pending: boolean }) {
+  const { t } = useLanguage();
   return (
     <div className="auth-page">
-      <Card className="auth-card" title="初始化管理员">
+      <Card className="auth-card" title={t("manager.auth.bootstrapTitle")}>
         <Typography.Paragraph type="secondary">
-          服务尚未发现可用管理员账号。创建 bootstrap 文件后会自动尝试启动服务。
+          {t("manager.auth.bootstrapDescription")}
         </Typography.Paragraph>
         <Form<BootstrapAdminInput> layout="vertical" onFinish={onSubmit} disabled={pending}>
-          <Form.Item name="username" label="用户名" rules={[{ required: true, message: "请输入用户名" }]}> 
+          <Form.Item name="username" label={t("manager.auth.bootstrapUsername")} rules={[{ required: true, message: t("common.labels.username") }]}>
             <Input autoComplete="username" />
           </Form.Item>
-          <Form.Item name="password" label="密码" rules={[{ required: true, min: 8, message: "请输入至少 8 位密码" }]}> 
+          <Form.Item name="password" label={t("manager.auth.bootstrapPassword")} rules={[{ required: true, min: 8, message: t("manager.accounts.passwordRule") }]}>
             <Input.Password autoComplete="new-password" />
           </Form.Item>
           <Button type="primary" htmlType="submit" block loading={pending}>
-            创建并启动服务
+            {t("manager.auth.bootstrapSubmit")}
           </Button>
         </Form>
       </Card>

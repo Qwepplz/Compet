@@ -4,6 +4,7 @@ import type { CSSProperties } from "react";
 import type { PlayerMatchPlayerResultDto, PlayerMatchResultDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
+import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
 
 interface MatchResultPageProps {
   result: PlayerMatchResultDto;
@@ -13,8 +14,8 @@ interface MatchResultPageProps {
 
 const MIN_RATING2_PROGRESS = 8;
 
-function playerName(player: PlayerMatchPlayerResultDto): string {
-  return player.name || "玩家";
+function playerName(player: PlayerMatchPlayerResultDto, fallback: string): string {
+  return player.name || fallback;
 }
 
 function formatResultMapName(map: string): string {
@@ -46,9 +47,9 @@ function formatRating2(rating2: number | undefined): string {
   return displayed === null ? "-" : displayed.toFixed(2);
 }
 
-function playerBadge(player: PlayerMatchPlayerResultDto): { variant: "gold" | "white"; title: string } | null {
-  if (player.kind === "human") return { variant: "gold", title: "Player" };
-  if (player.botCategory === "pro") return { variant: "white", title: "Pro-Bot" };
+function playerBadge(player: PlayerMatchPlayerResultDto, t: LanguageContextValue["t"]): { variant: "gold" | "white"; title: string } | null {
+  if (player.kind === "human") return { variant: "gold", title: t("common.labels.player") };
+  if (player.botCategory === "pro") return { variant: "white", title: t("common.labels.proBot") };
   return null;
 }
 
@@ -77,6 +78,7 @@ function rating2Progress(rating2: number | undefined): number | null {
 }
 
 export function MatchResultPage({ result, selfSteam64, onBackHome }: MatchResultPageProps) {
+  const { t, formatDateTime } = useLanguage();
   const totalRounds = result.team1Score + result.team2Score;
   const teamSections = [
     {
@@ -101,15 +103,15 @@ export function MatchResultPage({ result, selfSteam64, onBackHome }: MatchResult
 
   return (
     <div className="match-result-page">
-      <section className="match-result-meta" aria-label="比赛结果">
-        <span>BO1</span>
-        <span>{new Date(result.completedAt).toLocaleString("zh-CN", { hour12: false })}</span>
+      <section className="match-result-meta" aria-label={t("player.match.result")}>
+        <span>{t("common.labels.bo1")}</span>
+        <span>{formatDateTime(result.completedAt)}</span>
         <span>{formatResultMapName(result.mapName)}</span>
       </section>
 
       <section className="match-result-content">
-        <Button className="match-result-back-button" aria-label="返回大厅" icon={<ArrowLeftOutlined />} onClick={onBackHome} />
-        <section className="match-result-team-panels" aria-label="玩家战绩">
+        <Button className="match-result-back-button" aria-label={t("common.navigation.backToHome")} icon={<ArrowLeftOutlined />} onClick={onBackHome} />
+        <section className="match-result-team-panels" aria-label={t("player.match.stats")}>
           {teamSections.map((section) => (
             <section className="match-result-team-section" key={section.team}>
               <header className="match-result-team-header">
@@ -120,11 +122,11 @@ export function MatchResultPage({ result, selfSteam64, onBackHome }: MatchResult
                 {section.firstHalfScore !== undefined || section.secondHalfScore !== undefined ? (
                   <div className="match-result-team-halves">
                     <span>
-                      <span>上半场</span>
+                      <span>{t("common.labels.firstHalf")}</span>
                       <strong>{section.firstHalfScore ?? "-"}</strong>
                     </span>
                     <span>
-                      <span>下半场</span>
+                      <span>{t("common.labels.secondHalf")}</span>
                       <strong>{section.secondHalfScore ?? "-"}</strong>
                     </span>
                   </div>
@@ -138,23 +140,23 @@ export function MatchResultPage({ result, selfSteam64, onBackHome }: MatchResult
                   <table className="match-result-table">
                     <thead>
                       <tr>
-                        <th>玩家</th>
-                        <th>K</th>
-                        <th>D</th>
-                        <th>A</th>
-                        <th>ADR</th>
-                        <th>K/D</th>
-                        <th>K/R</th>
-                        <th>爆头</th>
-                        <th>HS%</th>
-                        <th>Rating 2.0</th>
+                        <th>{t("common.labels.player")}</th>
+                        <th>{t("common.labels.kills")}</th>
+                        <th>{t("common.labels.deaths")}</th>
+                        <th>{t("common.labels.assists")}</th>
+                        <th>{t("common.labels.adr")}</th>
+                        <th>{t("common.labels.kd")}</th>
+                        <th>{t("common.labels.kr")}</th>
+                        <th>{t("common.labels.headshots")}</th>
+                        <th>{t("common.labels.hsPercent")}</th>
+                        <th>{t("common.labels.rating")}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {section.players.map((player) => {
-                        const name = playerName(player);
+                        const name = playerName(player, t("common.player.unknown"));
                         const isSelf = Boolean(selfSteam64) && player.steam64 === selfSteam64;
-                        const badge = playerBadge(player);
+                        const badge = playerBadge(player, t);
                         const ratingTone = rating2Tone(player.rating2);
                         const ratingProgress = rating2Progress(player.rating2);
                         return (

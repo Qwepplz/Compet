@@ -12,25 +12,25 @@ declare module "fastify" { interface FastifyRequest { auth?: RequestAuth; } }
 export async function authenticateRequest(request: FastifyRequest<any, any>, deps: AuthDeps): Promise<RequestAuth> {
   const header = request.headers.authorization;
   const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
-  if (!token) throw unauthorized();
+  if (!token) throw unauthorized("unauthorized");
   const verified = await deps.sessions.verifyToken(token);
-  if (!verified) throw unauthorized();
+  if (!verified) throw unauthorized("unauthorized");
   const account = await deps.accounts.getById(verified.accountId);
-  if (!account || !account.enabled) throw unauthorized();
+  if (!account || !account.enabled) throw unauthorized("account_disabled", "Account disabled");
   request.auth = { token, sessionId: verified.sessionId, account, expiresAt: verified.expiresAt };
   return request.auth;
 }
 
 export function requirePasswordChangeComplete(request: FastifyRequest<any, any>): void {
-  if (request.auth?.account.mustChangePassword) throw forbidden("Password change required");
+  if (request.auth?.account.mustChangePassword) throw forbidden("forbidden", "Password change required");
 }
 
 export function requireAdmin(request: FastifyRequest<any, any>): void {
   requirePasswordChangeComplete(request);
-  if (request.auth?.account.role !== "admin") throw forbidden("Admin role required");
+  if (request.auth?.account.role !== "admin") throw forbidden("manager_login_required", "Admin role required");
 }
 
 export function requirePlayer(request: FastifyRequest<any, any>): void {
   requirePasswordChangeComplete(request);
-  if (request.auth?.account.role !== "player") throw forbidden("Player account required");
+  if (request.auth?.account.role !== "player") throw forbidden("player_login_required", "Player account required");
 }

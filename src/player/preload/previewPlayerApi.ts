@@ -1,5 +1,7 @@
 import type { AccountView } from "../../manager/shared/types.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
+import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../language/translate.js";
+import type { SupportedLanguage } from "../../language/types.js";
 import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { PlayerLoginResult } from "../main/playerApiClient.js";
 import type {
@@ -25,9 +27,9 @@ const previewSteam64 = "76561198000000001";
 const previewAccount: AccountView = {
   id: "preview-player",
   username: "preview",
-  displayName: "Steam 预览账号",
+  displayName: "preview-player",
   steam64: previewSteam64,
-  steamPersonaName: "Steam 预览账号",
+  steamPersonaName: "preview-player",
   role: "player",
   enabled: true,
   mustChangePassword: false,
@@ -153,6 +155,7 @@ function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
 }
 
 export function createPreviewPlayerApi() {
+  let language: SupportedLanguage = DEFAULT_LANGUAGE;
   let party: PlayerPartyDto | null = null;
   let room: PlayerLiveMatchStateDto | null = null;
   const eventListeners = new Set<(event: PlayerRealtimeEvent) => void>();
@@ -185,6 +188,11 @@ export function createPreviewPlayerApi() {
   };
 
   return {
+    loadLanguage: async (): Promise<SupportedLanguage> => language,
+    saveLanguage: async (nextLanguage: SupportedLanguage): Promise<void> => {
+      if (!isSupportedLanguage(nextLanguage)) throw new TypeError("Unsupported language");
+      language = nextLanguage;
+    },
     login: async (): Promise<PlayerLoginResult> => ({ token: "preview-token", account: previewAccount }),
     logout: async (): Promise<void> => undefined,
     changePassword: async (): Promise<void> => undefined,

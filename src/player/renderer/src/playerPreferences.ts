@@ -25,7 +25,7 @@ function saveBoolean(key: string, value: boolean): void {
   try {
     storage.setItem(key, value ? "true" : "false");
   } catch {
-    // 本地偏好持久化尽力而为，不能阻塞 player UI。
+    // Local preference persistence is best effort and must not block the player UI.
   }
 }
 

@@ -22,6 +22,8 @@ import { MATCH_HISTORY_PAGE_SIZE, matchHistoryMatchIdSchema, matchHistoryPageSch
 import { openCompetDatabase } from "../../storage/competDatabase.js";
 import { pathExists } from "../../storage/jsonFile.js";
 import { SerialQueue } from "../../storage/serialQueue.js";
+import type { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
+import { isSupportedLanguage } from "../../language/translate.js";
 import type { DatabaseSync } from "node:sqlite";
 
 export interface IpcDeps {
@@ -29,6 +31,7 @@ export interface IpcDeps {
   logStore: FileLogStore;
   service: ManagedServiceProcess;
   getApiClient: () => ServiceApiClient;
+  languageStore: LanguagePreferenceStore;
   loadSavedLogin: () => Promise<SavedLoginCredentials | null>;
   saveSavedLogin: (credentials: SavedLoginCredentials) => Promise<void>;
   clearSavedLogin: () => Promise<void>;
@@ -58,6 +61,12 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   const offlineAccountsLifecycle = new SerialQueue();
   let managerActor: LogActor | undefined;
   let authRequiredNotified = false;
+
+  ipcMain.handle("language:load", () => deps.languageStore.load());
+  ipcMain.handle("language:save", (_event, language: unknown) => {
+    if (!isSupportedLanguage(language)) throw new TypeError("Unsupported language");
+    return deps.languageStore.save(language);
+  });
 
   function notifyAuthRequired(): void {
     managerActor = undefined;
@@ -164,11 +173,11 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
 
   async function requireOfflineAdmin(offline: NonNullable<typeof offlineAccounts>): Promise<AccountRecord> {
     const token = deps.getApiClient().sessionToken();
-    if (!token) throw new ServiceApiError("Manager login required", 401);
+    if (!token) throw new ServiceApiError("Manager login required", 401, "manager_login_required");
     const session = await offline.sessions.verifyToken(token);
-    if (!session) throw new ServiceApiError("Manager login required", 401);
+    if (!session) throw new ServiceApiError("Manager login required", 401, "manager_login_required");
     const admin = await offline.accounts.getById(session.accountId);
-    if (!admin || admin.role !== "admin" || !admin.enabled) throw new ServiceApiError("Manager login required", 401);
+    if (!admin || admin.role !== "admin" || !admin.enabled) throw new ServiceApiError("Manager login required", 401, "manager_login_required");
     return admin;
   }
 

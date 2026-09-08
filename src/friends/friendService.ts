@@ -307,7 +307,7 @@ export class FriendService {
     const steam64 = account.steam64.trim();
     return {
       accountId: account.id,
-      displayName: steam64 || "玩家",
+      displayName: steam64 || "",
       steam64,
       online: presence.online,
       inGame: presence.inGame,

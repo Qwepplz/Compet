@@ -5,6 +5,8 @@ import { RemoteProfileService } from "./remoteProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
 import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
+import type { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
+import { isSupportedLanguage } from "../../language/translate.js";
 import { DEFAULT_PROFILE_BASE_URL } from "../../profiles/humanProfileIndex.js";
 
 export interface SavedPlayerLogin {
@@ -20,11 +22,17 @@ interface PersistedSession extends SavedPlayerLogin {
 const emptyMatchmakingState: PlayerMatchmakingStateDto = { queue: [], rooms: [], party: null, partyInvitations: [], room: null, occupancy: { activeCount: 0 }, baseSeq: 0 };
 const STARTUP_CONNECTION_BUDGET_MS = 5_000;
 
+function playerOperationError(code: string, message: string, ErrorType: ErrorConstructor = Error): Error & { code: string } {
+  const error = new ErrorType(message) as Error & { code: string };
+  error.code = code;
+  return error;
+}
+
 class PlayerStartupTimeoutError extends Error {
   readonly code = "ETIMEDOUT";
 
   constructor() {
-    super("服务器连接超时");
+    super("Server connection timed out");
     this.name = "PlayerStartupTimeoutError";
   }
 }
@@ -32,7 +40,7 @@ class PlayerStartupTimeoutError extends Error {
 function normalizeStartupTimeout(timeoutMs: unknown): number | undefined {
   if (timeoutMs === undefined) return undefined;
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    throw new RangeError("timeoutMs must be a finite positive number");
+    throw playerOperationError("startup_timeout_invalid", "timeoutMs must be a finite positive number", RangeError);
   }
   return Math.min(timeoutMs, STARTUP_CONNECTION_BUDGET_MS);
 }
@@ -61,6 +69,7 @@ interface IpcDeps {
   connectRealtime: (baseUrl: string, token: string) => void;
   disconnectRealtime: () => void;
   getApiClient: () => PlayerApiClient;
+  languageStore: LanguagePreferenceStore;
   loadSession: () => Promise<PersistedSession | null>;
   refreshRealtimeSnapshot: () => Promise<void>;
   saveSession: (session: PersistedSession) => Promise<void>;
@@ -101,6 +110,12 @@ function withSavedAuth<T>(deps: IpcDeps, operation: (client: PlayerApiClient) =>
 }
 
 export function registerPlayerIpc(deps: IpcDeps): void {
+  ipcMain.handle("language:load", () => deps.languageStore.load());
+  ipcMain.handle("language:save", (_event, language: unknown) => {
+    if (!isSupportedLanguage(language)) throw playerOperationError("language_unsupported", "Unsupported language", TypeError);
+    return deps.languageStore.save(language);
+  });
+
   ipcMain.handle("auth:login", async (_event, baseUrl: string, username: string, password: string) => {
     const client = createPlayerApiClient(baseUrl, undefined, deps);
     const result = await client.login(username, password);
@@ -163,7 +178,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     clipboard.writeText(text);
   });
   ipcMain.handle("player:openConnectUrl", (_event, connectUrl: string) => {
-    if (!isSafeSteamConnectUrl(connectUrl)) throw new Error("Invalid Steam connect URL");
+    if (!isSafeSteamConnectUrl(connectUrl)) throw playerOperationError("connect_url_invalid", "Invalid Steam connect URL");
     return shell.openExternal(connectUrl);
   });
 

@@ -4,6 +4,9 @@ import { useEffect, useRef, useState } from "react";
 import { USERNAME_PATTERN } from "../../../../accounts/accountTypes.js";
 import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, UpdateAccountInput } from "../../../shared/types.js";
 import { accountApi, isManagerAuthRequired } from "../api/managerApi.js";
+import { displayError } from "../../../../language/displayError.js";
+import { useLanguage } from "../../../../language/react.js";
+import type { TranslationKey, Translator } from "../../../../language/types.js";
 
 interface AccountFormValues {
   id?: string;
@@ -22,22 +25,34 @@ function sortPlayersByRating2(players: MatchDetailPlayer[]): MatchDetailPlayer[]
   return [...players].sort((left, right) => rating2SortValue(right) - rating2SortValue(left));
 }
 
-function showAccountError(error: unknown, fallback: string): void {
+function showAccountError(error: unknown, t: Translator, fallback: TranslationKey): void {
   if (isManagerAuthRequired()) return;
-  message.error(error instanceof Error ? error.message : fallback);
+  message.error(displayError(error, t, fallback));
 }
 
-export function AccountStatus({ online, inGame }: Pick<AccountView, "online" | "inGame">) {
+interface AccountStatusLabels {
+  unavailable: string;
+  inGameOnline: string;
+  inGameOffline: string;
+  online: string;
+  offline: string;
+}
+
+export function AccountStatus({
+  online,
+  inGame,
+  labels,
+}: Pick<AccountView, "online" | "inGame"> & { labels: AccountStatusLabels }) {
   if (typeof online !== "boolean" || typeof inGame !== "boolean") {
-    return <span title="状态暂不可用" aria-label="状态暂不可用">—</span>;
+    return <span title={labels.unavailable} aria-label={labels.unavailable}>—</span>;
   }
 
   const color = inGame
     ? (online ? "#fa8c16" : "#ff4d4f")
     : (online ? "#52c41a" : "#8c8c8c");
   const label = inGame
-    ? (online ? "游戏中且在线" : "游戏中且离线")
-    : (online ? "在线" : "离线");
+    ? (online ? labels.inGameOnline : labels.inGameOffline)
+    : (online ? labels.online : labels.offline);
 
   return (
     <span
@@ -56,6 +71,7 @@ export function withoutAccountPresence(account: AccountView): AccountView {
 }
 
 export function AccountsPage() {
+  const { language, formatDateTime, t } = useLanguage();
   const [accounts, setAccounts] = useState<AccountView[]>([]);
   const [matchHistoryAccount, setMatchHistoryAccount] = useState<AccountView | null>(null);
   const [matchHistory, setMatchHistory] = useState<AccountMatchHistory | null>(null);
@@ -97,7 +113,7 @@ export function AccountsPage() {
     } catch (error) {
       if (current()) {
         setAccounts((currentAccounts) => currentAccounts.map(withoutAccountPresence));
-        if (!background) showAccountError(error, "读取账号失败");
+        if (!background) showAccountError(error, t, "errors.accountLoadFailed");
       }
     } finally {
       if (!current()) return;
@@ -157,16 +173,28 @@ export function AccountsPage() {
   }
 
   const columns: TableProps<AccountView>["columns"] = [
-    { title: "用户名", dataIndex: "username" },
+    { title: t("manager.accounts.username"), dataIndex: "username" },
     { title: "Steam64", dataIndex: "steam64", render: (value?: string) => value || "-" },
     {
-      title: "状态",
+      title: t("manager.accounts.status"),
       width: 72,
       align: "center",
-      render: (_: unknown, row: AccountView) => <AccountStatus online={row.online} inGame={row.inGame} />,
+      render: (_: unknown, row: AccountView) => (
+        <AccountStatus
+          online={row.online}
+          inGame={row.inGame}
+          labels={{
+            unavailable: t("manager.accounts.unavailable"),
+            inGameOnline: t("manager.accounts.status.inGameOnline"),
+            inGameOffline: t("manager.accounts.status.inGameOffline"),
+            online: t("manager.accounts.status.online"),
+            offline: t("manager.accounts.status.offline"),
+          }}
+        />
+      ),
     },
     {
-      title: "启用",
+      title: t("manager.accounts.enabled"),
       dataIndex: "enabled",
       render: (value: boolean, row: AccountView) => {
         const updating = updatingIds.has(row.id);
@@ -176,7 +204,7 @@ export function AccountsPage() {
       },
     },
     {
-      title: "Dev 模式",
+      title: t("manager.accounts.devMode"),
       dataIndex: "dev",
       render: (value: boolean | undefined, row: AccountView) => {
         if (row.role !== "player") return "-";
@@ -187,16 +215,16 @@ export function AccountsPage() {
       },
     },
     {
-      title: "操作",
+      title: t("manager.accounts.actions"),
       render: (_: unknown, row: AccountView) => {
         const resetting = resettingIds.has(row.id);
         const deleting = deletingIds.has(row.id);
         return (
           <Space>
-            {row.role === "player" ? <Button onClick={() => void openMatchHistory(row, 1)}>历史战绩</Button> : null}
-            {row.role === "player" ? <Button onClick={() => edit(row)}>编辑</Button> : null}
-            <Button loading={resetting} disabled={resetting} onClick={() => reset(row)}>重置密码</Button>
-            <Button danger loading={deleting} disabled={deleting || row.role === "admin"} onClick={() => remove(row)}>删除账号</Button>
+            {row.role === "player" ? <Button onClick={() => void openMatchHistory(row, 1)}>{t("manager.accounts.history")}</Button> : null}
+            {row.role === "player" ? <Button onClick={() => edit(row)}>{t("manager.accounts.edit")}</Button> : null}
+            <Button loading={resetting} disabled={resetting} onClick={() => reset(row)}>{t("manager.accounts.resetPassword")}</Button>
+            <Button danger loading={deleting} disabled={deleting || row.role === "admin"} onClick={() => remove(row)}>{t("manager.accounts.delete")}</Button>
           </Space>
         );
       },
@@ -213,7 +241,7 @@ export function AccountsPage() {
       if (requestId === matchHistoryRequestIdRef.current) setMatchHistory(history);
     } catch (error) {
       if (requestId === matchHistoryRequestIdRef.current) {
-        showAccountError(error, "读取历史战绩失败");
+      showAccountError(error, t, "errors.accountHistoryLoadFailed");
       }
     } finally {
       if (requestId === matchHistoryRequestIdRef.current) setMatchHistoryLoading(false);
@@ -230,7 +258,7 @@ export function AccountsPage() {
       if (requestId === matchDetailRequestIdRef.current) setMatchDetail(detail);
     } catch (error) {
       if (requestId === matchDetailRequestIdRef.current) {
-        showAccountError(error, "读取战绩详情失败");
+        showAccountError(error, t, "errors.accountResultLoadFailed");
       }
     } finally {
       if (requestId === matchDetailRequestIdRef.current) setMatchDetailLoading(false);
@@ -274,7 +302,7 @@ export function AccountsPage() {
     try {
       await accountApi.update(row.id, { enabled });
     } catch (error) {
-      showAccountError(error, "更新账号失败");
+      showAccountError(error, t, "errors.accountUpdateFailed");
     } finally {
       await refresh();
       endUpdating(row.id);
@@ -286,7 +314,7 @@ export function AccountsPage() {
     try {
       await accountApi.update(row.id, { dev });
     } catch (error) {
-      showAccountError(error, "更新账号失败");
+      showAccountError(error, t, "errors.accountUpdateFailed");
     } finally {
       await refresh();
       endUpdating(row.id);
@@ -298,9 +326,9 @@ export function AccountsPage() {
     try {
       const password = crypto.randomUUID().replaceAll("-", "").slice(0, 12);
       await accountApi.resetPassword(row.id, password);
-      Modal.info({ title: "临时密码", content: password });
+      Modal.info({ title: t("manager.accounts.temporaryPassword"), content: password });
     } catch (error) {
-      showAccountError(error, "重置密码失败");
+      showAccountError(error, t, "errors.accountResetFailed");
     } finally {
       endResetting(row.id);
     }
@@ -308,19 +336,19 @@ export function AccountsPage() {
 
   function remove(row: AccountView) {
     Modal.confirm({
-      title: "删除账号",
-      content: `确定删除账号 ${row.username}？该账号会立即无法继续登录。`,
-      okText: "删除",
+      title: t("manager.accounts.deleteTitle"),
+      content: t("manager.accounts.deleteConfirm", { username: row.username }),
+      okText: t("common.actions.delete"),
       okButtonProps: { danger: true },
-      cancelText: "取消",
+      cancelText: t("common.actions.cancel"),
       onOk: async () => {
         if (!beginDeleting(row.id)) return;
         try {
           await accountApi.delete(row.id);
-          message.success("账号已删除");
+          message.success(t("manager.accounts.deleted"));
           await refresh();
         } catch (error) {
-          showAccountError(error, "删除账号失败");
+      showAccountError(error, t, "errors.accountDeleteFailed");
         } finally {
           endDeleting(row.id);
         }
@@ -347,7 +375,7 @@ export function AccountsPage() {
       setOpen(false);
       await refresh();
     } catch (error) {
-      showAccountError(error, "保存账号失败");
+      showAccountError(error, t, "errors.accountUpdateFailed");
     } finally {
       setSubmitting(false);
     }
@@ -375,12 +403,12 @@ export function AccountsPage() {
   return (
     <>
       <div className="status-row">
-        <h1 className="page-title">账号</h1>
-        <Button type="primary" onClick={create}>创建账号</Button>
+        <h1 className="page-title">{t("manager.navigation.accounts")}</h1>
+        <Button type="primary" onClick={create}>{t("manager.accounts.create")}</Button>
       </div>
       <Table rowKey="id" columns={columns} dataSource={accounts} loading={loading} pagination={false} />
       <Modal
-        title={matchHistoryAccount ? `${matchHistoryAccount.username} 的历史战绩` : "历史战绩"}
+        title={matchHistoryAccount ? t("manager.accounts.historyTitle", { username: matchHistoryAccount.username }) : t("manager.accounts.history")}
         open={matchHistoryAccount !== null}
         footer={null}
         width={1000}
@@ -391,15 +419,15 @@ export function AccountsPage() {
           loading={matchHistoryLoading}
           dataSource={matchHistory?.matches ?? []}
           pagination={false}
-          locale={{ emptyText: "暂无战绩" }}
+          locale={{ emptyText: t("manager.accounts.historyEmpty") }}
           columns={[
-            { title: "日期", dataIndex: "completedAt", render: (value: string) => new Date(value).toLocaleString() },
-            { title: "地图", dataIndex: "mapName" },
-            { title: "结果", render: (_, row) => row.selfWon ? "胜利" : "失败" },
-            { title: "比分", render: (_, row) => row.selfTeam === "teamA" ? `${row.score.team1} : ${row.score.team2}` : `${row.score.team2} : ${row.score.team1}` },
-            { title: "K/D/A", render: (_, row) => `${row.self.kills}/${row.self.deaths}/${row.self.assists}` },
-            { title: "Rating", render: (_, row) => typeof row.self.rating2 === "number" ? row.self.rating2.toFixed(2) : "-" },
-            { title: "操作", render: (_, row) => <Button onClick={() => void openMatchDetail(row.matchId)}>详情</Button> },
+            { title: t("common.labels.date"), dataIndex: "completedAt", render: (value: string) => formatDateTime(value) },
+            { title: t("common.labels.map"), dataIndex: "mapName" },
+            { title: t("common.labels.result"), render: (_, row) => row.selfWon ? t("manager.accounts.win") : t("manager.accounts.loss") },
+            { title: t("common.labels.score"), render: (_, row) => row.selfTeam === "teamA" ? `${row.score.team1} : ${row.score.team2}` : `${row.score.team2} : ${row.score.team1}` },
+            { title: t("common.labels.kda"), render: (_, row) => `${row.self.kills}/${row.self.deaths}/${row.self.assists}` },
+            { title: t("common.labels.rating"), render: (_, row) => typeof row.self.rating2 === "number" ? row.self.rating2.toFixed(2) : "-" },
+            { title: t("common.labels.operations"), render: (_, row) => <Button onClick={() => void openMatchDetail(row.matchId)}>{t("manager.accounts.detail")}</Button> },
           ]}
         />
         {matchHistory && matchHistoryAccount && matchHistory.total > matchHistory.pageSize ? (
@@ -415,7 +443,7 @@ export function AccountsPage() {
         ) : null}
       </Modal>
       <Modal
-        title={matchDetail ? `${matchDetail.account.username} · ${matchDetail.result.mapName}` : "战绩详情"}
+        title={matchDetail ? `${matchDetail.account.username} · ${matchDetail.result.mapName}` : t("manager.accounts.resultDetailsTitle")}
         open={matchDetail !== null || matchDetailLoading}
         footer={null}
         width={1000}
@@ -429,8 +457,8 @@ export function AccountsPage() {
                   <strong className="manager-match-detail-team-name">{section.name}</strong>
                   {section.firstHalfScore !== undefined || section.secondHalfScore !== undefined ? (
                     <div className="manager-match-detail-halves">
-                      <span>上半场 <strong>{section.firstHalfScore ?? "-"}</strong></span>
-                      <span>下半场 <strong>{section.secondHalfScore ?? "-"}</strong></span>
+                      <span>{t("common.labels.firstHalf")} <strong>{section.firstHalfScore ?? "-"}</strong></span>
+                      <span>{t("common.labels.secondHalf")} <strong>{section.secondHalfScore ?? "-"}</strong></span>
                     </div>
                   ) : null}
                   <strong
@@ -449,14 +477,14 @@ export function AccountsPage() {
                   pagination={false}
                   size="small"
                   columns={[
-                    { title: "选手", dataIndex: "name" },
-                    { title: "击杀", dataIndex: "kills" },
-                    { title: "死亡", dataIndex: "deaths" },
-                    { title: "助攻", dataIndex: "assists" },
-                    { title: "伤害", dataIndex: "damage" },
-                    { title: "爆头", dataIndex: "headshots" },
+                    { title: t("common.labels.player"), dataIndex: "name" },
+                    { title: t("common.labels.kills"), dataIndex: "kills" },
+                    { title: t("common.labels.deaths"), dataIndex: "deaths" },
+                    { title: t("common.labels.assists"), dataIndex: "assists" },
+                    { title: t("common.labels.damage"), dataIndex: "damage" },
+                    { title: t("common.labels.headshots"), dataIndex: "headshots" },
                     {
-                      title: "Rating",
+                      title: t("common.labels.rating"),
                       dataIndex: "rating2",
                       render: (value?: number) => typeof value === "number" && Number.isFinite(value) ? value.toFixed(2) : "-",
                     },
@@ -468,7 +496,7 @@ export function AccountsPage() {
         ) : null}
       </Modal>
       <Modal
-        title="账号"
+        title={t("manager.accounts.editTitle")}
         open={open}
         onOk={() => form.submit()}
         onCancel={() => setOpen(false)}
@@ -479,10 +507,10 @@ export function AccountsPage() {
           <Form.Item name="id" hidden><Input /></Form.Item>
           <Form.Item
             name="username"
-            label="用户名"
+            label={t("manager.accounts.selectUsername")}
             rules={[
-              { required: true, message: "请输入用户名" },
-              { pattern: USERNAME_PATTERN, message: "用户名只能包含大小写字母和数字" },
+              { required: true, message: t("common.labels.username") },
+              { pattern: USERNAME_PATTERN, message: t("manager.accounts.usernameRule") },
             ]}
           >
             <Input disabled={isEditing} />
@@ -490,10 +518,10 @@ export function AccountsPage() {
           {!isEditing && (
             <Form.Item
               name="password"
-              label="初始密码"
+              label={t("manager.accounts.initialPassword")}
               rules={[
-                { required: true, message: "请输入初始密码" },
-                { min: 8, message: "初始密码至少 8 位" },
+                { required: true, message: t("manager.accounts.initialPassword") },
+                { min: 8, message: t("manager.accounts.passwordRule") },
               ]}
             >
               <Input.Password />

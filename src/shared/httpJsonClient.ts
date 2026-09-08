@@ -8,7 +8,7 @@ export interface JsonRequestOptions {
   token?: string;
   timeoutMs: number;
   timeoutMessage?: string;
-  createResponseError?: (message: string, statusCode: number) => Error;
+  createResponseError?: (message: string, statusCode: number, code: string) => Error;
 }
 
 export class HttpRequestTimeoutError extends Error {
@@ -26,12 +26,20 @@ const sharedHttpsAgent = new https.Agent({
   maxSockets: 64,
 });
 
-function readHttpErrorMessage(data: unknown, fallback: string): string {
-  if (typeof data !== "object" || data === null) return fallback;
-  const envelope = data as { message?: unknown; error?: { message?: unknown } };
-  if (typeof envelope.message === "string") return envelope.message;
-  if (typeof envelope.error?.message === "string") return envelope.error.message;
-  return fallback;
+function readHttpError(data: unknown, fallback: string): { message: string; code: string } {
+  if (typeof data !== "object" || data === null) return { message: fallback, code: "http_error" };
+  const envelope = data as { code?: unknown; message?: unknown; error?: { code?: unknown; message?: unknown } };
+  const message = typeof envelope.message === "string"
+    ? envelope.message
+    : typeof envelope.error?.message === "string"
+      ? envelope.error.message
+      : fallback;
+  const code = typeof envelope.code === "string"
+    ? envelope.code
+    : typeof envelope.error?.code === "string"
+      ? envelope.error.code
+      : "http_error";
+  return { message, code };
 }
 
 export function requestJson<T>(options: JsonRequestOptions): Promise<T> {
@@ -88,12 +96,17 @@ export function requestJson<T>(options: JsonRequestOptions): Promise<T> {
           try {
             data = JSON.parse(text);
           } catch {
-            settleReject(createResponseError(statusCode >= 400 ? `HTTP ${statusCode}` : "Invalid JSON response", statusCode));
+            settleReject(createResponseError(
+              statusCode >= 400 ? `HTTP ${statusCode}` : "Invalid JSON response",
+              statusCode,
+              statusCode >= 400 ? "http_error" : "invalid_json",
+            ));
             return;
           }
         }
         if (statusCode >= 400) {
-          settleReject(createResponseError(readHttpErrorMessage(data, `HTTP ${statusCode}`), statusCode));
+          const error = readHttpError(data, `HTTP ${statusCode}`);
+          settleReject(createResponseError(error.message, statusCode, error.code));
           return;
         }
         settleResolve(data as T);

@@ -2,6 +2,7 @@ import { ArrowLeftOutlined } from "@ant-design/icons";
 import { Button, Pagination, Spin } from "antd";
 import { useLayoutEffect, useRef, type CSSProperties, type RefObject } from "react";
 import type { PlayerMatchHistoryDto, PlayerMatchHistoryEntryDto } from "../../../shared/types.js";
+import { useLanguage } from "../../../../language/react.js";
 
 interface MatchHistoryPageProps {
   history: PlayerMatchHistoryDto | null;
@@ -51,13 +52,9 @@ function RankmeScoreChange({ score, delta }: { score: number | null | undefined;
   );
 }
 
-function formatResultDate(completedAt: string): { date: string; time: string } {
+function formatResultDate(completedAt: string, formatDateTime: (value: string | number | Date) => string): string {
   const date = new Date(completedAt);
-  if (Number.isNaN(date.getTime())) return { date: "-", time: "-" };
-  return {
-    date: `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()}`,
-    time: date.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false }),
-  };
+  return Number.isNaN(date.getTime()) ? "-" : formatDateTime(date);
 }
 
 function formatMapName(mapName: string): string {
@@ -105,7 +102,8 @@ function MatchHistoryRow({
   match: PlayerMatchHistoryEntryDto;
   onOpenMatch: (matchId: string) => void;
 }) {
-  const date = formatResultDate(match.completedAt);
+  const { formatDateTime, t } = useLanguage();
+  const date = formatResultDate(match.completedAt, formatDateTime);
   const ratingTone = rating2Tone(match.self.rating2);
   const ratingProgress = rating2Progress(match.self.rating2);
   const selfScore = match.selfTeam === "teamA" ? match.score.team1 : match.score.team2;
@@ -115,12 +113,11 @@ function MatchHistoryRow({
       if (event.key === "Enter" || event.key === " ") onOpenMatch(match.matchId);
     }}>
       <td>
-        <span>{date.date}</span>
-        <small>{date.time}</small>
+        <span>{date}</span>
       </td>
       <td>
         <div className="match-history-score">
-          <strong className={`match-history-result-pill match-history-result-pill--${match.selfWon ? "win" : "loss"}`}>{match.selfWon ? "胜" : "负"}</strong>
+          <strong className={`match-history-result-pill match-history-result-pill--${match.selfWon ? "win" : "loss"}`}>{match.selfWon ? t("player.history.win") : t("player.history.loss")}</strong>
           <span>{selfScore}</span>
           <span>:</span>
           <span>{opponentScore}</span>
@@ -150,6 +147,7 @@ function MatchHistoryRow({
 }
 
 export function MatchHistoryPage({ history, loading, scrollTopRef, onBackHome, onOpenMatch, onPageChange }: MatchHistoryPageProps) {
+  const { t } = useLanguage();
   const matches = history?.matches ?? [];
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
 
@@ -170,31 +168,31 @@ export function MatchHistoryPage({ history, loading, scrollTopRef, onBackHome, o
 
   return (
     <div className="match-history-page">
-      <Button className="match-history-back-button" aria-label="返回主页面" icon={<ArrowLeftOutlined />} type="text" onClick={onBackHome} />
-      <section className="match-history-panel" aria-label="历史战绩">
+      <Button className="match-history-back-button" aria-label={t("common.navigation.backToHome")} icon={<ArrowLeftOutlined />} type="text" onClick={onBackHome} />
+      <section className="match-history-panel" aria-label={t("common.navigation.history")}>
         <header className="match-history-header">
-          <h1>Recent matches</h1>
+          <h1>{t("player.history.title")}</h1>
         </header>
         <div className="match-history-table-wrap" ref={tableWrapRef}>
           {loading ? <Spin className="match-history-loading" /> : null}
           <table className="match-history-table">
             <thead>
               <tr>
-                <th>日期</th>
-                <th>分数</th>
+                <th>{t("common.labels.date")}</th>
+                <th>{t("common.labels.score")}</th>
                 <th></th>
-                <th>Rating</th>
-                <th>K/D/A</th>
-                <th>K/D</th>
-                <th>ADR</th>
-                <th>地图</th>
+                <th>{t("common.labels.rating")}</th>
+                <th>{t("common.labels.kda")}</th>
+                <th>{t("common.labels.kd")}</th>
+                <th>{t("common.labels.adr")}</th>
+                <th>{t("common.labels.map")}</th>
               </tr>
             </thead>
             <tbody>
               {matches.map((match) => <MatchHistoryRow key={match.matchId} match={match} onOpenMatch={onOpenMatch} />)}
               {!loading && matches.length === 0 ? (
                 <tr>
-                  <td className="match-history-empty" colSpan={8}>暂无战绩</td>
+                  <td className="match-history-empty" colSpan={8}>{t("player.history.empty")}</td>
                 </tr>
               ) : null}
             </tbody>

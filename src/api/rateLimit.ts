@@ -23,7 +23,7 @@ export function installApiRateLimit(app: FastifyInstance<any, any, any, any, any
       return;
     }
     if (bucket.count >= limit) {
-      done(tooManyRequests("Rate limit exceeded"));
+      done(tooManyRequests("rate_limited", "Rate limit exceeded"));
       return;
     }
     bucket.count += 1;

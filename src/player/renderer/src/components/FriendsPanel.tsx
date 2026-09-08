@@ -3,9 +3,9 @@ import { TeamOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendDto, PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
-import { resolveFriendStatus } from "../friendStatus.js";
+import { resolveFriendStatus, type FriendStatusLabel } from "../friendStatus.js";
 import { SteamAvatar } from "./SteamAvatar.js";
-import { playerAccountLabel } from "../playerDisplay.js";
+import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
 
 interface FriendsPanelProps {
   expanded: boolean;
@@ -22,20 +22,31 @@ interface FriendsPanelProps {
   onRemoveFriend?: (friendshipId: string) => Promise<void>;
 }
 
-function formatLastSeen(lastSeenAt?: string): string {
+function formatLastSeen(lastSeenAt: string | undefined, t: LanguageContextValue["t"]): string {
   if (!lastSeenAt) return "";
   const date = new Date(lastSeenAt);
-  if (Number.isNaN(date.getTime())) return lastSeenAt;
+  if (Number.isNaN(date.getTime())) return t("common.time.invalid");
   const diffMinutes = Math.floor((Date.now() - date.getTime()) / 60000);
-  if (diffMinutes < 1) return "刚刚";
-  if (diffMinutes < 60) return `${diffMinutes} 分钟前`;
+  if (diffMinutes < 1) return t("common.time.justNow");
+  if (diffMinutes < 60) return t("common.time.minutesAgo", { count: diffMinutes });
   const diffHours = Math.floor(diffMinutes / 60);
-  if (diffHours < 24) return `${diffHours} 小时前`;
+  if (diffHours < 24) return t("common.time.hoursAgo", { count: diffHours });
   const diffDays = Math.floor(diffHours / 24);
-  if (diffDays < 30) return `${diffDays} 天前`;
+  if (diffDays < 30) return t("common.time.daysAgo", { count: diffDays });
   const diffMonths = Math.floor(diffDays / 30);
-  if (diffMonths < 12) return `${diffMonths} 个月前`;
-  return `${Math.floor(diffDays / 365)} 年前`;
+  if (diffMonths < 12) return t("common.time.monthsAgo", { count: diffMonths });
+  return t("common.time.yearsAgo", { count: Math.floor(diffDays / 365) });
+}
+
+function friendStatusLabel(status: FriendStatusLabel, t: LanguageContextValue["t"]): string {
+  switch (status) {
+    case "online":
+      return t("player.friends.status.online");
+    case "inGame":
+      return t("player.friends.status.inGame");
+    case "offline":
+      return t("player.friends.status.offline");
+  }
 }
 
 export function FriendsPanel({
@@ -52,6 +63,7 @@ export function FriendsPanel({
   onViewMatchHistory,
   onRemoveFriend,
 }: FriendsPanelProps) {
+  const { t } = useLanguage();
   const [query, setQuery] = useState("");
   const [addOpen, setAddOpen] = useState(false);
   const [searching, setSearching] = useState(false);
@@ -148,10 +160,10 @@ export function FriendsPanel({
   function confirmRemoveFriend(friend: PlayerFriendDto) {
     modal.confirm({
       centered: true,
-      title: "删除好友",
-      content: `确定要删除好友“${friend.displayName}”吗？`,
-      okText: "删除",
-      cancelText: "取消",
+      title: t("player.friends.removeTitle"),
+      content: t("player.friends.removeConfirm", { name: friend.displayName }),
+      okText: t("common.actions.delete"),
+      cancelText: t("common.actions.cancel"),
       autoFocusButton: "cancel",
       okButtonProps: { danger: true },
       onOk: () => handleRemoveFriend(friend.friendshipId),
@@ -166,17 +178,17 @@ export function FriendsPanel({
       {modalContextHolder}
       <div className="player-social-header">
         <Badge className="player-social-rail" count={open ? 0 : pendingCount} size="small">
-          <span className="player-social-rail-icon" aria-label="好友列表">
+          <span className="player-social-rail-icon" aria-label={t("common.navigation.friends")}>
             <TeamOutlined />
           </span>
         </Badge>
         <div className="player-social-heading">
-          <div className="player-kicker">Friends</div>
-          <h3 className="player-social-title">好友</h3>
+          <div className="player-kicker">{t("player.friends.title")}</div>
+          <h3 className="player-social-title">{t("player.friends.title")}</h3>
         </div>
         <Button
           className="player-social-add"
-          aria-label="添加好友"
+          aria-label={t("player.friends.add")}
           type="text"
           icon={<UserAddOutlined />}
           onClick={() => setAddOpen(true)}
@@ -199,29 +211,29 @@ export function FriendsPanel({
                   />
                   <div className="player-social-row-main">
                     <strong>{request.displayName}</strong>
-                    <span>好友请求</span>
+                    <span>{t("player.friends.request")}</span>
                     <span className={`player-status-pill${status.tone === "offline" ? " player-status-pill--muted" : ""}`}>
-                      {status.label}
+                      {friendStatusLabel(status.label, t)}
                     </span>
-                    {status.tone === "offline" && request.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(request.lastSeenAt)}</span> : null}
+                    {status.tone === "offline" && request.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(request.lastSeenAt, t)}</span> : null}
                   </div>
                   <div className="player-social-row-actions">
                     <Button
-                      aria-label="接受"
+                      aria-label={t("player.friends.accept")}
                       size="small"
                       type="primary"
                       onClick={() => void handleAcceptRequest(request.id)}
                       loading={pendingRequestId === request.id}
                     >
-                      接受
+                      {t("player.friends.accept")}
                     </Button>
                     <Button
-                      aria-label="拒绝"
+                      aria-label={t("player.friends.decline")}
                       size="small"
                       onClick={() => void handleDeclineRequest(request.id)}
                       loading={pendingRequestId === request.id}
                     >
-                      拒绝
+                      {t("player.friends.decline")}
                     </Button>
                   </div>
                 </div>
@@ -244,12 +256,12 @@ export function FriendsPanel({
                     items: [
                       {
                         key: "history",
-                        label: "查看历史战绩",
+                        label: t("player.friends.viewHistory"),
                         disabled: !onViewMatchHistory,
                       },
                       {
                         key: "remove",
-                        label: "删除好友",
+                        label: t("player.friends.removeTitle"),
                         danger: true,
                         disabled: !onRemoveFriend || pendingRequestId === friend.friendshipId,
                       },
@@ -269,9 +281,9 @@ export function FriendsPanel({
                     <div className="player-social-row-main">
                       <strong>{friend.displayName}</strong>
                       <span className={`player-status-pill${status.tone === "offline" ? " player-status-pill--muted" : ""}`}>
-                        {status.label}
+                        {friendStatusLabel(status.label, t)}
                       </span>
-                      {status.tone === "offline" && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt)}</span> : null}
+                      {status.tone === "offline" && friend.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(friend.lastSeenAt, t)}</span> : null}
                     </div>
                   </div>
                 </Dropdown>
@@ -286,7 +298,7 @@ export function FriendsPanel({
         centered
         footer={null}
         open={addOpen}
-        title="添加好友"
+        title={t("player.friends.add")}
         onCancel={() => {
           setAddOpen(false);
           setQuery("");
@@ -298,7 +310,7 @@ export function FriendsPanel({
           <div className="player-social-search">
             <Input
               value={query}
-              placeholder="输入账号用户名"
+              placeholder={t("player.friends.searchUsername")}
               onChange={(event) => {
                 setQuery(event.target.value);
                 setHasSearchedFriends(false);
@@ -306,8 +318,8 @@ export function FriendsPanel({
               onPressEnter={() => void handleSearch()}
               disabled={!onSearchFriends}
             />
-            <Button aria-label="搜索" type="primary" onClick={() => void handleSearch()} loading={searching} disabled={!onSearchFriends}>
-              搜索
+            <Button aria-label={t("common.actions.search")} type="primary" onClick={() => void handleSearch()} loading={searching} disabled={!onSearchFriends}>
+              {t("common.actions.search")}
             </Button>
           </div>
 
@@ -328,25 +340,25 @@ export function FriendsPanel({
                     <div className="player-social-row-main">
                       <strong>{result.displayName}</strong>
                       <span className={`player-status-pill${status.tone === "offline" ? " player-status-pill--muted" : ""}`}>
-                        {status.label}
+                        {friendStatusLabel(status.label, t)}
                       </span>
-                      {status.tone === "offline" && result.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(result.lastSeenAt)}</span> : null}
+                      {status.tone === "offline" && result.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(result.lastSeenAt, t)}</span> : null}
                     </div>
                     <Button
-                      aria-label="发送好友请求"
+                      aria-label={t("player.friends.sendRequest")}
                       size="small"
                       onClick={() => void handleSendRequest(result.accountId)}
                       disabled={isFriend || hasPending || !onSendFriendRequest}
                       loading={pendingRequestId === result.accountId}
                     >
-                      发送好友请求
+                      {t("player.friends.sendRequest")}
                     </Button>
                   </div>
                 );
               })}
             </div>
           ) : hasSearchedFriends && !searching && searchResults.length === 0 ? (
-            <div className="player-empty">未找到相关用户</div>
+            <div className="player-empty">{t("common.empty.noSearchResults")}</div>
           ) : null}
         </div>
       </Modal>
