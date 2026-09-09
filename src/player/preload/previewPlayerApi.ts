@@ -375,6 +375,7 @@ export function createPreviewPlayerApi() {
     },
     copyText: async (): Promise<void> => undefined,
     openConnectUrl: async (): Promise<void> => undefined,
+    createDesktopShortcut: async (): Promise<void> => undefined,
     getVersion: async (): Promise<string> => "preview",
     checkUpdate: async (_timeoutMs?: number): Promise<UpdateCheckResult> => ({
       currentVersion: "preview",

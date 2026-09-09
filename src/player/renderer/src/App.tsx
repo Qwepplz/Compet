@@ -381,6 +381,7 @@ export function App() {
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [languageSaving, setLanguageSaving] = useState(false);
+  const [desktopShortcutPending, setDesktopShortcutPending] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
@@ -431,6 +432,19 @@ export function App() {
       void message.error(t("errors.languageSaveFailed"));
     } finally {
       setLanguageSaving(false);
+    }
+  }
+
+  async function handleCreateDesktopShortcut() {
+    if (desktopShortcutPending) return;
+    setDesktopShortcutPending(true);
+    try {
+      await window.playerApi.createDesktopShortcut();
+      void message.success(t("player.settings.desktopShortcutCreated"));
+    } catch {
+      void message.error(t("player.settings.desktopShortcutFailed"));
+    } finally {
+      setDesktopShortcutPending(false);
     }
   }
 
@@ -1826,6 +1840,17 @@ export function App() {
                           size="small"
                         />
                       </label>
+                      <div className="player-settings-row">
+                        <span>{t("player.settings.desktopShortcut")}</span>
+                        <Button
+                          loading={desktopShortcutPending}
+                          disabled={desktopShortcutPending}
+                          onClick={() => void handleCreateDesktopShortcut()}
+                          size="small"
+                        >
+                          {t("player.settings.addDesktopShortcut")}
+                        </Button>
+                      </div>
                       {account?.dev ? (
                         <label className="player-settings-row">
                           <span>{t("common.labels.devMode")}</span>

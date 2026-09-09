@@ -5,6 +5,7 @@ import { RemoteProfileService } from "./remoteProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
 import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
+import { createPlayerDesktopShortcut } from "./desktopShortcut.js";
 import type { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
 import { isSupportedLanguage } from "../../language/translate.js";
 import { DEFAULT_PROFILE_BASE_URL } from "../../profiles/humanProfileIndex.js";
@@ -181,6 +182,7 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     if (!isSafeSteamConnectUrl(connectUrl)) throw playerOperationError("connect_url_invalid", "Invalid Steam connect URL");
     return shell.openExternal(connectUrl);
   });
+  ipcMain.handle("player:desktopShortcut:create", () => createPlayerDesktopShortcut());
 
   ipcMain.handle("session:restore", async (_event, timeoutMs?: number): Promise<RestoreSessionResult | null> => {
     const normalizedTimeoutMs = normalizeStartupTimeout(timeoutMs);

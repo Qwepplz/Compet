@@ -4,6 +4,7 @@ import { access, copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { app } from "electron";
+import { getInstallRoot } from "./installLayout.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../updateTypes.js";
 
 export type { UpdateCheckResult, UpdateInstallResult };
@@ -211,10 +212,6 @@ async function listChangedFiles(files: ManifestFile[]): Promise<{ files: Manifes
     }
   }
   return { files: changed, bytes };
-}
-
-function getInstallRoot(): string {
-  return path.resolve(app.getAppPath(), "..", "..", "..", "..");
 }
 
 async function fetchJson<T>(url: string, signal?: AbortSignal): Promise<T> {

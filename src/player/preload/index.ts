@@ -79,6 +79,7 @@ export const playerApi = {
     subscribe("player:profiles:updated", () => listener()),
   copyText: (text: string): Promise<void> => invoke("player:copyText", text),
   openConnectUrl: (connectUrl: string): Promise<void> => invoke("player:openConnectUrl", connectUrl),
+  createDesktopShortcut: (): Promise<void> => invoke("player:desktopShortcut:create"),
   minimizeWindow: (): Promise<void> => invoke("player:window:minimize"),
   closeWindow: (): Promise<void> => invoke("player:window:close"),
   getVersion: (): Promise<string> => invoke("updates:version"),
