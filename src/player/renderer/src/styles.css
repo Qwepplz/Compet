@@ -250,6 +250,45 @@ input {
   font-weight: 700;
 }
 
+.rankme-badges {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-self: center;
+  align-items: center;
+  gap: 3px;
+}
+
+.rankme-level-icon,
+.rankme-rank-icon {
+  width: auto;
+  height: 18px;
+  object-fit: contain;
+}
+
+.player-app-name-line .rankme-level-icon,
+.player-app-name-line .rankme-rank-icon {
+  height: 22px;
+}
+
+.player-social-name-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.player-social-name-line strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.player-social-name-line .rankme-level-icon,
+.player-social-name-line .rankme-rank-icon {
+  height: 16px;
+}
+
 .player-app-brand .player-kicker {
   display: none;
 }

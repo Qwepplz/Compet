@@ -3,6 +3,8 @@ import type { AccountRecord } from "../accounts/accountTypes.js";
 import type { AccountService } from "../accounts/accountService.js";
 import type { PresenceService } from "../presence/presenceService.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
+import type { RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
+import { rankmeDisplayFromLookup, type RankmeDisplay } from "../rankme/rankmeStandings.js";
 import { FriendStore, type FriendRequestRecord, type FriendshipRecord } from "./friendStore.js";
 
 interface FriendEventPublisher {
@@ -23,6 +25,7 @@ export interface FriendSearchResult {
 export interface FriendDto extends FriendSearchResult {
   friendshipId: string;
   createdAt: string;
+  rankmeStanding: RankmeDisplay | null;
 }
 
 export interface FriendRequestDto extends FriendSearchResult {
@@ -45,6 +48,7 @@ interface FriendServiceDeps {
   accounts: AccountService;
   presence: PresenceService;
   events?: FriendEventPublisher;
+  rankme?: RankmeScoreReader;
   now?: () => string;
   idFactory?: () => string;
 }
@@ -203,18 +207,23 @@ export class FriendService {
     const currentFriendships = friendships ?? (await this.deps.store.listFriendships());
     const currentRequests = requests ?? (await this.deps.store.listRequests());
     const currentAccounts = accounts ?? (await this.loadAccountMap());
-    const mappedFriends = currentFriendships
-      .filter((record) => record.accountAId === accountId || record.accountBId === accountId)
-      .map((record) => {
-        const friendAccountId = record.accountAId === accountId ? record.accountBId : record.accountAId;
-        const account = currentAccounts.get(friendAccountId);
-        if (!account || !account.enabled) return undefined;
-        return {
-          ...this.toSearchResult(account),
-          friendshipId: record.id,
-          createdAt: record.createdAt,
-        } satisfies FriendDto;
-      })
+    const mappedFriends = (
+      await Promise.all(
+        currentFriendships
+          .filter((record) => record.accountAId === accountId || record.accountBId === accountId)
+          .map(async (record) => {
+            const friendAccountId = record.accountAId === accountId ? record.accountBId : record.accountAId;
+            const account = currentAccounts.get(friendAccountId);
+            if (!account || !account.enabled) return undefined;
+            return {
+              ...this.toSearchResult(account),
+              friendshipId: record.id,
+              createdAt: record.createdAt,
+              rankmeStanding: await this.rankmeStandingFor(account),
+            } satisfies FriendDto;
+          }),
+      )
+    )
       .filter((record): record is FriendDto => record !== undefined)
       .sort((left, right) => left.displayName.localeCompare(right.displayName));
 
@@ -300,6 +309,14 @@ export class FriendService {
 
   private async loadAccountMap(): Promise<Map<string, AccountRecord>> {
     return new Map((await this.deps.accounts.listAccounts()).map((account) => [account.id, account]));
+  }
+
+  private async rankmeStandingFor(account: AccountRecord): Promise<RankmeDisplay | null> {
+    const rankme = this.deps.rankme;
+    const steam64 = account.steam64.trim();
+    if (!rankme || !steam64) return null;
+    const lookup = await rankme.lookupStandingBySteam64(steam64);
+    return rankmeDisplayFromLookup(lookup, 6, null);
   }
 
   private toSearchResult(account: AccountRecord): FriendSearchResult {

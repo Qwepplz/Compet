@@ -10,6 +10,7 @@ import type { PartyInvitationDto } from "../../matchmaking/partyInvitationTypes.
 import type { MatchClientStage, MatchRoomReadyState, PartyRecord, QueueEntry } from "../../matchmaking/matchmakingStore.js";
 import type { MatchParticipant, MatchPlayerResult, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
 import type { MatchHistoryEntry } from "../../records/matchHistory.js";
+import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
 
@@ -33,7 +34,7 @@ export type PlayerServerTimedDto<T> = T & { serverNow?: string };
 export type PlayerMatchHistoryEntryDto = MatchHistoryEntry;
 
 export interface PlayerMatchHistoryDto {
-  rankmeScore: number | null;
+  rankmeStanding: RankmeDisplay | null;
   matches: PlayerMatchHistoryEntryDto[];
   page: number;
   pageSize: number;

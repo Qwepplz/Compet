@@ -1,3 +1,5 @@
+import type { RankmeDisplay } from "../rankme/rankmeStandings.js";
+
 export type ParticipantKind = "human" | "bot";
 export type TeamSide = "teamA" | "teamB";
 export type GameSide = "t" | "ct";
@@ -12,6 +14,7 @@ export interface MatchParticipant {
   steamAvatarUrl?: string;
   botProfileName?: string;
   botCategory?: "pro";
+  rankmeStanding?: RankmeDisplay;
   isCaptain?: boolean;
   accountId?: string;
   identityMasked?: boolean;

@@ -3,6 +3,7 @@ import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message }
 import { ArrowLeftOutlined, CloseOutlined, MinusOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
+import type { RankmeDisplay } from "../../../rankme/rankmeStandings.js";
 import type {
   PlayerFriendDto,
   PlayerFriendListDto,
@@ -33,6 +34,7 @@ import { HomePage } from "./pages/HomePage.js";
 import { MatchRoomPage } from "./pages/MatchRoomPage.js";
 import { MatchResultPage } from "./pages/MatchResultPage.js";
 import { MatchHistoryPage, formatRankmeScore } from "./pages/MatchHistoryPage.js";
+import { RankmeBadges } from "./components/RankmeBadges.js";
 import {
   loadDevModeEnabled,
   loadMatchSoundEnabled,
@@ -369,7 +371,7 @@ export function App() {
   const [matchHistory, setMatchHistory] = useState<PlayerMatchHistoryDto | null>(null);
   const [matchHistoryPlayer, setMatchHistoryPlayer] = useState<MatchHistoryPlayer | null>(null);
   const [matchHistoryLoading, setMatchHistoryLoading] = useState(false);
-  const [rankmeScore, setRankmeScore] = useState<number | null>(null);
+  const [rankmeStanding, setRankmeStanding] = useState<RankmeDisplay | null>(null);
   const [matchmakingFeedbackPending, setMatchmakingFeedbackPending] = useState(false);
   const [matchSoundEnabled, setMatchSoundEnabled] = useState(() => loadMatchSoundEnabled());
   const [devModeEnabled, setDevModeEnabled] = useState(() => loadDevModeEnabled());
@@ -419,7 +421,9 @@ export function App() {
   const viewingMatchHistory = activeView === "match-history" || (activeView === "match-result" && matchResultBackView === "match-history");
   const headerAccount = viewingMatchHistory ? matchHistoryPlayer ?? account : account;
   const accountLabel = playerAccountLabel(headerAccount, t("common.player.unknown"));
-  const headerRankmeScore = viewingMatchHistory ? matchHistory?.rankmeScore ?? null : rankmeScore;
+  const headerRankmeStanding = viewingMatchHistory
+    ? matchHistory?.rankmeStanding ?? null
+    : rankmeStanding;
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
   const syncedNowMs = serverSyncedNowMs(serverClockOffsetMs, clockNowMs);
 
@@ -891,7 +895,7 @@ export function App() {
           setMatchResultMatchId(event.matchId);
           setMatchResultPlayerSteam64(account?.steam64);
           setMatchResultBackView("home");
-          void refreshRankmeScore();
+          void refreshRankmeStanding();
           void message.success(t("common.status.matchCompleted"));
           setActiveView("match-result");
           return;
@@ -900,7 +904,7 @@ export function App() {
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
         setMatchResultBackView("home");
-        void refreshRankmeScore();
+        void refreshRankmeStanding();
         void message.success(t("common.status.matchCompleted"));
         setActiveView("home");
         return;
@@ -992,11 +996,11 @@ export function App() {
     }
   }
 
-  async function refreshRankmeScore() {
+  async function refreshRankmeStanding() {
     try {
-      setRankmeScore(await api.getRankmeScore());
+      setRankmeStanding(await api.getRankmeStanding());
     } catch {
-      setRankmeScore(null);
+      setRankmeStanding(null);
     }
   }
 
@@ -1005,7 +1009,7 @@ export function App() {
     try {
       const nextHistory = await api.listMatchHistory(player?.accountId, page);
       setMatchHistory(nextHistory);
-      if (!player) setRankmeScore(nextHistory.rankmeScore);
+      if (!player) setRankmeStanding(nextHistory.rankmeStanding);
     } catch (error) {
       message.error(displayError(error, t, "errors.matchHistoryLoadFailed"));
     } finally {
@@ -1081,7 +1085,7 @@ export function App() {
         setMatchResultPlayerSteam64(undefined);
         setMatchHistory(null);
         setMatchHistoryPlayer(null);
-        setRankmeScore(null);
+        setRankmeStanding(null);
         setActiveView("login");
         return;
       }
@@ -1101,7 +1105,7 @@ export function App() {
       setRealtimeStatus(emptyRealtimeStatus);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
       void hydrateRealtimeState();
-      void refreshRankmeScore();
+      void refreshRankmeStanding();
     } catch (error) {
       message.error(displayError(error, t, "errors.sessionRestoreFailed"));
       setMatchResult(null);
@@ -1109,7 +1113,7 @@ export function App() {
       setMatchResultPlayerSteam64(undefined);
       setMatchHistory(null);
       setMatchHistoryPlayer(null);
-      setRankmeScore(null);
+      setRankmeStanding(null);
       setActiveView("login");
     }
   }
@@ -1150,7 +1154,7 @@ export function App() {
         setMatchResultPlayerSteam64(undefined);
         setMatchHistory(null);
         setMatchHistoryPlayer(null);
-        setRankmeScore(null);
+        setRankmeStanding(null);
         setRealtimeStatus(emptyRealtimeStatus);
         setActiveView("change-password");
         return;
@@ -1162,7 +1166,7 @@ export function App() {
         setMatchResultPlayerSteam64(undefined);
         setMatchHistory(null);
         setMatchHistoryPlayer(null);
-        setRankmeScore(null);
+        setRankmeStanding(null);
         setActiveView("login");
         return;
       }
@@ -1181,7 +1185,7 @@ export function App() {
       setRealtimeStatus(emptyRealtimeStatus);
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
       void hydrateRealtimeState();
-      void refreshRankmeScore();
+      void refreshRankmeStanding();
     } catch (error) {
       message.error(displayError(error, t, "errors.loginFailed"));
     } finally {
@@ -1208,7 +1212,7 @@ export function App() {
           setMatchResultPlayerSteam64(undefined);
           setMatchHistory(null);
           setMatchHistoryPlayer(null);
-          setRankmeScore(null);
+          setRankmeStanding(null);
           setActiveView("login");
           return;
         }
@@ -1227,7 +1231,7 @@ export function App() {
         setRealtimeStatus(emptyRealtimeStatus);
         setActiveView(viewFromSession(restored.account, restored.matchmaking));
         void hydrateRealtimeState();
-        void refreshRankmeScore();
+        void refreshRankmeStanding();
       } else {
         setPasswordModalOpen(false);
       }
@@ -1257,7 +1261,7 @@ export function App() {
       setMatchHistory(null);
       setMatchHistoryPlayer(null);
       setMatchResultBackView("home");
-      setRankmeScore(null);
+      setRankmeStanding(null);
       setRealtimeStatus(emptyRealtimeStatus);
       setCurrentPassword("");
       setSettingsModalOpen(false);
@@ -1703,7 +1707,8 @@ export function App() {
               <div className="player-kicker">{t("player.window.title")}</div>
               <div className="player-app-name-line">
                 <strong>{accountLabel}</strong>
-                <span className="player-rankme-score">{formatRankmeScore(headerRankmeScore)}</span>
+                <span className="player-rankme-score">{formatRankmeScore(headerRankmeStanding?.score)}</span>
+                <RankmeBadges standing={headerRankmeStanding} />
               </div>
             </div>
           </div>

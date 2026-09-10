@@ -20,6 +20,7 @@ import type {
 } from "../shared/types.js";
 import { isRealtimeCommandServiceError } from "./playerRealtimeClient.js";
 import { RemoteProfileService, type PlayerProfile } from "./remoteProfileService.js";
+import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 
 const REQUEST_TIMEOUT_MS = 4_000;
 const MATCHMAKING_START_TIMEOUT_MS = 20_000;
@@ -122,8 +123,9 @@ export class PlayerApiClient {
     return this.request<PlayerFriendListDto>("GET", "/friends").then((friends) => this.enrichFriendList(friends));
   }
 
-  getRankmeScore(): Promise<number | null> {
-    return this.request<{ score: number | null }>("GET", "/me/rankme-score").then((response) => response.score);
+  getRankmeStanding(): Promise<RankmeDisplay | null> {
+    return this.request<{ standing: RankmeDisplay | null }>("GET", "/me/rankme-standing")
+      .then((response) => response.standing);
   }
 
   listMatchHistory(accountId?: string, page = 1): Promise<PlayerMatchHistoryDto> {

@@ -4,6 +4,7 @@ import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { AccountView } from "../../manager/shared/types.js";
 import { createPreviewPlayerApi } from "./previewPlayerApi.js";
 import type { SupportedLanguage } from "../../language/types.js";
+import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 import type {
   PlayerFriendListDto,
   PlayerFriendRequestDto,
@@ -44,7 +45,7 @@ export const playerApi = {
   searchFriends: (query: string): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:search", query),
   reenrichFriends: (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:reenrich", results),
   listFriends: (): Promise<PlayerFriendListDto> => invoke("friends:list"),
-  getRankmeScore: (): Promise<number | null> => invoke("rankme:score"),
+  getRankmeStanding: (): Promise<RankmeDisplay | null> => invoke("rankme:standing"),
   listMatchHistory: (accountId?: string, page?: number): Promise<PlayerMatchHistoryDto> => invoke("matches:history", accountId, page),
   getMatchHistoryResult: (matchId: string, accountId?: string): Promise<PlayerMatchResultDto> => invoke("matches:result", matchId, accountId),
   sendFriendRequest: (accountId: string): Promise<PlayerFriendRequestDto> => invoke("friends:request", accountId),

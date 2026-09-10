@@ -2,9 +2,18 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import {
+  buildRankmeLeaderboardSnapshot,
+  type RankmeDisplay,
+  type RankmeLeaderboardRow,
+  type RankmeLeaderboardSnapshot,
+  type RankmeStandingLookup,
+} from "./rankmeStandings.js";
 
 const execFileAsync = promisify(execFile);
 const steam64Base = 76561197960265728n;
+const leaderboardCacheMs = 30_000;
+const leaderboardMaxBufferBytes = 16 * 1024 * 1024;
 export const DEFAULT_RANKME_SCORE = 1000;
 
 export type RankmeScoreLookup =
@@ -15,6 +24,8 @@ export type RankmeScoreLookup =
 export interface RankmeScoreReader {
   getScoreBySteam64(steam64: string): Promise<number | null>;
   lookupScoreBySteam64?(steam64: string): Promise<RankmeScoreLookup>;
+  lookupStandingBySteam64(steam64: string): Promise<RankmeStandingLookup>;
+  lookupStandingByBotName(botProfileName: string): Promise<RankmeStandingLookup>;
 }
 
 export interface RankmeDatabaseConfig {
@@ -79,10 +90,95 @@ export function parseMysqlScoreOutput(output: string): number | null {
   return lookup.status === "found" ? lookup.score : null;
 }
 
+export function buildRankmeLeaderboardQuery(): string {
+  return "SELECT steam, name, score, kills, deaths FROM `rankme`;";
+}
+
+export function parseMysqlLeaderboardRows(output: string): RankmeLeaderboardRow[] | null {
+  const rows: RankmeLeaderboardRow[] = [];
+  for (const line of output.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    const fields = line.split("\t");
+    if (fields.length !== 5) return null;
+    const [steam = "", name = "", score = "", kills = "", deaths = ""] = fields;
+    if (!steam.trim() && !name.trim()) return null;
+    const row: RankmeLeaderboardRow = {
+      steam,
+      name,
+      score: Number(score),
+      kills: Number(kills),
+      deaths: Number(deaths),
+    };
+    if (!Number.isFinite(row.score) || !Number.isFinite(row.kills) || !Number.isFinite(row.deaths)) {
+      return null;
+    }
+    rows.push(row);
+  }
+  return rows;
+}
+
 export async function lookupRankmeScore(reader: RankmeScoreReader, steam64: string): Promise<RankmeScoreLookup> {
   if (reader.lookupScoreBySteam64) return reader.lookupScoreBySteam64(steam64);
   const score = await reader.getScoreBySteam64(steam64);
   return typeof score === "number" && Number.isFinite(score) ? { status: "found", score } : { status: "unavailable" };
+}
+
+export type RankmeLeaderboardLoader = () => Promise<RankmeLeaderboardSnapshot | null>;
+
+export class RankmeLeaderboardCache {
+  private snapshot: RankmeLeaderboardSnapshot | null = null;
+  private snapshotFetchedAt = 0;
+  private refresh: Promise<RankmeLeaderboardSnapshot | null> | null = null;
+
+  constructor(
+    private readonly load: RankmeLeaderboardLoader,
+    private readonly ttlMs: number = leaderboardCacheMs,
+  ) {}
+
+  async lookupSteam(steam64: string): Promise<RankmeStandingLookup> {
+    const normalized = steam64.trim();
+    if (!normalized) return { status: "unavailable" };
+    return this.lookup((snapshot) => snapshot.bySteam.get(normalized));
+  }
+
+  async lookupBotName(botProfileName: string): Promise<RankmeStandingLookup> {
+    const normalized = botProfileName.trim();
+    if (!normalized) return { status: "unavailable" };
+    return this.lookup((snapshot) => snapshot.byBotName.get(normalized));
+  }
+
+  private async lookup(
+    find: (snapshot: RankmeLeaderboardSnapshot) => RankmeDisplay | undefined,
+  ): Promise<RankmeStandingLookup> {
+    const snapshot = await this.currentSnapshot();
+    if (!snapshot) return { status: "unavailable" };
+    const standing = find(snapshot);
+    return standing ? { status: "found", standing } : { status: "missing" };
+  }
+
+  private currentSnapshot(): Promise<RankmeLeaderboardSnapshot | null> {
+    if (Date.now() - this.snapshotFetchedAt < this.ttlMs) {
+      return Promise.resolve(this.snapshot);
+    }
+    if (!this.refresh) {
+      this.refresh = this.load()
+        .then(
+          (snapshot) => {
+            this.snapshotFetchedAt = Date.now();
+            if (snapshot) this.snapshot = snapshot;
+            return this.snapshot;
+          },
+          () => {
+            this.snapshotFetchedAt = Date.now();
+            return this.snapshot;
+          },
+        )
+        .finally(() => {
+          this.refresh = null;
+        });
+    }
+    return this.refresh;
+  }
 }
 
 export async function resolveMysqlCliPath(): Promise<string | null> {
@@ -106,6 +202,8 @@ export async function resolveMysqlCliPath(): Promise<string | null> {
 }
 
 export class RankmeScoreStore implements RankmeScoreReader {
+  private readonly standings = new RankmeLeaderboardCache(() => this.readLeaderboardSnapshot());
+
   constructor(
     private readonly config: RankmeDatabaseConfig,
     private readonly mysqlPath: string,
@@ -153,6 +251,37 @@ export class RankmeScoreStore implements RankmeScoreReader {
       return parseMysqlScoreLookup(stdout);
     } catch {
       return { status: "unavailable" };
+    }
+  }
+
+  lookupStandingBySteam64(steam64: string): Promise<RankmeStandingLookup> {
+    return this.standings.lookupSteam(steam64);
+  }
+
+  lookupStandingByBotName(botProfileName: string): Promise<RankmeStandingLookup> {
+    return this.standings.lookupBotName(botProfileName);
+  }
+
+  private async readLeaderboardSnapshot(): Promise<RankmeLeaderboardSnapshot | null> {
+    try {
+      const { stdout } = await execFileAsync(this.mysqlPath, [
+        "--batch",
+        "--raw",
+        "--skip-column-names",
+        `--host=${this.config.host}`,
+        `--port=${this.config.port}`,
+        `--user=${this.config.user}`,
+        this.config.database,
+        `--execute=${buildRankmeLeaderboardQuery()}`,
+      ], {
+        env: { ...process.env, MYSQL_PWD: this.config.password },
+        maxBuffer: leaderboardMaxBufferBytes,
+        windowsHide: true,
+      });
+      const rows = parseMysqlLeaderboardRows(stdout);
+      return rows ? buildRankmeLeaderboardSnapshot(rows) : null;
+    } catch {
+      return null;
     }
   }
 }

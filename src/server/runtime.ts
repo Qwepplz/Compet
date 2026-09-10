@@ -19,7 +19,7 @@ import { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import { MatchmakingStore } from "../matchmaking/matchmakingStore.js";
 import { PresenceService } from "../presence/presenceService.js";
 import { ServerSteamPersonaDirectory } from "../profiles/serverSteamPersonaDirectory.js";
-import { RankmeScoreStore } from "../rankme/rankmeScoreStore.js";
+import { RankmeScoreStore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import { RealtimeEventBus } from "../realtime/eventBus.js";
 import { MatchRecordStore } from "../records/matchRecordStore.js";
 import { openCompetDatabase } from "../storage/competDatabase.js";
@@ -60,9 +60,11 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       serverRoot: config.gameServer.serverRoot,
       backupDir: path.join(recordsDir, "mysql-backups"),
     });
-    const rankme = await RankmeScoreStore.create(config.gameServer.serverRoot) ?? {
+    const rankme: RankmeScoreReader = await RankmeScoreStore.create(config.gameServer.serverRoot) ?? {
       getScoreBySteam64: async () => null,
       lookupScoreBySteam64: async () => ({ status: "unavailable" as const }),
+      lookupStandingBySteam64: async () => ({ status: "unavailable" as const }),
+      lookupStandingByBotName: async () => ({ status: "unavailable" as const }),
     };
     const events = new RealtimeEventBus();
     const presence = new PresenceService();
@@ -74,6 +76,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       accounts,
       presence,
       events,
+      rankme,
     });
     const steamPersonas = await ServerSteamPersonaDirectory.create({
       baseUrl: config.profileBaseUrl,

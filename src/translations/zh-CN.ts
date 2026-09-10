@@ -181,6 +181,8 @@ export const zhCN = {
   "player.friends.status.offline": "离线",
   "player.friends.status.inGame": "游戏中",
   "player.friends.avatar": "Steam 头像",
+  "player.rankme.level": "RankMe {level} 级",
+  "player.rankme.rank": "RankMe 第 {rank} 名",
   "player.match.anonymousPlayer": "已匹配玩家",
   "player.match.result": "比赛结果",
   "player.match.stats": "玩家战绩",

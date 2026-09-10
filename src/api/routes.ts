@@ -9,7 +9,8 @@ import type { ServerConfig } from "../config/config.js";
 import type { FriendService } from "../friends/friendService.js";
 import type { MatchmakingService } from "../matchmaking/matchmakingService.js";
 import type { PresenceService } from "../presence/presenceService.js";
-import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
+import { DEFAULT_RANKME_SCORE, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
+import { rankmeDisplayFromLookup, type RankmeDisplay } from "../rankme/rankmeStandings.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { MATCH_HISTORY_PAGE_SIZE, matchHistoryMatchIdSchema, matchHistoryPageSchema, toMatchHistoryEntry } from "../records/matchHistory.js";
@@ -107,12 +108,16 @@ function withServerNow<T extends object>(payload: T): T & { serverNow: string } 
   return { ...payload, serverNow: new Date().toISOString() };
 }
 
-async function rankmeScoreFor(deps: RouteDeps, account: AccountRecord, hasCompletedMatches: boolean | undefined): Promise<number | null> {
+async function rankmeStandingFor(
+  deps: RouteDeps,
+  account: AccountRecord,
+  hasCompletedMatches: boolean | undefined,
+): Promise<RankmeDisplay | null> {
   const steam64 = account.steam64.trim();
   if (!steam64 || !deps.rankme) return null;
-  const lookup = await lookupRankmeScore(deps.rankme, steam64);
-  if (lookup.status === "found") return lookup.score;
-  return lookup.status === "missing" && hasCompletedMatches === false ? DEFAULT_RANKME_SCORE : null;
+  const lookup = await deps.rankme.lookupStandingBySteam64(steam64);
+  const missingScore = hasCompletedMatches === false ? DEFAULT_RANKME_SCORE : null;
+  return rankmeDisplayFromLookup(lookup, 6, missingScore);
 }
 
 async function resolveMatchHistoryAccount(deps: RouteDeps, authAccount: AccountRecord, accountId?: string): Promise<AccountRecord> {
@@ -344,13 +349,13 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     return publicAccount(auth.account);
   });
 
-  app.get("/me/rankme-score", async (request) => {
+  app.get("/me/rankme-standing", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
     const completedMatches = deps.records
       ? await deps.records.listPlayerCompletedMatches(auth.account.steam64, { page: 1, pageSize: 1 })
       : undefined;
-    return { score: await rankmeScoreFor(deps, auth.account, completedMatches ? completedMatches.total > 0 : undefined) };
+    return { standing: await rankmeStandingFor(deps, auth.account, completedMatches ? completedMatches.total > 0 : undefined) };
   });
 
   app.get("/matches/history", async (request) => {
@@ -363,8 +368,8 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const matches = completedRecords.matches
       .map((record) => toMatchHistoryEntry(record, historyAccount))
       .filter((record): record is NonNullable<typeof record> => Boolean(record));
-    const rankmeScore = await rankmeScoreFor(deps, historyAccount, completedRecords.total > 0);
-    return { rankmeScore, matches, page, pageSize: MATCH_HISTORY_PAGE_SIZE, total: completedRecords.total };
+    const rankmeStanding = await rankmeStandingFor(deps, historyAccount, completedRecords.total > 0);
+    return { rankmeStanding, matches, page, pageSize: MATCH_HISTORY_PAGE_SIZE, total: completedRecords.total };
   });
 
   app.get("/matches/:id/result", async (request) => {

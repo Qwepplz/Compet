@@ -4,6 +4,7 @@ import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
+import { RankmeBadges } from "../components/RankmeBadges.js";
 import { formatMapName, mapImageUrl } from "../mapAssets.js";
 import { formatReadyCountdown } from "../matchTimers.js";
 import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
@@ -94,6 +95,7 @@ function renderTeam(
               <div className="faceit-player-main">
                 <div className="faceit-player-name-line">
                   <strong>{displayName}</strong>
+                  {anonymous ? null : <RankmeBadges standing={participant.rankmeStanding} />}
                   {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
                   {!anonymous && participant.isCaptain ? (
                     <span className="faceit-captain-badge" aria-label={t("common.labels.captain")} title={t("common.labels.captain")}>

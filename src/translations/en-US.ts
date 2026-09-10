@@ -177,6 +177,8 @@ export const enUS = {
   "player.friends.status.offline": "Offline",
   "player.friends.status.inGame": "In game",
   "player.friends.avatar": "Steam avatar",
+  "player.rankme.level": "RankMe level {level}",
+  "player.rankme.rank": "RankMe rank {rank}",
   "player.match.anonymousPlayer": "Matched player",
   "player.match.result": "Match result",
   "player.match.stats": "Player statistics",

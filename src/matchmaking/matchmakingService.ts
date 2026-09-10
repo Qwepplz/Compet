@@ -8,12 +8,13 @@ import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
 import type { MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
 import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
+import { rankmeDisplayFromLookup, type RankmeDisplay } from "../rankme/rankmeStandings.js";
 import type { GamePresenceChange, PresenceService } from "../presence/presenceService.js";
 import type { RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { CompletedMatchRecord, MatchRecordStore } from "../records/matchRecordStore.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
 import type { PartyInvitationDto } from "./partyInvitationTypes.js";
-import type { GameSide, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayerResult, MatchSeriesResult, TeamSide } from "./types.js";
+import type { GameSide, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayerResult, MatchSeriesResult, MatchTeam, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
   type MatchClientStage,
@@ -651,14 +652,18 @@ export class MatchmakingService {
             random: this.random,
           })
         : assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
-      const participants = [...teams.teamA.participants, ...teams.teamB.participants];
+      const [teamA, teamB] = await Promise.all([
+        this.withRankmeStandings(teams.teamA),
+        this.withRankmeStandings(teams.teamB),
+      ]);
+      const participants = [...teamA.participants, ...teamB.participants];
       const humanAccountIds = humans.map((participant) => participant.accountId ?? participant.id);
       const room: MatchRoomRecord = {
         id: this.idFactory(),
         phase: "ready",
         ...(useDev ? { dev: true as const } : {}),
-        teamA: teams.teamA,
-        teamB: teams.teamB,
+        teamA,
+        teamB,
         humanAccountIds,
         botParticipantIds: participants.filter((participant) => participant.kind === "bot").map((participant) => participant.id),
         ready: this.buildReadyStates(humans),
@@ -1897,6 +1902,37 @@ export class MatchmakingService {
     };
   }
 
+  private async withRankmeStandings(team: MatchTeam): Promise<MatchTeam> {
+    const participants = await Promise.all(team.participants.map((participant) => this.withRankmeStanding(participant)));
+    return { ...team, participants };
+  }
+
+  private async withRankmeStanding(participant: MatchParticipant): Promise<MatchParticipant> {
+    const standing = await this.rankmeStandingForParticipant(participant);
+    return standing ? { ...participant, rankmeStanding: standing } : participant;
+  }
+
+  private async rankmeStandingForParticipant(participant: MatchParticipant): Promise<RankmeDisplay | undefined> {
+    const rankme = this.deps.rankme;
+    if (!rankme) return undefined;
+    if (participant.kind === "human" && participant.steam64) {
+      return rankmeDisplayFromLookup(
+        await rankme.lookupStandingBySteam64(participant.steam64),
+        6,
+        null,
+      ) ?? undefined;
+    }
+    if (participant.kind === "bot" && participant.botProfileName) {
+      const fallbackLevel = participant.botCategory === "pro" ? 8 : 4;
+      return rankmeDisplayFromLookup(
+        await rankme.lookupStandingByBotName(participant.botProfileName),
+        fallbackLevel,
+        null,
+      ) ?? undefined;
+    }
+    return undefined;
+  }
+
   private maskReadyParticipant(participant: MatchParticipant): MatchParticipant {
     return {
       id: participant.id,
@@ -1908,6 +1944,7 @@ export class MatchmakingService {
       isCaptain: false,
       botCategory: undefined,
       botProfileName: undefined,
+      rankmeStanding: undefined,
       accountId: participant.accountId,
       identityMasked: true,
     };

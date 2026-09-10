@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerFriendDto, PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
 import { resolveFriendStatus, type FriendStatusLabel } from "../friendStatus.js";
+import { RankmeBadges } from "./RankmeBadges.js";
 import { SteamAvatar } from "./SteamAvatar.js";
 import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
 
@@ -279,7 +280,10 @@ export function FriendsPanel({
                       label={friend.displayName}
                     />
                     <div className="player-social-row-main">
-                      <strong>{friend.displayName}</strong>
+                      <div className="player-social-name-line">
+                        <strong>{friend.displayName}</strong>
+                        <RankmeBadges standing={friend.rankmeStanding} />
+                      </div>
                       <span className={`player-status-pill${status.tone === "offline" ? " player-status-pill--muted" : ""}`}>
                         {friendStatusLabel(status.label, t)}
                       </span>

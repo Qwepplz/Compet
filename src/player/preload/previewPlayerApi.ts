@@ -4,6 +4,7 @@ import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../language/translate.
 import type { SupportedLanguage } from "../../language/types.js";
 import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { PlayerLoginResult } from "../main/playerApiClient.js";
+import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 import type {
   PlayerFriendListDto,
   PlayerFriendRequestDto,
@@ -48,6 +49,7 @@ const previewFriends: PlayerFriendListDto = {
       online: true,
       inGame: false,
       createdAt,
+      rankmeStanding: { score: 4017, level: 8, rank: 42 },
     },
     {
       friendshipId: "preview-friend-2",
@@ -59,6 +61,7 @@ const previewFriends: PlayerFriendListDto = {
       inGame: false,
       lastSeenAt: createdAt,
       createdAt,
+      rankmeStanding: { score: null, level: 6, rank: null },
     },
     {
       friendshipId: "preview-friend-3",
@@ -69,6 +72,7 @@ const previewFriends: PlayerFriendListDto = {
       online: true,
       inGame: true,
       createdAt,
+      rankmeStanding: { score: 2888, level: 7, rank: 100 },
     },
     {
       friendshipId: "preview-friend-4",
@@ -80,6 +84,7 @@ const previewFriends: PlayerFriendListDto = {
       inGame: true,
       lastSeenAt: createdAt,
       createdAt,
+      rankmeStanding: { score: 2600, level: 5, rank: null },
     },
   ],
   incomingRequests: [],
@@ -137,8 +142,15 @@ function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
           steam64: previewAccount.steam64,
           steamPersonaName: previewAccount.steamPersonaName,
           accountId: previewAccount.id,
+          rankmeStanding: { score: 4017, level: 8, rank: 42 },
         },
-        { id: "preview-bot-1", kind: "bot", displayName: "Bot Alpha" },
+        {
+          id: "preview-bot-1",
+          kind: "bot",
+          displayName: "Bot Alpha",
+          botProfileName: "Bot Alpha",
+          rankmeStanding: { score: null, level: 4, rank: null },
+        },
       ],
     },
     teamB: {
@@ -146,8 +158,21 @@ function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
       gameSide: "ct",
       name: "Team B",
       participants: [
-        { id: "preview-bot-2", kind: "bot", displayName: "Bot Bravo" },
-        { id: "preview-bot-3", kind: "bot", displayName: "Bot Charlie" },
+        {
+          id: "preview-bot-2",
+          kind: "bot",
+          displayName: "Bot Bravo",
+          botProfileName: "Bot Bravo",
+          botCategory: "pro",
+          rankmeStanding: { score: null, level: 8, rank: null },
+        },
+        {
+          id: "preview-bot-3",
+          kind: "bot",
+          displayName: "Bot Charlie",
+          botProfileName: "Bot Charlie",
+          rankmeStanding: { score: null, level: 4, rank: null },
+        },
       ],
     },
     createdAt,
@@ -222,9 +247,9 @@ export function createPreviewPlayerApi() {
         }));
     },
     listFriends: async (): Promise<PlayerFriendListDto> => previewFriends,
-    getRankmeScore: async (): Promise<number> => 4017,
+    getRankmeStanding: async (): Promise<RankmeDisplay | null> => ({ score: 4017, level: 8, rank: 42 }),
     listMatchHistory: async (_accountId?: string, page = 1): Promise<PlayerMatchHistoryDto> => ({
-      rankmeScore: 4017,
+      rankmeStanding: { score: 4017, level: 8, rank: 42 },
       matches: [{
         matchId: "preview-match",
         completedAt: createdAt,
