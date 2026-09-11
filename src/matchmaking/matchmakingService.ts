@@ -251,6 +251,10 @@ export interface PublicMatchRoomRecord {
   createdAt: string;
 }
 
+export interface PublicPartyRecord extends PartyRecord {
+  rankmeStandings: Record<string, RankmeDisplay | null>;
+}
+
 export interface MatchmakingOccupancySummary {
   activeCount: number;
 }
@@ -327,12 +331,12 @@ export class MatchmakingService {
       this.schedulePartyMatchmakingStart(party);
     }
   }
-  createParty(ownerAccountId: string): Promise<PartyRecord> {
+  createParty(ownerAccountId: string): Promise<PublicPartyRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(ownerAccountId);
       const parties = await this.deps.store.listParties();
       const existing = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
-      if (existing) return existing;
+      if (existing) return this.toPlayerPublicParty(existing);
       const now = this.now();
       const party: PartyRecord = {
         id: this.idFactory(),
@@ -345,25 +349,27 @@ export class MatchmakingService {
 
       await this.deps.store.saveParties([...parties, party]);
       await this.expirePendingInvitationsForAccount(ownerAccountId);
-      await this.emitPartyUpdated(party);
-      return party;
+      const publicParty = await this.toPlayerPublicParty(party);
+      await this.emitPartyUpdated(publicParty);
+      return publicParty;
     });
   }
 
-  async getPartyForAccount(accountId: string): Promise<PartyRecord | undefined> {
+  async getPartyForAccount(accountId: string): Promise<PublicPartyRecord | undefined> {
     await this.requireAccount(accountId);
     const parties = await this.deps.store.listParties();
-    return parties.find((party) => party.memberAccountIds.includes(accountId) && !isSoloOpenParty(party));
+    const party = parties.find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate));
+    return party ? this.toPlayerPublicParty(party) : undefined;
   }
 
-  joinParty(partyId: string, accountId: string): Promise<PartyRecord> {
+  joinParty(partyId: string, accountId: string): Promise<PublicPartyRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
       const parties = await this.deps.store.listParties();
       const party = parties.find((candidate) => candidate.id === partyId);
       if (!party) throw new Error(`party not found: ${partyId}`);
       this.requireOpenParty(party);
-      if (party.memberAccountIds.includes(accountId)) return party;
+      if (party.memberAccountIds.includes(accountId)) return this.toPlayerPublicParty(party);
       if (parties.some((candidate) => candidate.id !== party.id && candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate))) {
         throw new Error("account is already in another party");
       }
@@ -384,8 +390,9 @@ export class MatchmakingService {
       );
       await this.deps.store.saveInvitations(resolvedInvitations);
       await this.emitResolvedInvitations(invitations, resolvedInvitations);
-      await this.emitPartyUpdated(updated);
-      return updated;
+      const publicParty = await this.toPlayerPublicParty(updated);
+      await this.emitPartyUpdated(publicParty);
+      return publicParty;
     });
   }
 
@@ -510,7 +517,7 @@ export class MatchmakingService {
     });
   }
 
-  acceptPartyInvite(accountId: string, invitationId: string): Promise<PartyRecord> {
+  acceptPartyInvite(accountId: string, invitationId: string): Promise<PublicPartyRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
       const invitations = await this.timeoutOverduePartyInvites(await this.deps.store.listInvitations());
@@ -539,8 +546,9 @@ export class MatchmakingService {
       );
       await this.deps.store.saveInvitations(resolvedInvitations);
       await this.emitResolvedInvitations(invitations, resolvedInvitations);
-      await this.emitPartyUpdated(updated);
-      return updated;
+      const publicParty = await this.toPlayerPublicParty(updated);
+      await this.emitPartyUpdated(publicParty);
+      return publicParty;
     });
   }
 
@@ -574,7 +582,7 @@ export class MatchmakingService {
     });
   }
 
-  beginPartyMatchmaking(ownerAccountId: string, options: { dev?: boolean } = {}): Promise<PartyRecord> {
+  beginPartyMatchmaking(ownerAccountId: string, options: { dev?: boolean } = {}): Promise<PublicPartyRecord> {
     return this.enqueueMutation(async () => {
       const ownerAccount = await this.requireMatchmakingAccount(ownerAccountId);
       const parties = await this.deps.store.listParties();
@@ -597,19 +605,20 @@ export class MatchmakingService {
       };
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
       this.schedulePartyMatchmakingStart(updatedParty);
-      await this.emitPartyUpdated(updatedParty);
+      const publicParty = await this.toPlayerPublicParty(updatedParty);
+      await this.emitPartyUpdated(publicParty);
       await this.emitOccupancyUpdated();
-      return updatedParty;
+      return publicParty;
     });
   }
 
-  cancelPartyMatchmaking(ownerAccountId: string): Promise<PartyRecord | undefined> {
+  cancelPartyMatchmaking(ownerAccountId: string): Promise<PublicPartyRecord | undefined> {
     return this.enqueueMutation(async () => {
       const parties = await this.deps.store.listParties();
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
       if (!party) return undefined;
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
-      if ((party.status ?? "open") !== "open" || !party.matchmakingPendingAt) return party;
+      if ((party.status ?? "open") !== "open" || !party.matchmakingPendingAt) return this.toPlayerPublicParty(party);
 
       const updatedParty: PartyRecord = {
         ...party,
@@ -620,9 +629,10 @@ export class MatchmakingService {
       };
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
       this.clearPartyMatchmakingTimeout(party.id);
-      await this.emitPartyUpdated(updatedParty);
+      const publicParty = await this.toPlayerPublicParty(updatedParty);
+      await this.emitPartyUpdated(publicParty);
       await this.emitOccupancyUpdated();
-      return updatedParty;
+      return publicParty;
     });
   }
 
@@ -687,7 +697,8 @@ export class MatchmakingService {
       this.clearPartyMatchmakingTimeout(party.id);
       await this.expirePendingInvitationsForParty(party.id);
       this.scheduleStageBarrierTimeout(room);
-      await this.emitPartyUpdated(updatedParty);
+      const publicParty = await this.toPlayerPublicParty(updatedParty);
+      await this.emitPartyUpdated(publicParty);
       await this.emitOccupancyUpdated();
       await this.emitReadyRoomCreatedPerAccount(room);
       return this.toPlayerPublicRoom(room, ownerAccountId);
@@ -892,7 +903,7 @@ export class MatchmakingService {
   async getState(accountId: string): Promise<{
     queue: QueueEntry[];
     rooms: PublicMatchRoomRecord[];
-    party: PartyRecord | null;
+    party: PublicPartyRecord | null;
     partyInvitations: PartyInvitationDto[];
     room: PublicMatchRoomRecord | null;
     occupancy: MatchmakingOccupancySummary;
@@ -903,7 +914,8 @@ export class MatchmakingService {
     const rooms = allRooms
       .filter((room) => this.roomHasAccount(room, accountId))
       .map((room) => this.toPlayerPublicRoom(room, accountId));
-    const party = parties.find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
+    const partyRecord = parties.find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
+    const party = partyRecord ? await this.toPlayerPublicParty(partyRecord) : null;
     const pendingInvitations = (await this.deps.store.listInvitations()).filter(
       (invitation) => invitation.toAccountId === accountId && invitation.status === "pending" && !this.isPartyInviteOverdue(invitation),
     );
@@ -1233,8 +1245,12 @@ export class MatchmakingService {
     if ((party.status ?? "open") !== "open") throw new Error("party is not open");
   }
 
-  private async emitPartyUpdated(party: PartyRecord): Promise<void> {
-    await this.emit({ type: "party_updated", accountIds: party.memberAccountIds, party });
+  private async emitPartyUpdated(publicParty: PublicPartyRecord): Promise<void> {
+    await this.emit({
+      type: "party_updated",
+      accountIds: publicParty.memberAccountIds,
+      party: publicParty,
+    });
   }
 
   private resolveAcceptedInvitationAndExpireOthers(
@@ -1351,7 +1367,8 @@ export class MatchmakingService {
       };
       await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
       this.clearPartyMatchmakingTimeout(party.id);
-      await this.emitPartyUpdated(updatedParty);
+      const publicParty = await this.toPlayerPublicParty(updatedParty);
+      await this.emitPartyUpdated(publicParty);
       await this.emitOccupancyUpdated();
     });
   }
@@ -1690,6 +1707,17 @@ export class MatchmakingService {
     };
   }
 
+  private async toPlayerPublicParty(party: PartyRecord): Promise<PublicPartyRecord> {
+    const rankmeEntries = await Promise.all(
+      party.memberAccountIds.map(async (accountId) => {
+        const account = await this.deps.accounts.getById(accountId);
+        const standing = account ? (await this.rankmeStandingForSteam64(account.steam64)) ?? null : null;
+        return [accountId, standing] as const;
+      }),
+    );
+    return { ...party, rankmeStandings: Object.fromEntries(rankmeEntries) };
+  }
+
   private async requireMatchmakingAccount(accountId: string): Promise<AccountRecord> {
     const account = await this.deps.accounts.getById(accountId);
     if (!account) throw new Error(`account not found: ${accountId}`);
@@ -1913,15 +1941,11 @@ export class MatchmakingService {
   }
 
   private async rankmeStandingForParticipant(participant: MatchParticipant): Promise<RankmeDisplay | undefined> {
+    if (participant.kind === "human" && participant.steam64) {
+      return this.rankmeStandingForSteam64(participant.steam64);
+    }
     const rankme = this.deps.rankme;
     if (!rankme) return undefined;
-    if (participant.kind === "human" && participant.steam64) {
-      return rankmeDisplayFromLookup(
-        await rankme.lookupStandingBySteam64(participant.steam64),
-        6,
-        null,
-      ) ?? undefined;
-    }
     if (participant.kind === "bot" && participant.botProfileName) {
       const fallbackLevel = participant.botCategory === "pro" ? 8 : 4;
       return rankmeDisplayFromLookup(
@@ -1931,6 +1955,15 @@ export class MatchmakingService {
       ) ?? undefined;
     }
     return undefined;
+  }
+
+  private async rankmeStandingForSteam64(steam64: string): Promise<RankmeDisplay | undefined> {
+    const rankme = this.deps.rankme;
+    const normalizedSteam64 = steam64.trim();
+    if (!rankme || !normalizedSteam64) return undefined;
+    return (
+      rankmeDisplayFromLookup(await rankme.lookupStandingBySteam64(normalizedSteam64), 6, null) ?? undefined
+    );
   }
 
   private maskReadyParticipant(participant: MatchParticipant): MatchParticipant {
@@ -2057,7 +2090,8 @@ export class MatchmakingService {
     const updatedParty: PartyRecord = { ...party, status: "open", lockedMatchId: undefined, updatedAt };
     await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
     try {
-      await this.emitPartyUpdated(updatedParty);
+      const publicParty = await this.toPlayerPublicParty(updatedParty);
+      await this.emitPartyUpdated(publicParty);
     } catch (error) {
       process.stderr.write(`Failed to publish unlocked party ${party.id}: ${error instanceof Error ? error.message : String(error)}\n`);
     }

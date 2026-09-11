@@ -1562,6 +1562,7 @@ export function App() {
     return (
       <HomePage
         account={account}
+        rankmeStanding={rankmeStanding}
         friends={friends}
         party={visibleHomeParty}
         matchmakingPending={matchmakingFeedbackPending || Boolean(syncedMatchmakingPendingAt)}

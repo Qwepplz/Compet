@@ -115,6 +115,9 @@ function makeParty(): PlayerPartyDto {
     createdAt,
     updatedAt: createdAt,
     status: "open",
+    rankmeStandings: {
+      [previewAccount.id]: { score: 4017, level: 8, rank: 42 },
+    },
   };
 }
 

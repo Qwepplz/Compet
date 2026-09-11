@@ -1,7 +1,9 @@
 import { Button, Modal, Spin, message } from "antd";
 import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
+import type { RankmeDisplay } from "../../../../rankme/rankmeStandings.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto } from "../../../shared/types.js";
+import { RankmeBadges } from "../components/RankmeBadges.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
 import { resolveFriendStatus } from "../friendStatus.js";
@@ -12,6 +14,7 @@ import type { FriendStatusLabel } from "../friendStatus.js";
 
 interface HomePageProps {
   account: AccountView | null;
+  rankmeStanding: RankmeDisplay | null;
   friends: PlayerFriendListDto;
   party: PlayerPartyDto | null;
   matchmakingPending?: boolean;
@@ -31,15 +34,23 @@ function memberDisplay(
   accountId: string,
   account: AccountView | null,
   friends: PlayerFriendListDto,
+  party: PlayerPartyDto | null,
+  selfRankmeStanding: RankmeDisplay | null,
   fallback: string,
-): { label: string; avatarUrl?: string } {
+): { label: string; avatarUrl?: string; rankmeStanding: RankmeDisplay | null } {
+  const partyRankmeStanding = party?.rankmeStandings[accountId] ?? null;
   if (accountId === account?.id) {
-    return { label: playerAccountLabel(account, fallback), avatarUrl: account.steamAvatarUrl };
+    return {
+      label: playerAccountLabel(account, fallback),
+      avatarUrl: account.steamAvatarUrl,
+      rankmeStanding: party ? partyRankmeStanding : selfRankmeStanding,
+    };
   }
   const friend = friends.friends.find((entry) => entry.accountId === accountId);
   return {
     label: friend?.steamPersonaName ?? friend?.displayName ?? fallback,
     avatarUrl: friend?.steamAvatarUrl,
+    rankmeStanding: partyRankmeStanding,
   };
 }
 
@@ -70,6 +81,7 @@ function canInviteFriend(friend: PlayerFriendDto, party: PlayerPartyDto | null, 
 
 export function HomePage({
   account,
+  rankmeStanding,
   friends,
   party,
   matchmakingPending = false,
@@ -135,16 +147,19 @@ export function HomePage({
       <div className="faceit-party-stage">
         {[0, 1, 2, 3, 4].map((index) => {
           const memberId = slotAccountId(index, account, party);
-          const member = memberId ? memberDisplay(memberId, account, friends, t("common.player.unknown")) : null;
+          const member = memberId
+            ? memberDisplay(memberId, account, friends, party, rankmeStanding, t("common.player.unknown"))
+            : null;
           const label = member?.label ?? "";
           const isSelf = index === 2;
           const isCaptain = Boolean(memberId && party?.ownerAccountId === memberId);
-          return label ? (
+          return member && label ? (
             <div className={`faceit-party-slot ${isSelf ? "faceit-party-slot--self" : ""}`} key={index}>
               <SteamAvatar avatarUrl={member?.avatarUrl} label={label} />
               <div className="faceit-party-slot-name">
                 <strong>{label}</strong>
                 <VerificationBadge variant="gold" title={t("common.labels.player")} />
+                <RankmeBadges standing={member.rankmeStanding} showRank={false} />
                 {isCaptain ? (
                   <span className="faceit-captain-badge" aria-label={t("player.home.captain")} title={t("player.home.captain")}>
                     <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">

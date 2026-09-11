@@ -2,11 +2,16 @@ import { useLanguage } from "../../../../language/react.js";
 import type { RankmeDisplay } from "../../../../rankme/rankmeStandings.js";
 import { faceitLevelIconUrl, faceitRankIconUrl } from "../rankmeBadgeAssets.js";
 
-export function RankmeBadges({ standing }: { standing: RankmeDisplay | null | undefined }) {
+interface RankmeBadgesProps {
+  standing: RankmeDisplay | null | undefined;
+  showRank?: boolean;
+}
+
+export function RankmeBadges({ standing, showRank = true }: RankmeBadgesProps) {
   const { t } = useLanguage();
   if (!standing) return null;
   const rank = standing.rank;
-  const rankIcon = faceitRankIconUrl(standing.rank);
+  const rankIcon = showRank && rank !== null ? faceitRankIconUrl(rank) : undefined;
   return (
     <span className="rankme-badges">
       <img
@@ -14,8 +19,10 @@ export function RankmeBadges({ standing }: { standing: RankmeDisplay | null | un
         src={faceitLevelIconUrl(standing.level)}
         alt={t("player.rankme.level", { level: standing.level })}
       />
-      {rank !== null && rankIcon ? (
-        <img className="rankme-rank-icon" src={rankIcon} alt={t("player.rankme.rank", { rank })} />
+      {showRank && rank !== null && rankIcon ? (
+        <span className="rankme-rank-viewport">
+          <img className="rankme-rank-icon" src={rankIcon} alt={t("player.rankme.rank", { rank })} />
+        </span>
       ) : null}
     </span>
   );

@@ -172,7 +172,7 @@ input {
   left: 18px;
   z-index: 6;
   min-width: 0;
-  max-width: 224px;
+  max-width: 620px;
   -webkit-app-region: drag;
 }
 
@@ -227,20 +227,16 @@ input {
 
 .player-app-name-line {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   gap: 8px;
-  min-width: 0;
 }
 
 .player-app-brand strong {
   display: block;
-  overflow: hidden;
   color: #fff;
   font-size: 16px;
   letter-spacing: 0.08em;
-  text-overflow: ellipsis;
   text-transform: uppercase;
-  white-space: nowrap;
 }
 
 .player-rankme-score {
@@ -251,6 +247,7 @@ input {
 }
 
 .rankme-badges {
+  --rankme-level-size: 34px;
   display: inline-flex;
   flex: 0 0 auto;
   align-self: center;
@@ -258,16 +255,53 @@ input {
   gap: 3px;
 }
 
-.rankme-level-icon,
-.rankme-rank-icon {
-  width: auto;
-  height: 18px;
+.player-app-name-line .rankme-badges {
+  --rankme-rank-height: 27px;
+}
+
+.rankme-level-icon {
+  display: block;
+  width: var(--rankme-level-size);
+  height: var(--rankme-level-size);
   object-fit: contain;
 }
 
-.player-app-name-line .rankme-level-icon,
-.player-app-name-line .rankme-rank-icon {
-  height: 22px;
+.rankme-rank-viewport {
+  position: relative;
+  display: block;
+  flex: 0 0 auto;
+  width: calc(var(--rankme-rank-height) * 146 / 64);
+  height: var(--rankme-rank-height);
+  overflow: hidden;
+}
+
+.rankme-rank-icon {
+  position: absolute;
+  display: block;
+  width: calc(var(--rankme-rank-height) * 202 / 64);
+  height: calc(var(--rankme-rank-height) * 151 / 64);
+  max-width: none;
+  left: calc(var(--rankme-rank-height) * -29 / 64);
+  top: calc(var(--rankme-rank-height) * -51 / 64);
+}
+
+.player-social-name-line .rankme-badges {
+  --rankme-level-size: 40px;
+  --rankme-rank-height: 28px;
+}
+
+.faceit-player-name-line .rankme-badges {
+  --rankme-level-size: 52px;
+  --rankme-rank-height: 28px;
+}
+
+.player-app-name-line strong,
+.player-social-name-line strong,
+.faceit-party-slot-name strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .player-social-name-line {
@@ -275,18 +309,6 @@ input {
   align-items: center;
   gap: 6px;
   min-width: 0;
-}
-
-.player-social-name-line strong {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.player-social-name-line .rankme-level-icon,
-.player-social-name-line .rankme-rank-icon {
-  height: 16px;
 }
 
 .player-app-brand .player-kicker {
@@ -646,9 +668,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #fff;
   font-size: 20px;
   font-weight: 700;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .faceit-party-slot span {
@@ -1607,7 +1626,6 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   display: flex;
   align-items: center;
   gap: 6px;
-  min-width: 0;
 }
 
 .faceit-verif-badge {
