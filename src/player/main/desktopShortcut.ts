@@ -14,7 +14,7 @@ export function createPlayerDesktopShortcut(): void {
   }
 
   const shortcutPath = path.join(app.getPath("desktop"), PLAYER_SHORTCUT_NAME);
-  const created = shell.writeShortcutLink(shortcutPath, "replace", {
+  const created = shell.writeShortcutLink(shortcutPath, "create", {
     target: launcherPath,
     cwd: installRoot,
     description: "Compet Player Client",

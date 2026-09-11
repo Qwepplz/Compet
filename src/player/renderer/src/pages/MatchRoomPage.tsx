@@ -95,7 +95,6 @@ function renderTeam(
               <div className="faceit-player-main">
                 <div className="faceit-player-name-line">
                   <strong>{displayName}</strong>
-                  {anonymous ? null : <RankmeBadges standing={participant.rankmeStanding} />}
                   {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
                   {!anonymous && participant.isCaptain ? (
                     <span className="faceit-captain-badge" aria-label={t("common.labels.captain")} title={t("common.labels.captain")}>
@@ -109,6 +108,7 @@ function renderTeam(
                       </svg>
                     </span>
                   ) : null}
+                  {anonymous ? null : <RankmeBadges standing={participant.rankmeStanding} />}
                 </div>
               </div>
             </div>

@@ -291,7 +291,6 @@ input {
 }
 
 .faceit-player-name-line .rankme-badges {
-  --rankme-level-size: 52px;
   --rankme-rank-height: 28px;
 }
 
@@ -1947,7 +1946,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .player-social-row-main {
   overflow: hidden;
-  transition: opacity 0.12s ease 0.14s, visibility 0s linear 0.14s;
+  transition: opacity 0.12s ease 0.26s, visibility 0s linear 0.26s;
 }
 
 .player-social-panel--collapsed .player-social-heading,
@@ -2005,6 +2004,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background: transparent;
   border-color: transparent;
   border-width: 0;
+  transition: grid-template-columns 0.26s ease 0.16s, gap 0.26s ease 0.16s, width 0.26s ease 0.16s, height 0.16s ease, min-height 0.16s ease, padding 0.26s ease 0.16s, background 0.2s ease 0.16s, border-color 0.2s ease 0.16s;
 }
 
 .player-social-panel--collapsed .player-social-group--friends .player-social-row {
@@ -2061,7 +2061,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background: #121212;
   border: 2px solid #1f1f1f;
   border-radius: 8px;
-  transition: grid-template-columns 0.26s ease, gap 0.26s ease, width 0.26s ease, height 0.26s ease, min-height 0.26s ease, padding 0.26s ease, background 0.2s ease, border-color 0.2s ease;
+  transition: grid-template-columns 0.26s ease, gap 0.26s ease, width 0.26s ease, height 0.16s ease 0.26s, min-height 0.16s ease 0.26s, padding 0.26s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
 .player-social-row .faceit-avatar {
