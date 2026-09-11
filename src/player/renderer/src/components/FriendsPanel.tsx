@@ -245,7 +245,7 @@ export function FriendsPanel({
         ) : null}
 
         {friends.friends.length > 0 ? (
-          <div className="player-social-group">
+          <div className="player-social-group player-social-group--friends">
             <div className="player-social-list">
               {friends.friends.map((friend) => {
                 const status = resolveFriendStatus(friend);

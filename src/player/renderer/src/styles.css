@@ -1938,24 +1938,34 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .player-social-heading,
 .player-social-add,
-.player-social-row-main,
 .player-social-row-actions {
   max-width: 100%;
   max-height: 160px;
   overflow: hidden;
-  transition: opacity 0.12s ease 0.18s, visibility 0s linear 0.18s, max-width 0s linear 0.18s, max-height 0s linear 0.18s;
+  transition: opacity 0.12s ease 0.14s, visibility 0s linear 0.14s, max-width 0s linear 0.14s, max-height 0s linear 0.14s;
+}
+
+.player-social-row-main {
+  overflow: hidden;
+  transition: opacity 0.12s ease 0.14s, visibility 0s linear 0.14s;
 }
 
 .player-social-panel--collapsed .player-social-heading,
 .player-social-panel--collapsed .player-social-add,
-.player-social-panel--collapsed .player-social-row-main,
 .player-social-panel--collapsed .player-social-row-actions {
   max-width: 0;
   max-height: 0;
   opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transition: opacity 0.08s ease, visibility 0s linear, max-width 0s linear, max-height 0s linear;
+  transition: opacity 0.08s ease, visibility 0s linear 0.08s, max-width 0s linear 0.08s, max-height 0s linear 0.08s;
+}
+
+.player-social-panel--collapsed .player-social-row-main {
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.08s ease, visibility 0s linear 0.08s;
 }
 
 .player-social-panel--collapsed .player-social-heading,
@@ -1997,6 +2007,10 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   border-width: 0;
 }
 
+.player-social-panel--collapsed .player-social-group--friends .player-social-row {
+  height: 40px;
+}
+
 .player-team-header {
   display: flex;
   align-items: start;
@@ -2027,6 +2041,15 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   gap: 8px;
 }
 
+.player-social-group--friends {
+  interpolate-size: allow-keywords;
+}
+
+.player-social-group--friends .player-social-row {
+  height: auto;
+  overflow: hidden;
+}
+
 .player-social-row {
   display: grid;
   grid-template-columns: 40px minmax(0, 1fr) auto;
@@ -2038,7 +2061,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   background: #121212;
   border: 2px solid #1f1f1f;
   border-radius: 8px;
-  transition: grid-template-columns 0.26s ease, gap 0.26s ease, width 0.26s ease, min-height 0.26s ease, padding 0.26s ease, background 0.2s ease, border-color 0.2s ease;
+  transition: grid-template-columns 0.26s ease, gap 0.26s ease, width 0.26s ease, height 0.26s ease, min-height 0.26s ease, padding 0.26s ease, background 0.2s ease, border-color 0.2s ease;
 }
 
 .player-social-row .faceit-avatar {
