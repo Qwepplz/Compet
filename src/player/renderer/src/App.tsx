@@ -26,7 +26,7 @@ import {
   getActiveMatchRoom,
   getDisplayedMatchRoom,
   isTerminalMatchPhase,
-  mergeMatchmakingSnapshotRooms,
+  mergeMatchmakingSnapshotState,
   mergeReadyRoomProgress,
   upsertRoom,
 } from "./matchRoomState.js";
@@ -72,6 +72,7 @@ const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const STARTUP_CONNECTION_BUDGET_MS = 5_000;
 const STARTUP_UPDATE_MAX_ATTEMPTS = 5;
 const STARTUP_UPDATE_RETRY_DELAY_MS = 1_000;
+const SESSION_RESTORE_RETRY_DELAY_MS = 1_000;
 let startupInitializationStarted = false;
 
 type FriendPresenceEntry = {
@@ -399,6 +400,9 @@ export function App() {
   const pendingMatchSoundRoomIds = useRef(new Set<string>());
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
   const matchSoundEnabledRef = useRef(matchSoundEnabled);
+  const activeMatchRoomIdRef = useRef<string | null>(null);
+  const latestRealtimeEventSeqRef = useRef(0);
+  const pendingMatchRoomViewIdRef = useRef<string | null>(null);
   const matchHistoryScrollTopRef = useRef(0);
   const matchHistoryResultRequestIdRef = useRef<number>(0);
 
@@ -412,6 +416,7 @@ export function App() {
     account?.id && currentStageBarrier?.acknowledgedAccountIds.includes(account.id),
   );
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
+  activeMatchRoomIdRef.current = activeMatchRoom?.id ?? null;
   const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
   const syncedMatchmakingPendingAt = party?.status === "open" ? party.matchmakingPendingAt ?? null : null;
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
@@ -460,6 +465,16 @@ export function App() {
     matchHistoryResultRequestIdRef.current += 1;
   }
 
+  function rememberRealtimeSequence(seq: number | undefined) {
+    if (seq !== undefined && Number.isSafeInteger(seq)) {
+      latestRealtimeEventSeqRef.current = Math.max(latestRealtimeEventSeqRef.current, seq);
+    }
+  }
+
+  function resetRealtimeSequence(seq: number | undefined) {
+    latestRealtimeEventSeqRef.current = seq !== undefined && Number.isSafeInteger(seq) ? seq : 0;
+  }
+
   useEffect(() => {
     preloadMapImages();
     void window.playerApi.getVersion().then(setCurrentVersion);
@@ -476,6 +491,17 @@ export function App() {
       setMatchmakingFeedbackPending(false);
     }
   }, [activeMatchRoom?.id]);
+
+  useEffect(() => {
+    const requestedRoomId = pendingMatchRoomViewIdRef.current;
+    if (!requestedRoomId) return;
+    const currentActiveRoom = getActiveMatchRoom(matchmaking);
+    pendingMatchRoomViewIdRef.current = null;
+    if (currentActiveRoom?.id !== requestedRoomId) return;
+    invalidateMatchHistoryResultRequest();
+    playMatchFoundSound(currentActiveRoom.id);
+    setActiveView("match-room");
+  }, [matchmaking]);
 
   useEffect(() => {
     for (const timeout of partyInviteAutoIgnoreTimeouts.current.values()) {
@@ -629,29 +655,30 @@ export function App() {
   }
 
   function applyRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto) {
+    rememberRealtimeSequence(snapshot.matchmaking.baseSeq);
     setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends, resolvedFriendRequestIds.current));
     setParty((current) => mergePartySnapshot(current, snapshot.matchmaking.party));
     const snapshotActiveRoom = getActiveMatchRoom(snapshot.matchmaking);
+    if (snapshotActiveRoom) {
+      pendingMatchRoomViewIdRef.current = snapshotActiveRoom.id;
+    }
     setMatchmaking((current) => {
-      const { rooms: nextRooms, room: nextRoom } = mergeMatchmakingSnapshotRooms(current, snapshot.matchmaking);
+      const nextMatchmaking = mergeMatchmakingSnapshotState(
+        current,
+        snapshot.matchmaking,
+        latestRealtimeEventSeqRef.current,
+      );
       const nextParty = mergePartySnapshot(current.party, snapshot.matchmaking.party);
       return {
-        queue: snapshot.matchmaking.queue,
-        rooms: nextRooms,
+        ...nextMatchmaking,
         party: nextParty,
         partyInvitations: mergePartyInvitationsSnapshot(
           current.partyInvitations,
           snapshot.matchmaking.partyInvitations,
           resolvedPartyInvitationIds.current,
         ),
-        room: nextRoom,
-        occupancy: snapshot.matchmaking.occupancy,
-        baseSeq: snapshot.matchmaking.baseSeq,
       };
     });
-    if (snapshotActiveRoom) {
-      setActiveView((current) => (current === "home" ? "match-room" : current));
-    }
   }
 
   function primeMatchFoundSound() {
@@ -726,6 +753,7 @@ export function App() {
   }
 
   function applyRealtimeEvent(event: PlayerRealtimeEvent) {
+    rememberRealtimeSequence(event.seq);
     switch (event.type) {
       case "presence_updated":
         setFriends((current) => applyPresenceUpdate(current, event.accountId, event.online, event.lastSeenAt));
@@ -846,22 +874,30 @@ export function App() {
         playMatchFoundSound(event.matchId);
         setMatchmaking((current) => {
           const nextRooms = upsertRoom(current.rooms, event.room);
-          const nextCurrentRoom = current.room?.id === event.matchId || !current.room ? event.room : current.room;
+          const nextCurrentRoom = !isTerminalMatchPhase(event.room.phase)
+            ? event.room
+            : current.room?.id === event.matchId || !current.room ? event.room : current.room;
           return {
             ...current,
             room: nextCurrentRoom,
             rooms: nextRooms,
           };
         });
-        setActiveView((current) => (current === "home" ? "match-room" : current));
+        if (!isTerminalMatchPhase(event.room.phase)) {
+          setActiveView("match-room");
+        }
         return;
       case "match_room_updated":
         setMatchmaking((current) => ({
           ...current,
-          room: current.room?.id === event.matchId || !current.room ? event.room : current.room,
+          room: !isTerminalMatchPhase(event.room.phase)
+            ? event.room
+            : current.room?.id === event.matchId || !current.room ? event.room : current.room,
           rooms: upsertRoom(current.rooms, event.room),
         }));
-        setActiveView((current) => (current === "home" && !isTerminalMatchPhase(event.room.phase) ? "match-room" : current));
+        if (!isTerminalMatchPhase(event.room.phase)) {
+          setActiveView("match-room");
+        }
         return;
       case "server_preparing":
         updateCurrentRoom(event.matchId, (room) => ({
@@ -885,11 +921,12 @@ export function App() {
         }));
         return;
       case "match_completed":
-        invalidateMatchHistoryResultRequest();
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "completed",
         }));
+        if (activeMatchRoomIdRef.current !== event.matchId) return;
+        invalidateMatchHistoryResultRequest();
         if (event.result) {
           setMatchResult(event.result);
           setMatchResultMatchId(event.matchId);
@@ -909,12 +946,13 @@ export function App() {
         setActiveView("home");
         return;
       case "match_failed":
-        invalidateMatchHistoryResultRequest();
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "failed",
           stageBarrier: undefined,
         }));
+        if (activeMatchRoomIdRef.current !== event.matchId) return;
+        invalidateMatchHistoryResultRequest();
         setMatchResult(null);
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
@@ -1065,21 +1103,22 @@ export function App() {
     }
   }
 
-  async function restoreSession(startupDeadline?: number) {
+  async function restoreSession(startupDeadline?: number, preserveOnFailure = false): Promise<"restored" | "anonymous" | "retry"> {
     invalidateMatchHistoryResultRequest();
     try {
       await loadSavedLogin();
       const startupTimeoutMs = startupDeadline === undefined ? undefined : remainingStartupMs(startupDeadline);
+      if (startupTimeoutMs !== undefined && startupTimeoutMs <= 0) {
+        setActiveView("login");
+        return "anonymous";
+      }
       if (startupTimeoutMs !== undefined && startupTimeoutMs > 0) {
         setLoadingMessageKey("common.state.connectingServer");
       }
       const restored = startupTimeoutMs === undefined
         ? await window.playerApi.restoreSession()
-        : startupTimeoutMs > 0
-          ? await window.playerApi.restoreSession(startupTimeoutMs)
-          : null;
-      const startupTimedOut = startupDeadline !== undefined && remainingStartupMs(startupDeadline) <= 0;
-      if (!restored || startupTimedOut) {
+        : await window.playerApi.restoreSession(startupTimeoutMs);
+      if (!restored) {
         setMatchResult(null);
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
@@ -1087,7 +1126,7 @@ export function App() {
         setMatchHistoryPlayer(null);
         setRankmeStanding(null);
         setActiveView("login");
-        return;
+        return "anonymous";
       }
       setBaseUrl(restored.baseUrl);
       resolvedFriendRequestIds.current.clear();
@@ -1095,6 +1134,7 @@ export function App() {
       acceptedInviteJoinMessageAccountIds.current.clear();
       setAccount(restored.account);
       setFriends(emptyFriends);
+      resetRealtimeSequence(restored.matchmaking.baseSeq);
       setParty(restored.matchmaking.party ?? null);
       setMatchmaking(restored.matchmaking);
       setMatchResult(null);
@@ -1106,7 +1146,12 @@ export function App() {
       setActiveView(viewFromSession(restored.account, restored.matchmaking));
       void hydrateRealtimeState();
       void refreshRankmeStanding();
+      return "restored";
     } catch (error) {
+      if (preserveOnFailure) {
+        setLoadingMessageKey("common.state.connectingServer");
+        return "retry";
+      }
       message.error(displayError(error, t, "errors.sessionRestoreFailed"));
       setMatchResult(null);
       setMatchResultMatchId(null);
@@ -1115,6 +1160,7 @@ export function App() {
       setMatchHistoryPlayer(null);
       setRankmeStanding(null);
       setActiveView("login");
+      return "anonymous";
     }
   }
 
@@ -1140,50 +1186,28 @@ export function App() {
       setBaseUrl(values.baseUrl);
       setCurrentPassword(values.password);
       setSavedLogin({ baseUrl: values.baseUrl, username: values.username, password: values.password });
-      const loginResult = await window.playerApi.login(values.baseUrl, values.username, values.password);
-      if (loginResult.account.mustChangePassword) {
-        setAccount(loginResult.account);
-        resolvedFriendRequestIds.current.clear();
-        resolvedPartyInvitationIds.current.clear();
-        acceptedInviteJoinMessageAccountIds.current.clear();
-        setFriends(emptyFriends);
-        setParty(null);
-        setMatchmaking(emptyMatchmaking);
-        setMatchResult(null);
-        setMatchResultMatchId(null);
-        setMatchResultPlayerSteam64(undefined);
-        setMatchHistory(null);
-        setMatchHistoryPlayer(null);
-        setRankmeStanding(null);
-        setRealtimeStatus(emptyRealtimeStatus);
-        setActiveView("change-password");
-        return;
-      }
-      const restored = await window.playerApi.restoreSession();
-      if (!restored) {
-        setMatchResult(null);
-        setMatchResultMatchId(null);
-        setMatchResultPlayerSteam64(undefined);
-        setMatchHistory(null);
-        setMatchHistoryPlayer(null);
-        setRankmeStanding(null);
-        setActiveView("login");
-        return;
-      }
-      setAccount(restored.account);
+      const authenticated = await window.playerApi.login(values.baseUrl, values.username, values.password);
+      setAccount(authenticated.account);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
       acceptedInviteJoinMessageAccountIds.current.clear();
       setFriends(emptyFriends);
-      setParty(restored.matchmaking.party ?? null);
-      setMatchmaking(restored.matchmaking);
+      resetRealtimeSequence(authenticated.matchmaking.baseSeq);
+      setParty(authenticated.matchmaking.party ?? null);
+      setMatchmaking(authenticated.matchmaking);
       setMatchResult(null);
       setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
       setMatchResultBackView("home");
+      setMatchHistory(null);
       setMatchHistoryPlayer(null);
+      setRankmeStanding(null);
       setRealtimeStatus(emptyRealtimeStatus);
-      setActiveView(viewFromSession(restored.account, restored.matchmaking));
+      if (authenticated.account.mustChangePassword) {
+        setActiveView("change-password");
+        return;
+      }
+      setActiveView(viewFromSession(authenticated.account, authenticated.matchmaking));
       void hydrateRealtimeState();
       void refreshRankmeStanding();
     } catch (error) {
@@ -1221,6 +1245,7 @@ export function App() {
         resolvedPartyInvitationIds.current.clear();
         acceptedInviteJoinMessageAccountIds.current.clear();
         setFriends(emptyFriends);
+        resetRealtimeSequence(restored.matchmaking.baseSeq);
         setParty(restored.matchmaking.party ?? null);
         setMatchmaking(restored.matchmaking);
         setMatchResult(null);
@@ -1255,6 +1280,8 @@ export function App() {
       setFriends(emptyFriends);
       setParty(null);
       setMatchmaking(emptyMatchmaking);
+      latestRealtimeEventSeqRef.current = 0;
+      pendingMatchRoomViewIdRef.current = null;
       setMatchResult(null);
       setMatchResultMatchId(null);
       setMatchResultPlayerSteam64(undefined);
@@ -1276,7 +1303,16 @@ export function App() {
     const startupDeadline = performance.now() + STARTUP_CONNECTION_BUDGET_MS;
     const installing = await checkStartupUpdate(startupDeadline);
     if (installing) return;
-    await restoreSession(startupDeadline);
+    let restoreOutcome = await restoreSession(startupDeadline, true);
+    while (restoreOutcome === "retry" && remainingStartupMs(startupDeadline) > 0) {
+      const retryDelayMs = Math.min(SESSION_RESTORE_RETRY_DELAY_MS, remainingStartupMs(startupDeadline));
+      if (retryDelayMs <= 0) break;
+      await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelayMs));
+      restoreOutcome = await restoreSession(startupDeadline, true);
+    }
+    if (restoreOutcome === "retry") {
+      setActiveView("login");
+    }
     setLoading(false);
   }
 
@@ -1455,6 +1491,44 @@ export function App() {
       await waitForMatchmakingDelay(randomMatchmakingDelayMs());
       await startPartyMatchmaking(options);
     } catch (error) {
+      let recoveredMatchmaking: PlayerMatchmakingStateDto;
+      try {
+        recoveredMatchmaking = await api.getMatchmakingState();
+      } catch {
+        setMatchmakingFeedbackPending(false);
+        return;
+      }
+      const recoveredRoom = getActiveMatchRoom(recoveredMatchmaking);
+      if (recoveredMatchmaking && recoveredRoom) {
+        const recoveryIsBehindRealtime = recoveredMatchmaking.baseSeq < latestRealtimeEventSeqRef.current;
+        if (recoveryIsBehindRealtime) {
+          void hydrateRealtimeState();
+          setMatchmakingFeedbackPending(false);
+          return;
+        }
+        rememberRealtimeSequence(recoveredMatchmaking.baseSeq);
+        updateServerClock(recoveredMatchmaking.serverNow);
+        setParty((current) => mergePartySnapshot(current, recoveredMatchmaking.party));
+        pendingMatchRoomViewIdRef.current = recoveredRoom.id;
+        setMatchmaking((current) => {
+          const nextMatchmaking = mergeMatchmakingSnapshotState(
+            current,
+            recoveredMatchmaking,
+            latestRealtimeEventSeqRef.current,
+          );
+          return {
+            ...nextMatchmaking,
+            party: mergePartySnapshot(current.party, recoveredMatchmaking.party),
+            partyInvitations: mergePartyInvitationsSnapshot(
+              current.partyInvitations,
+              recoveredMatchmaking.partyInvitations,
+              resolvedPartyInvitationIds.current,
+            ),
+          };
+        });
+        setMatchmakingFeedbackPending(false);
+        return;
+      }
       if (matchmakingPendingSynced) {
         const nextParty = await api.cancelPartyMatchmaking().catch(() => undefined);
         if (nextParty) {

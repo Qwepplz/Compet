@@ -2,8 +2,7 @@ import type { AccountView } from "../../manager/shared/types.js";
 import type { UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
 import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../language/translate.js";
 import type { SupportedLanguage } from "../../language/types.js";
-import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
-import type { PlayerLoginResult } from "../main/playerApiClient.js";
+import type { PlayerAuthenticatedSession, RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 import type {
   PlayerFriendListDto,
@@ -221,7 +220,11 @@ export function createPreviewPlayerApi() {
       if (!isSupportedLanguage(nextLanguage)) throw new TypeError("Unsupported language");
       language = nextLanguage;
     },
-    login: async (): Promise<PlayerLoginResult> => ({ token: "preview-token", account: previewAccount }),
+    login: async (): Promise<PlayerAuthenticatedSession> => ({
+      baseUrl: "preview://offline",
+      account: previewAccount,
+      matchmaking: matchmaking(),
+    }),
     logout: async (): Promise<void> => undefined,
     changePassword: async (): Promise<void> => undefined,
     restoreSession: async (_timeoutMs?: number): Promise<RestoreSessionResult> => ({

@@ -231,7 +231,21 @@ async function handleMessage(socket: WebSocket, data: RawData, account: AccountR
   if (command) {
     const ack = await executeRealtimeCommand(command, account.id, deps, connectionId);
     logRealtimeCommand(account, command, ack);
-    sendJson(socket, withCommandServerNow(ack));
+    sendJson(socket, withCommandServerNow(ack), (error) => {
+      writeActivityLog({
+        source: "realtime",
+        level: error ? "error" : "info",
+        message: `<--- Delivery WebSocket, id [${command.commandId}]`,
+        actor: accountActor(account),
+        context: {
+          connectionId,
+          command: command.name,
+          commandId: command.commandId,
+          delivery: error ? "failed" : "queued",
+          ...(error ? { errorCode: "websocket_send_failed" } : {}),
+        },
+      });
+    });
     return;
   }
   const messageId = nextActivityId("msg");
@@ -273,9 +287,20 @@ function closeUnauthorized(socket: WebSocket): void {
   }
 }
 
-function sendJson(socket: WebSocket, payload: unknown): void {
-  if (socket.readyState === SOCKET_OPEN) {
-    socket.send(JSON.stringify(payload));
+function sendJson(socket: WebSocket, payload: unknown, onComplete?: (error?: Error) => void): void {
+  if (socket.readyState !== SOCKET_OPEN) {
+    onComplete?.(new Error("WebSocket is not open"));
+    return;
+  }
+  const serialized = JSON.stringify(payload);
+  if (!onComplete) {
+    socket.send(serialized);
+    return;
+  }
+  try {
+    socket.send(serialized, onComplete);
+  } catch (error) {
+    onComplete(error instanceof Error ? error : new Error(String(error)));
   }
 }
 

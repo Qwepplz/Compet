@@ -19,14 +19,26 @@ interface PlayerRealtimeClientOptions {
   heartbeatTimeoutMs?: number;
   setTimeoutFn?: typeof setTimeout;
   clearTimeoutFn?: typeof clearTimeout;
+  onCommandTrace?: (trace: PlayerRealtimeCommandTrace) => void;
 }
 
 type TimerHandle = ReturnType<typeof setTimeout>;
 type PendingCommand = {
+  name: string;
+  connectionId: number;
+  startedAt: number;
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   timeout: TimerHandle;
 };
+
+export interface PlayerRealtimeCommandTrace {
+  phase: "sent" | "acknowledged" | "late_or_unknown_ack" | "timed_out" | "disconnected";
+  commandId: string;
+  name?: string;
+  connectionId: number;
+  elapsedMs?: number;
+}
 
 export interface RealtimeCommandServiceError extends Error {
   realtimeCommandServiceError: true;
@@ -50,6 +62,7 @@ export class PlayerRealtimeClient {
   private readonly heartbeatTimeoutMs: number;
   private readonly setTimeoutFn: typeof setTimeout;
   private readonly clearTimeoutFn: typeof clearTimeout;
+  private readonly onCommandTrace?: (trace: PlayerRealtimeCommandTrace) => void;
   private readonly eventListeners = new Set<(event: PlayerRealtimeEvent) => void>();
   private readonly statusListeners = new Set<(status: PlayerRealtimeConnection) => void>();
   private readonly pendingCommands = new Map<string, PendingCommand>();
@@ -74,6 +87,7 @@ export class PlayerRealtimeClient {
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
     this.setTimeoutFn = options.setTimeoutFn ?? setTimeout;
     this.clearTimeoutFn = options.clearTimeoutFn ?? clearTimeout;
+    this.onCommandTrace = options.onCommandTrace;
   }
 
   connect(baseUrl: string, token: string): void {
@@ -111,18 +125,39 @@ export class PlayerRealtimeClient {
     }
 
     const commandId = `cmd_${Date.now()}_${++this.commandSeq}`;
+    const socket = this.socket;
+    const connectionId = this.connectionId;
+    const startedAt = Date.now();
     const message = JSON.stringify({ type: "command", commandId, name, payload });
     return new Promise<T>((resolve, reject) => {
       const timeout = this.setTimeoutFn(() => {
+        const pending = this.pendingCommands.get(commandId);
+        if (!pending) return;
         this.pendingCommands.delete(commandId);
+        this.emitCommandTrace({
+          phase: "timed_out",
+          commandId,
+          name: pending.name,
+          connectionId: pending.connectionId,
+          elapsedMs: Date.now() - pending.startedAt,
+        });
         reject(new Error("Realtime command timed out"));
       }, DEFAULT_COMMAND_TIMEOUT_MS);
-      this.pendingCommands.set(commandId, { resolve: resolve as (value: unknown) => void, reject, timeout });
+      this.pendingCommands.set(commandId, {
+        name,
+        connectionId,
+        startedAt,
+        resolve: resolve as (value: unknown) => void,
+        reject,
+        timeout,
+      });
+      this.emitCommandTrace({ phase: "sent", commandId, name, connectionId, elapsedMs: 0 });
       try {
-        this.socket?.send(message);
+        socket.send(message);
       } catch (error) {
         this.clearTimeoutFn(timeout);
         this.pendingCommands.delete(commandId);
+        this.emitCommandTrace({ phase: "disconnected", commandId, name, connectionId, elapsedMs: Date.now() - startedAt });
         reject(error instanceof Error ? error : new Error(String(error)));
       }
     });
@@ -177,7 +212,7 @@ export class PlayerRealtimeClient {
         markConnectionReady();
         return;
       }
-      if (this.handleCommandAck(message)) {
+      if (this.handleCommandAck(message, connectionId)) {
         return;
       }
       const event = sanitizeRealtimeEvent(message);
@@ -207,6 +242,7 @@ export class PlayerRealtimeClient {
   }
 
   private handleDisconnect(): void {
+    this.rejectPendingCommands(new Error("Realtime command unavailable"));
     if (this.manualDisconnect || !this.baseUrl || !this.token) {
       this.emitStatus("disconnected");
       return;
@@ -352,15 +388,25 @@ export class PlayerRealtimeClient {
     return url.toString();
   }
 
-  private handleCommandAck(message: unknown): boolean {
+  private handleCommandAck(message: unknown, connectionId: number): boolean {
     if (typeof message !== "object" || message === null) return false;
     const ack = message as { type?: unknown; commandId?: unknown; ok?: unknown; result?: unknown; error?: { code?: unknown; message?: unknown; statusCode?: unknown } };
     if (ack.type !== "command_ack" || typeof ack.commandId !== "string") return false;
 
     const pending = this.pendingCommands.get(ack.commandId);
-    if (!pending) return true;
+    if (!pending) {
+      this.emitCommandTrace({ phase: "late_or_unknown_ack", commandId: ack.commandId, connectionId });
+      return true;
+    }
     this.pendingCommands.delete(ack.commandId);
     this.clearTimeoutFn(pending.timeout);
+    this.emitCommandTrace({
+      phase: "acknowledged",
+      commandId: ack.commandId,
+      name: pending.name,
+      connectionId: pending.connectionId,
+      elapsedMs: Date.now() - pending.startedAt,
+    });
     if (ack.ok === true) {
       pending.resolve(ack.result);
       return true;
@@ -379,8 +425,23 @@ export class PlayerRealtimeClient {
   private rejectPendingCommands(error: Error): void {
     for (const [commandId, pending] of this.pendingCommands) {
       this.clearTimeoutFn(pending.timeout);
+      this.emitCommandTrace({
+        phase: "disconnected",
+        commandId,
+        name: pending.name,
+        connectionId: pending.connectionId,
+        elapsedMs: Date.now() - pending.startedAt,
+      });
       pending.reject(error);
       this.pendingCommands.delete(commandId);
+    }
+  }
+
+  private emitCommandTrace(trace: PlayerRealtimeCommandTrace): void {
+    try {
+      this.onCommandTrace?.(trace);
+    } catch {
+      // Diagnostics must not change command behavior.
     }
   }
 }

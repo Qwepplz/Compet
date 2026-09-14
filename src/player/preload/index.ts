@@ -1,6 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { PlayerLoginResult } from "../main/playerApiClient.js";
-import type { RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
+import type { PlayerAuthenticatedSession, RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { AccountView } from "../../manager/shared/types.js";
 import { createPreviewPlayerApi } from "./previewPlayerApi.js";
 import type { SupportedLanguage } from "../../language/types.js";
@@ -35,7 +34,7 @@ const subscribe = <T>(channel: string, listener: (payload: T) => void): (() => v
 export const playerApi = {
   loadLanguage: (): Promise<SupportedLanguage> => invoke("language:load"),
   saveLanguage: (language: SupportedLanguage): Promise<void> => invoke("language:save", language),
-  login: (baseUrl: string, username: string, password: string): Promise<PlayerLoginResult> =>
+  login: (baseUrl: string, username: string, password: string): Promise<PlayerAuthenticatedSession> =>
     invoke("auth:login", baseUrl, username, password),
   logout: (): Promise<void> => invoke("auth:logout"),
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>

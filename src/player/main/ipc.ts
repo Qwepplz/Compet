@@ -78,9 +78,11 @@ interface IpcDeps {
   setApiClient: (client: PlayerApiClient | undefined) => void;
 }
 
-export interface RestoreSessionResult extends RestoredPlayerSession {
+export interface PlayerAuthenticatedSession extends RestoredPlayerSession {
   baseUrl: string;
 }
+
+export type RestoreSessionResult = PlayerAuthenticatedSession;
 
 const profileBootLogFile = "compet-player-client-boot.log";
 const PROFILE_BASE_URL = process.env.COMPET_PROFILE_BASE_URL?.trim() || DEFAULT_PROFILE_BASE_URL;
@@ -103,6 +105,63 @@ function createPlayerApiClient(baseUrl: string, token: string | undefined, deps:
   return new PlayerApiClient(baseUrl, token, sharedProfileService, deps.sendRealtimeCommand);
 }
 
+async function restorePersistedPlayerSession(
+  deps: IpcDeps,
+  persisted: PersistedSession & { token: string },
+  timeoutMs?: number,
+  assertWithinDeadline: () => void = () => undefined,
+): Promise<PlayerAuthenticatedSession> {
+  const client = createPlayerApiClient(persisted.baseUrl, persisted.token, deps);
+  if (persisted.username && persisted.password) {
+    client.setLoginCredentials(persisted.username, persisted.password);
+  }
+  const restored = await client.restoreSession(timeoutMs);
+  assertWithinDeadline();
+  deps.setApiClient(client);
+  deps.connectRealtime(persisted.baseUrl, persisted.token);
+  return { baseUrl: persisted.baseUrl, ...restored };
+}
+
+async function authenticateAndRestorePlayer(
+  deps: IpcDeps,
+  baseUrl: string,
+  username: string,
+  password: string,
+  remainingTimeout: () => number | undefined = () => undefined,
+  assertWithinDeadline: () => void = () => undefined,
+): Promise<PlayerAuthenticatedSession> {
+  const client = createPlayerApiClient(baseUrl, undefined, deps);
+  try {
+    const loginResult = await client.login(username, password, remainingTimeout());
+    assertWithinDeadline();
+    const restored = loginResult.account.mustChangePassword
+      ? { account: loginResult.account, matchmaking: emptyMatchmakingState }
+      : await client.restoreSession(remainingTimeout());
+    assertWithinDeadline();
+    await deps.saveSession({ baseUrl, token: loginResult.token, username, password });
+    assertWithinDeadline();
+    deps.setApiClient(client);
+    if (loginResult.account.mustChangePassword) deps.disconnectRealtime();
+    else deps.connectRealtime(baseUrl, loginResult.token);
+    return { baseUrl, ...restored };
+  } catch (error) {
+    const rollbackToken = client.getToken();
+    if (rollbackToken) {
+      try {
+        await client.logout();
+        const persisted = await deps.loadSession().catch(() => null);
+        if (persisted?.token === rollbackToken) {
+          await deps.clearSession().catch(() => undefined);
+        }
+      } catch {
+        await deps.saveSession({ baseUrl, token: rollbackToken, username, password }).catch(() => undefined);
+      }
+    }
+    clearPlayerRuntime(deps);
+    throw error;
+  }
+}
+
 function withSavedAuth<T>(deps: IpcDeps, operation: (client: PlayerApiClient) => Promise<T>): Promise<T> {
   return withAuthRetry({
     ...deps,
@@ -118,13 +177,23 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   });
 
   ipcMain.handle("auth:login", async (_event, baseUrl: string, username: string, password: string) => {
-    const client = createPlayerApiClient(baseUrl, undefined, deps);
-    const result = await client.login(username, password);
-    deps.setApiClient(client);
-    await deps.saveSession({ baseUrl, token: result.token, username, password });
-    if (result.account.mustChangePassword) deps.disconnectRealtime();
-    else deps.connectRealtime(baseUrl, result.token);
-    return result;
+    const persisted = await deps.loadSession();
+    const persistedToken = persisted?.token;
+    if (
+      persistedToken
+      && persisted.baseUrl === baseUrl
+      && persisted.username === username
+      && persisted.password === password
+    ) {
+      try {
+        return await restorePersistedPlayerSession(deps, { ...persisted, token: persistedToken });
+      } catch (error) {
+        if (!isSessionInvalidError(error)) throw error;
+        clearPlayerRuntime(deps);
+        await deps.clearSession();
+      }
+    }
+    return authenticateAndRestorePlayer(deps, baseUrl, username, password);
   });
 
   ipcMain.handle("auth:logout", async () => {
@@ -201,16 +270,13 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     if (!persisted?.baseUrl) return null;
 
     if (persisted.token) {
-      const client = createPlayerApiClient(persisted.baseUrl, persisted.token, deps);
-      if (persisted.username && persisted.password) {
-        client.setLoginCredentials(persisted.username, persisted.password);
-      }
       try {
-        const restored = await client.restoreSession(remainingTimeout());
-        assertWithinDeadline();
-        deps.setApiClient(client);
-        deps.connectRealtime(persisted.baseUrl, persisted.token);
-        return { baseUrl: persisted.baseUrl, ...restored };
+        return await restorePersistedPlayerSession(
+          deps,
+          { ...persisted, token: persisted.token },
+          remainingTimeout(),
+          assertWithinDeadline,
+        );
       } catch (error) {
         if (!isSessionInvalidError(error)) {
           clearPlayerRuntime(deps);
@@ -228,22 +294,15 @@ export function registerPlayerIpc(deps: IpcDeps): void {
       return null;
     }
 
-    const client = createPlayerApiClient(persisted.baseUrl, undefined, deps);
     try {
-      const loginResult = await client.login(persisted.username, persisted.password, remainingTimeout());
-      assertWithinDeadline();
-      await deps.saveSession({ ...persisted, token: loginResult.token });
-      assertWithinDeadline();
-      if (loginResult.account.mustChangePassword) {
-        deps.setApiClient(client);
-        deps.disconnectRealtime();
-        return { baseUrl: persisted.baseUrl, account: loginResult.account, matchmaking: emptyMatchmakingState };
-      }
-      const restored = await client.restoreSession(remainingTimeout());
-      assertWithinDeadline();
-      deps.setApiClient(client);
-      deps.connectRealtime(persisted.baseUrl, loginResult.token);
-      return { baseUrl: persisted.baseUrl, ...restored };
+      return await authenticateAndRestorePlayer(
+        deps,
+        persisted.baseUrl,
+        persisted.username,
+        persisted.password,
+        remainingTimeout,
+        assertWithinDeadline,
+      );
     } catch (error) {
       clearPlayerRuntime(deps);
       if (isSessionInvalidError(error)) {

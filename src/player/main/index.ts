@@ -30,7 +30,14 @@ configureRemoteDesktopRendering();
 const sessionFile = path.join(app.getPath("userData"), "player-session.json");
 const sessionStore = new SavedLoginStore(sessionFile);
 const languageStore = new LanguagePreferenceStore(path.join(app.getPath("userData"), "language.json"));
-const realtimeClient = new PlayerRealtimeClient();
+const realtimeClient = new PlayerRealtimeClient({
+  onCommandTrace: ({ phase, commandId, name, connectionId, elapsedMs }) => {
+    appendBootLog(
+      bootLogFile,
+      `realtime command ${phase}; name=${name ?? "unknown"}; commandId=${commandId}; connectionId=${connectionId}; elapsedMs=${elapsedMs ?? "unknown"}`,
+    );
+  },
+});
 const realtimeStatusChannel = "player:realtime:status";
 const realtimeEventChannel = "player:realtime:event";
 const realtimeSnapshotChannel = "player:realtime:snapshot";

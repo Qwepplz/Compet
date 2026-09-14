@@ -27,6 +27,9 @@ export function mergeMatchmakingSnapshotRooms(
 ): Pick<PlayerMatchmakingStateDto, "rooms" | "room"> {
   const mergeSnapshotRoomProgress = (room: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto => {
     const currentRoom = current.room?.id === room.id ? current.room : current.rooms.find((candidate) => candidate.id === room.id);
+    if (currentRoom && isTerminalMatchPhase(currentRoom.phase) && !isTerminalMatchPhase(room.phase)) {
+      return currentRoom;
+    }
     return currentRoom ? mergeReadyRoomProgress(currentRoom, room) : room;
   };
   const snapshotRooms = snapshot.rooms.map(mergeSnapshotRoomProgress);
@@ -43,6 +46,21 @@ export function mergeMatchmakingSnapshotRooms(
   return {
     rooms: preservedCurrentRoom ? upsertRoom(snapshotRooms, preservedCurrentRoom) : snapshotRooms,
     room: snapshotRoom ?? preservedCurrentRoom,
+  };
+}
+
+export function mergeMatchmakingSnapshotState(
+  current: PlayerMatchmakingStateDto,
+  snapshot: PlayerMatchmakingStateDto,
+  latestRealtimeSeq = 0,
+): PlayerMatchmakingStateDto {
+  const { rooms, room } = mergeMatchmakingSnapshotRooms(current, snapshot);
+  const snapshotIsBehindRealtime = snapshot.baseSeq < latestRealtimeSeq;
+  return {
+    ...(snapshotIsBehindRealtime ? current : snapshot),
+    rooms,
+    room,
+    baseSeq: Math.max(current.baseSeq, snapshot.baseSeq, latestRealtimeSeq),
   };
 }
 

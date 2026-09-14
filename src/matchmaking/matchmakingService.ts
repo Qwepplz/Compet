@@ -644,10 +644,20 @@ export class MatchmakingService {
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
+      const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms(), parties);
+      const lockedRoom = party.lockedMatchId
+        ? existingRooms.find((candidate) => (
+            candidate.id === party.lockedMatchId
+            && candidate.partyId === party.id
+            && !isTerminalMatchPhase(candidate.phase)
+          ))
+        : undefined;
+      if ((party.status ?? "open") === "matchmaking" && lockedRoom) {
+        return this.toPlayerPublicRoom(lockedRoom, ownerAccountId);
+      }
       this.requireOpenParty(party);
       if (party.memberAccountIds.length > MAX_PARTY_HUMANS) throw new Error("party is full");
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
-      const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms(), parties);
       if (this.hasActiveMatchmaking(existingRooms, parties, { allowedPendingPartyId: party.id })) {
         throw new Error("matchmaking is already active");
       }
@@ -908,19 +918,38 @@ export class MatchmakingService {
     room: PublicMatchRoomRecord | null;
     occupancy: MatchmakingOccupancySummary;
   }> {
-    const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
-    const parties = await this.deps.store.listParties();
-    const allRooms = this.pruneTerminalRooms(await this.deps.store.listRooms(), parties);
-    const rooms = allRooms
-      .filter((room) => this.roomHasAccount(room, accountId))
-      .map((room) => this.toPlayerPublicRoom(room, accountId));
-    const partyRecord = parties.find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
-    const party = partyRecord ? await this.toPlayerPublicParty(partyRecord) : null;
-    const pendingInvitations = (await this.deps.store.listInvitations()).filter(
-      (invitation) => invitation.toAccountId === accountId && invitation.status === "pending" && !this.isPartyInviteOverdue(invitation),
+    const snapshot = await this.enqueueMutation(async () => {
+      const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
+      const parties = await this.deps.store.listParties();
+      const allRooms = this.pruneTerminalRooms(await this.deps.store.listRooms(), parties);
+      const rooms = allRooms
+        .filter((room) => this.roomHasAccount(room, accountId))
+        .map((room) => this.toPlayerPublicRoom(room, accountId));
+      const partyRecord = parties.find((candidate) => candidate.memberAccountIds.includes(accountId) && !isSoloOpenParty(candidate)) ?? null;
+      const pendingInvitations = (await this.deps.store.listInvitations()).filter(
+        (invitation) => invitation.toAccountId === accountId && invitation.status === "pending" && !this.isPartyInviteOverdue(invitation),
+      );
+      return {
+        queue,
+        rooms,
+        partyRecord,
+        pendingInvitations,
+        occupancy: this.occupancySummary(allRooms, parties),
+      };
+    });
+
+    const party = snapshot.partyRecord ? await this.toPlayerPublicParty(snapshot.partyRecord) : null;
+    const partyInvitations = await Promise.all(
+      snapshot.pendingInvitations.map((invitation) => this.toPartyInvitationDto(invitation)),
     );
-    const partyInvitations = await Promise.all(pendingInvitations.map((invitation) => this.toPartyInvitationDto(invitation)));
-    return { queue, rooms, party, partyInvitations, room: this.findCurrentRoom(rooms), occupancy: this.occupancySummary(allRooms, parties) };
+    return {
+      queue: snapshot.queue,
+      rooms: snapshot.rooms,
+      party,
+      partyInvitations,
+      room: this.findCurrentRoom(snapshot.rooms),
+      occupancy: snapshot.occupancy,
+    };
   }
 
   async getOccupancy(): Promise<MatchmakingOccupancySummary> {
