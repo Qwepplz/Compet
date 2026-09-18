@@ -43,7 +43,13 @@ const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
 export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   const recordsDir = path.join(config.dataDir, "records");
   await mkdir(recordsDir, { recursive: true });
-  const database = await openCompetDatabase(recordsDir);
+  const database = await openCompetDatabase(recordsDir, {
+    maintenance: {
+      now: new Date().toISOString(),
+      retentionDays: 30,
+      maxDeleteRows: 5000,
+    },
+  });
 
   try {
     const certificate = await ensureServerCertificate(path.join(config.dataDir, "certs"));

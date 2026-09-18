@@ -104,7 +104,7 @@ export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
   },
 ];
 
-const LATEST_SCHEMA_VERSION = SQLITE_MIGRATIONS.at(-1)?.version ?? 0;
+export const LATEST_SCHEMA_VERSION = SQLITE_MIGRATIONS.at(-1)?.version ?? 0;
 
 function ensureSchemaMigrationsTable(database: DatabaseSync): void {
   database.exec(`
@@ -164,13 +164,25 @@ export function applySqliteMigrations(database: DatabaseSync): void {
   }
 }
 
-export function assertSqliteIntegrity(database: DatabaseSync): void {
+export interface SqliteIntegrityReport {
+  foreignKeyErrors: unknown[];
+  integrityResults: string[];
+}
+
+export function readSqliteIntegrity(database: DatabaseSync): SqliteIntegrityReport {
   const foreignKeyErrors = database.prepare("PRAGMA foreign_key_check").all();
-  if (foreignKeyErrors.length > 0) {
-    throw new Error(`SQLite foreign key check failed: ${JSON.stringify(foreignKeyErrors)}`);
+  const integrityResults = database.prepare("PRAGMA integrity_check").all()
+    .map((row) => String(row.integrity_check ?? ""));
+  return { foreignKeyErrors, integrityResults };
+}
+
+export function assertSqliteIntegrity(database: DatabaseSync): void {
+  const report = readSqliteIntegrity(database);
+  if (report.foreignKeyErrors.length > 0) {
+    throw new Error(`SQLite foreign key check failed: ${JSON.stringify(report.foreignKeyErrors)}`);
   }
-  const integrity = database.prepare("PRAGMA integrity_check").get();
-  if (integrity?.integrity_check !== "ok") {
-    throw new Error(`SQLite integrity check failed: ${String(integrity?.integrity_check)}`);
+  const failures = report.integrityResults.filter((result) => result !== "ok");
+  if (failures.length > 0) {
+    throw new Error(`SQLite integrity check failed: ${JSON.stringify(report.integrityResults)}`);
   }
 }
