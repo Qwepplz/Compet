@@ -2421,3 +2421,28 @@ button.faceit-party-slot:not(:disabled):focus-visible {
     height: 32px;
   }
 }
+
+.faceit-home-dev {
+  position: absolute;
+  top: 108px;
+  left: 28px;
+  width: 152px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  z-index: 2;
+}
+
+.faceit-home-dev .ant-switch {
+  width: 44px;
+  min-width: 44px;
+  flex: 0 0 44px;
+}
+
+.player-integrity-result {
+  max-height: 240px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+}

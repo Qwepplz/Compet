@@ -1,4 +1,4 @@
-import { Button, Modal, Spin, message } from "antd";
+import { Button, Modal, Spin, Switch, message } from "antd";
 import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { RankmeDisplay } from "../../../../rankme/rankmeStandings.js";
@@ -22,6 +22,7 @@ interface HomePageProps {
   matchmakingOccupancyActiveCount?: number;
   nowMs: number;
   devModeEnabled?: boolean;
+  onDevModeChange?: (enabled: boolean) => void;
   onInviteFriend?: (accountId: string) => Promise<void>;
   onLeaveParty?: () => Promise<void>;
   onStartMatchmaking?: (options?: { dev?: boolean }) => Promise<void>;
@@ -89,6 +90,7 @@ export function HomePage({
   matchmakingOccupancyActiveCount = 0,
   nowMs,
   devModeEnabled = false,
+  onDevModeChange,
   onInviteFriend,
   onLeaveParty,
   onStartMatchmaking,
@@ -143,6 +145,19 @@ export function HomePage({
   return (
     <div className="faceit-play">
       <h2 className="player-sr-only">{t("player.home.title")}</h2>
+      {account?.dev ? (
+        <label className="faceit-home-dev">
+          <span>{t("common.labels.devMode")}</span>
+          <Switch
+            aria-label={t("common.labels.devMode")}
+            checked={devModeEnabled}
+            onChange={onDevModeChange}
+            checkedChildren={t("player.settings.toggleOn")}
+            unCheckedChildren={t("player.settings.toggleOff")}
+            size="small"
+          />
+        </label>
+      ) : null}
 
       <div className="faceit-party-stage">
         {[0, 1, 2, 3, 4].map((index) => {
@@ -261,7 +276,7 @@ export function HomePage({
               aria-label={t("player.home.leaveParty")}
               title={t("player.home.leaveParty")}
               onClick={() => void leaveParty()}
-              disabled={!onLeaveParty || leavingParty || isMatchmakingPending}
+              disabled={!onLeaveParty || leavingParty}
               loading={leavingParty}
             >
               <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">

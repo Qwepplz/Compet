@@ -19,13 +19,18 @@ export function mapImageUrl(map: string): string | undefined {
   return MAP_IMAGE_URLS[map.toLowerCase()];
 }
 
-let preloaded = false;
+let preloadPromise: Promise<void> | undefined;
 
-export function preloadMapImages(): void {
-  if (preloaded) return;
-  preloaded = true;
-  for (const url of Object.values(MAP_IMAGE_URLS)) {
-    const image = new Image();
-    image.src = url;
+export function preloadMapImages(): Promise<void> {
+  if (!preloadPromise) {
+    preloadPromise = Promise.all(Object.values(MAP_IMAGE_URLS).map(async (url) => {
+      const image = new Image();
+      image.src = url;
+      await image.decode();
+    })).then(() => undefined).catch((error: unknown) => {
+      preloadPromise = undefined;
+      throw error;
+    });
   }
+  return preloadPromise;
 }

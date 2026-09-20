@@ -1,4 +1,3 @@
-import type { MatchClientStage } from "../matchmaking/matchmakingStore.js";
 
 export type RealtimeCommand =
   | { type: "command"; commandId: string; name: "friends.sendRequest"; payload: { accountId: string } }
@@ -12,16 +11,11 @@ export type RealtimeCommand =
   | { type: "command"; commandId: string; name: "party.ignoreInvite"; payload: { invitationId: string } }
   | { type: "command"; commandId: string; name: "party.leave"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "party.beginMatchmaking"; payload: { dev?: boolean } }
+  | { type: "command"; commandId: string; name: "party.preloadReady"; payload: { matchId: string; resourceVersion: string } }
   | { type: "command"; commandId: string; name: "party.cancelMatchmaking"; payload: Record<string, never> }
   | { type: "command"; commandId: string; name: "party.startMatchmaking"; payload: { dev?: boolean } }
   | { type: "command"; commandId: string; name: "matchmaking.acceptReady"; payload: Record<string, never> }
-  | { type: "command"; commandId: string; name: "matchmaking.declineReady"; payload: Record<string, never> }
-  | {
-      type: "command";
-      commandId: string;
-      name: "matchRoom.stageAck";
-      payload: { roomId: string; stage: MatchClientStage };
-    };
+  | { type: "command"; commandId: string; name: "matchmaking.declineReady"; payload: Record<string, never> };
 
 export interface RealtimeCommandAckSuccess {
   type: "command_ack";
@@ -58,12 +52,12 @@ export interface RealtimeCommandMatchmaking {
   ignorePartyInvite(accountId: string, invitationId: string): Promise<unknown>;
   leaveParty(accountId: string): Promise<unknown>;
   beginPartyMatchmaking(ownerAccountId: string, options?: { dev?: boolean }): Promise<unknown>;
+  isMatchmakingParticipant(accountId: string): Promise<boolean>;
+  acknowledgePreload(accountId: string, matchId: string, resourceVersion: string): Promise<void>;
   cancelPartyMatchmaking(ownerAccountId: string): Promise<unknown>;
   startPartyMatchmaking(ownerAccountId: string, options?: { dev?: boolean }): Promise<unknown>;
   acceptReady(accountId: string): Promise<unknown>;
   declineReady(accountId: string): Promise<unknown>;
-  ackMatchStage(roomId: string, stage: MatchClientStage, accountId: string, connectionId: string): Promise<unknown>;
-  invalidateStageAcknowledgement(accountId: string, connectionId?: string): Promise<void>;
 }
 
 export interface RealtimeCommandDeps {
@@ -111,9 +105,9 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
         name: record.name,
         payload: typeof payload.dev === "boolean" ? { dev: payload.dev } : {},
       };
-    case "matchRoom.stageAck":
-      return typeof payload.roomId === "string" && isMatchClientStage(payload.stage)
-        ? { type: "command", commandId: record.commandId, name: record.name, payload: { roomId: payload.roomId, stage: payload.stage } }
+    case "party.preloadReady":
+      return typeof payload.matchId === "string" && typeof payload.resourceVersion === "string"
+        ? { type: "command", commandId: record.commandId, name: record.name, payload: { matchId: payload.matchId, resourceVersion: payload.resourceVersion } }
         : undefined;
     default:
       return undefined;
@@ -169,6 +163,10 @@ export async function executeRealtimeCommand(
       case "party.beginMatchmaking":
         if (!matchmaking) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { party: await matchmaking.beginPartyMatchmaking(accountId, { dev: command.payload.dev }) } };
+      case "party.preloadReady":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        await matchmaking.acknowledgePreload(accountId, command.payload.matchId, command.payload.resourceVersion);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
       case "party.cancelMatchmaking":
         if (!matchmaking) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { party: await matchmaking.cancelPartyMatchmaking(accountId) } };
@@ -181,14 +179,6 @@ export async function executeRealtimeCommand(
       case "matchmaking.declineReady":
         if (!matchmaking) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { room: await matchmaking.declineReady(accountId) } };
-      case "matchRoom.stageAck":
-        if (!matchmaking) return commandUnavailable(command.commandId);
-        return {
-          type: "command_ack",
-          commandId: command.commandId,
-          ok: true,
-          result: { room: await matchmaking.ackMatchStage(command.payload.roomId, command.payload.stage, accountId, connectionId) },
-        };
     }
   } catch (error) {
     return {
@@ -204,11 +194,7 @@ export async function executeRealtimeCommand(
   }
 }
 
-function isMatchClientStage(value: unknown): value is MatchClientStage {
-  return value === "room_entered"
-    || value === "map_stage_entered"
-    || value === "map_revealed";
-}
+
 
 function commandUnavailable(commandId: string): RealtimeCommandAckFailure {
   return {

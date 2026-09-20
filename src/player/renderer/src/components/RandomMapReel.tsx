@@ -1,55 +1,35 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef } from "react";
 import type { PlayerLiveMatchStateDto } from "../../../shared/types.js";
 import { useLanguage } from "../../../../language/react.js";
 import { formatMapName, mapImageUrl } from "../mapAssets.js";
-import { isMapRandomizingRevealed, mapReelDurationMs, mapReelOffset } from "../randomMapAnimation.js";
+import { isMapRandomizingRevealed, mapReelPosition, mapReelOffset } from "../randomMapAnimation.js";
 
 type MapSelection = NonNullable<PlayerLiveMatchStateDto["mapSelection"]>;
 
 const TRAILING_PAD = 2;
 
-export function RandomMapReel({ mapSelection, onSettled }: { mapSelection: MapSelection; onSettled?: () => void }) {
+export function RandomMapReel({ mapSelection, nowMs }: { mapSelection: MapSelection; nowMs: number }) {
   const { reel, finalMap } = mapSelection;
   const { t } = useLanguage();
   const winnerIndex = reel.length - 1;
   const tiles = [...reel, ...reel.slice(0, TRAILING_PAD)];
 
   const stripRef = useRef<HTMLDivElement>(null);
-  const [settled, setSettled] = useState(() => isMapRandomizingRevealed(mapSelection, Date.now()));
-
+  const settled = isMapRandomizingRevealed(mapSelection, nowMs);
+  const clock = useRef({ nowMs, sampledAt: performance.now() });
+  clock.current = { nowMs, sampledAt: performance.now() };
   useLayoutEffect(() => {
-    const strip = stripRef.current;
-    if (!strip) return;
-    const target = mapReelOffset(winnerIndex);
-
-    if (isMapRandomizingRevealed(mapSelection, Date.now())) {
-      strip.style.transition = "none";
-      strip.style.transform = `translateX(${target}%)`;
-      setSettled(true);
-      return;
-    }
-
-    strip.style.transition = "none";
-    strip.style.transform = `translateX(${mapReelOffset(1)}%)`;
-    void strip.offsetWidth;
-
-    const durationMs = mapReelDurationMs(mapSelection, Date.now());
-    const handle = requestAnimationFrame(() => {
-      strip.style.transition = `transform ${durationMs}ms cubic-bezier(0.16, 1, 0.3, 1)`;
-      strip.style.transform = `translateX(${target}%)`;
-    });
-    const onEnd = () => setSettled(true);
-    strip.addEventListener("transitionend", onEnd, { once: true });
-
-    return () => {
-      cancelAnimationFrame(handle);
-      strip.removeEventListener("transitionend", onEnd);
+    let frame = 0;
+    const draw = () => {
+      const syncedTime = clock.current.nowMs + performance.now() - clock.current.sampledAt;
+      if (stripRef.current) {
+        stripRef.current.style.transform = `translateX(${mapReelOffset(mapReelPosition(mapSelection, syncedTime))}%)`;
+      }
+      frame = requestAnimationFrame(draw);
     };
-  }, [mapSelection.revealAt, winnerIndex]);
-
-  useEffect(() => {
-    if (settled) onSettled?.();
-  }, [settled]);
+    draw();
+    return () => cancelAnimationFrame(frame);
+  }, [mapSelection.startedAt, mapSelection.revealAt, winnerIndex]);
 
   return (
     <section className="faceit-connect-panel faceit-reel-panel" aria-live="polite">
@@ -60,7 +40,8 @@ export function RandomMapReel({ mapSelection, onSettled }: { mapSelection: MapSe
       >
         <div className="faceit-reel-strip" ref={stripRef}>
           {tiles.map((map, index) => {
-            const url = mapImageUrl(map);
+            const hidden = !settled && map === finalMap;
+            const url = hidden ? undefined : mapImageUrl(map);
             return (
               <div
                 key={`${map}-${index}`}
@@ -68,7 +49,7 @@ export function RandomMapReel({ mapSelection, onSettled }: { mapSelection: MapSe
                 style={url ? { backgroundImage: `url("${url}")` } : undefined}
                 aria-hidden="true"
               >
-                <span className="faceit-reel-tile-label">{formatMapName(map)}</span>
+                <span className="faceit-reel-tile-label">{hidden ? "??" : formatMapName(map)}</span>
               </div>
             );
           })}

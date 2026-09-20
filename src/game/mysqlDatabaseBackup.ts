@@ -1,7 +1,8 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { access, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -17,7 +18,7 @@ const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 export type MysqlDatabaseConfig = RankmeDatabaseConfig;
 
 export interface MysqlBackupProcess {
-  dump(database: MysqlDatabaseConfig, filePath: string): Promise<void>;
+  dump(database: MysqlDatabaseConfig, filePath: string, signal?: AbortSignal): Promise<void>;
   restore(database: MysqlDatabaseConfig, filePath: string): Promise<void>;
 }
 
@@ -31,19 +32,25 @@ export interface MysqlDatabaseBackupOptions {
 export class MysqlDatabaseBackup {
   constructor(private readonly options: MysqlDatabaseBackupOptions) {}
 
-  async create(matchId: string): Promise<void> {
+  async create(matchId: string, signal?: AbortSignal): Promise<void> {
     const filePath = mysqlBackupFilePath(this.options.backupDir, matchId);
+    const temporary = `${filePath}.${randomUUID()}.partial`;
     await mkdir(path.dirname(filePath), { recursive: true });
     const database = await this.resolveDatabase();
+    await this.discard(matchId);
     try {
-      await (await this.resolveProcess()).dump(database, filePath);
-    } catch (error) {
-      if (isEmptyDatabaseDumpError(error, database.database)) {
-        await writeFile(filePath, emptyDatabaseDump(database.database), "utf8");
-        return;
+      signal?.throwIfAborted();
+      try {
+        await (await this.resolveProcess()).dump(database, temporary, signal);
+      } catch (error) {
+        if (!signal?.aborted && isEmptyDatabaseDumpError(error, database.database)) {
+          await writeFile(temporary, emptyDatabaseDump(database.database), "utf8");
+        } else { throw error; }
       }
-      await rm(filePath, { force: true });
-      throw error;
+      signal?.throwIfAborted();
+      await rename(temporary, filePath);
+    } finally {
+      await rm(temporary, { force: true });
     }
   }
 
@@ -57,7 +64,17 @@ export class MysqlDatabaseBackup {
   }
 
   async discard(matchId: string): Promise<void> {
-    await rm(mysqlBackupFilePath(this.options.backupDir, matchId), { force: true });
+    const filePath = mysqlBackupFilePath(this.options.backupDir, matchId);
+    await rm(filePath, { force: true });
+    const entries = await readdir(this.options.backupDir).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const entry of entries) {
+      if (entry.startsWith(`${matchId}.sql.`) && entry.endsWith(".partial")) {
+        await rm(path.join(this.options.backupDir, entry), { force: true });
+      }
+    }
   }
 
   private async resolveDatabase(): Promise<MysqlDatabaseConfig> {
@@ -97,7 +114,7 @@ class MysqlCliBackupProcess implements MysqlBackupProcess {
     return new MysqlCliBackupProcess(mysqlPath, mysqldumpPath);
   }
 
-  async dump(database: MysqlDatabaseConfig, filePath: string): Promise<void> {
+  async dump(database: MysqlDatabaseConfig, filePath: string, signal?: AbortSignal): Promise<void> {
     const child = spawn(this.mysqldumpPath, [
       "--single-transaction",
       "--quick",
@@ -115,12 +132,15 @@ class MysqlCliBackupProcess implements MysqlBackupProcess {
       env: mysqlEnv(database),
       windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
+      signal,
     });
 
-    await Promise.all([
+    const results = await Promise.allSettled([
       pipeline(child.stdout, createWriteStream(filePath)),
       waitForProcess(child, "mysqldump"),
     ]);
+    const failed = results.find((result) => result.status === "rejected");
+    if (failed?.status === "rejected") throw failed.reason;
   }
 
   async restore(database: MysqlDatabaseConfig, filePath: string): Promise<void> {
@@ -199,8 +219,10 @@ function waitForProcess(child: ReturnType<typeof spawn>, label: string): Promise
   });
 
   return new Promise((resolve, reject) => {
-    child.on("error", reject);
+    let processError: Error | undefined;
+    child.on("error", (error) => { processError = error; });
     child.on("close", (code) => {
+      if (processError) { reject(processError); return; }
       if (code === 0) {
         resolve();
         return;

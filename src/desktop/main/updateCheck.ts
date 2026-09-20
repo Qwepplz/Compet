@@ -1,11 +1,11 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, copyFile, mkdir, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { app } from "electron";
 import { getInstallRoot } from "./installLayout.js";
-import type { UpdateCheckResult, UpdateInstallResult } from "../updateTypes.js";
+import type { IntegrityProgress, IntegrityReport, UpdateCheckResult, UpdateInstallResult } from "../updateTypes.js";
 
 export type { UpdateCheckResult, UpdateInstallResult };
 
@@ -75,7 +75,23 @@ export async function checkForUpdates(appId: string, timeoutMs?: number): Promis
   };
 }
 
+let installing = false;
+let integrityTask: Promise<IntegrityReport> | undefined;
+
 export async function installUpdate(appId: string, exeName: string): Promise<UpdateInstallResult> {
+  if (installing || integrityTask) throw updateError("update_busy", "Installation verification or update is running");
+  installing = true;
+  let launched = false;
+  try {
+    const result = await performInstallUpdate(appId, exeName);
+    launched = result.installing;
+    return result;
+  } finally {
+    if (!launched) installing = false;
+  }
+}
+
+async function performInstallUpdate(appId: string, exeName: string): Promise<UpdateInstallResult> {
   const loaded = await loadUpdate(appId);
   if (compareSemver(loaded.latestVersion, loaded.currentVersion) <= 0) {
     return {
@@ -242,7 +258,7 @@ function parseManifestFile(value: unknown): ManifestFile {
     throw updateError("update_manifest_file_invalid", "Invalid update file entry");
   }
   const normalizedPath = file.path.replaceAll("\\", "/");
-  if (path.isAbsolute(normalizedPath) || normalizedPath.split("/").includes("..") || !/^[a-f0-9]{64}$/i.test(file.sha256) || file.size < 0) {
+  if (path.isAbsolute(normalizedPath) || normalizedPath.split("/").some((part) => !part || part === "." || part === ".." || /[<>:"|?*\u0000-\u001f]/.test(part) || /[. ]$/.test(part) || /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i.test(part)) || !/^[a-f0-9]{64}$/i.test(file.sha256) || !Number.isSafeInteger(file.size) || file.size < 0) {
     throw updateError("update_manifest_path_or_hash_invalid", "Invalid update file entry path or hash");
   }
   if (file.url.includes("..") || file.url.startsWith("/") || /^[a-z]+:/i.test(file.url)) {
@@ -285,4 +301,85 @@ function compareSemver(a: string, b: string): number {
     if (diff !== 0) return diff;
   }
   return 0;
+}
+
+const integrityListeners = new Set<(progress: IntegrityProgress) => void>();
+
+export async function verifyClientIntegrity(onProgress?: (progress: IntegrityProgress) => void): Promise<IntegrityReport> {
+  if (onProgress) integrityListeners.add(onProgress);
+  try {
+    if (!integrityTask) {
+      const task = performIntegrityCheck();
+      integrityTask = task;
+      void task.finally(() => { if (integrityTask === task) integrityTask = undefined; });
+    }
+    return await integrityTask;
+  } finally {
+    if (onProgress) integrityListeners.delete(onProgress);
+  }
+}
+
+async function performIntegrityCheck(): Promise<IntegrityReport> {
+  const version = app.getVersion();
+  const report: IntegrityReport = { version, checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [] };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  try {
+    if (installing) throw updateError("update_busy", "Update is running");
+    if (!app.isPackaged || !isSemver(version)) throw updateError("integrity_unavailable", "Integrity verification requires an installed release");
+    const manifestUrl = new URL("releases/" + encodeURIComponent(version) + "/manifest.json", latestUrls["compet-player-client"]).toString();
+    ensureSameOrigin(latestUrls["compet-player-client"]!, manifestUrl);
+    const manifest = await fetchJson<ManifestPayload>(manifestUrl, controller.signal);
+    if (manifest.appId !== "compet-player-client" || manifest.version !== version || manifest.platform !== "win32-x64") throw updateError("integrity_manifest_mismatch", "Manifest does not match this installation");
+
+    if (!Array.isArray(manifest.files) || manifest.files.length === 0) throw updateError("integrity_manifest_invalid", "Manifest has no managed files");
+    const files = manifest.files.map(parseManifestFile);
+    const paths = new Set<string>();
+    for (const file of files) {
+      ensureSameOrigin(manifestUrl, new URL(file.url, manifestUrl).toString());
+      const key = file.path.toLowerCase();
+      if (paths.has(key)) throw updateError("integrity_manifest_invalid", "Manifest has duplicate paths");
+      paths.add(key);
+    }
+    const root = await realpath(getInstallRoot());
+    report.totalFiles = files.length;
+    let lastProgressAt = 0;
+    const publish = () => {
+      if (report.checkedFiles !== report.totalFiles && Date.now() - lastProgressAt < 100) return;
+      lastProgressAt = Date.now();
+      for (const listener of integrityListeners) listener({ version, checkedFiles: report.checkedFiles, totalFiles: report.totalFiles });
+    };
+    publish();
+    for (const file of files) {
+      let target: string;
+      try { target = await realpath(path.resolve(root, file.path)); }
+      catch (error) {
+        report.issues.push({ path: file.path, kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "read_failed" });
+        report.checkedFiles++;
+        publish();
+        continue;
+      }
+      const relative = path.relative(root, target);
+      if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) throw updateError("integrity_path_outside", "Managed file resolves outside the installation");
+
+      try {
+        const info = await stat(target);
+        if (!info.isFile()) report.issues.push({ path: file.path, kind: "read_failed" });
+        else if (info.size !== file.size) report.issues.push({ path: file.path, kind: "size_mismatch" });
+        else if (await hashFile(target) !== file.sha256) report.issues.push({ path: file.path, kind: "hash_mismatch" });
+      } catch {
+        report.issues.push({ path: file.path, kind: "read_failed" });
+      }
+      report.checkedFiles++;
+      publish();
+    }
+    const installed = JSON.parse(await readFile(path.join(app.getAppPath(), "package.json"), "utf8")) as { version?: unknown };
+    if (app.getVersion() !== version || installed.version !== version) throw updateError("integrity_version_changed", "Installation version changed during verification");
+    report.status = report.issues.some((issue) => issue.kind === "read_failed") ? "unavailable" : report.issues.length ? "issues" : "passed";
+  } catch (error) {
+    report.error = controller.signal.aborted ? "integrity_timeout" : (error as Partial<CodedUpdateError>).code ?? "integrity_failed";
+  } finally {
+    clearTimeout(timer);
+  }
+  return report;
 }

@@ -1,11 +1,10 @@
 import { clipboard, ipcMain, shell } from "electron";
-import type { PlayerFriendSearchResultDto, PlayerMatchmakingStateDto, PlayerMatchStageDto } from "../shared/types.js";
+import type { PlayerFriendSearchResultDto, PlayerMatchmakingStateDto } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { RemoteProfileService } from "./remoteProfileService.js";
 import { withAuthRetry } from "./authRetry.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
-import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
-import { createPlayerDesktopShortcut } from "./desktopShortcut.js";
+import { checkForUpdates, getCurrentVersion, installUpdate, verifyClientIntegrity } from "../../desktop/main/updateCheck.js";
 import type { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
 import { isSupportedLanguage } from "../../language/translate.js";
 import { DEFAULT_PROFILE_BASE_URL } from "../../profiles/humanProfileIndex.js";
@@ -232,13 +231,12 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("party:declineInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.declinePartyInvite(invitationId)));
   ipcMain.handle("party:ignoreInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.ignorePartyInvite(invitationId)));
   ipcMain.handle("party:leave", () => withSavedAuth(deps, (client) => client.leaveParty()));
+  ipcMain.handle("party:preloadReady", (_event, matchId: string, resourceVersion: string) => withSavedAuth(deps, (client) => client.acknowledgePreload(matchId, resourceVersion)));
   ipcMain.handle("party:beginMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth(deps, (client) => client.beginPartyMatchmaking(options ?? {})));
   ipcMain.handle("party:cancelMatchmaking", () => withSavedAuth(deps, (client) => client.cancelPartyMatchmaking()));
   ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth(deps, (client) => client.startPartyMatchmaking(options ?? {})));
 
   ipcMain.handle("matchmaking:getState", () => withSavedAuth(deps, (client) => client.getMatchmakingState()));
-  ipcMain.handle("matchmaking:stageAck", (_event, roomId: string, stage: PlayerMatchStageDto) =>
-    withSavedAuth(deps, (client) => client.ackMatchStage(roomId, stage)));
   ipcMain.handle("matchmaking:acceptReady", () => withSavedAuth(deps, (client) => client.acceptReady()));
   ipcMain.handle("matchmaking:declineReady", () => withSavedAuth(deps, (client) => client.declineReady()));
   ipcMain.handle("matchmaking:refreshSnapshot", () =>
@@ -251,7 +249,6 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     if (!isSafeSteamConnectUrl(connectUrl)) throw playerOperationError("connect_url_invalid", "Invalid Steam connect URL");
     return shell.openExternal(connectUrl);
   });
-  ipcMain.handle("player:desktopShortcut:create", () => createPlayerDesktopShortcut());
 
   ipcMain.handle("session:restore", async (_event, timeoutMs?: number): Promise<RestoreSessionResult | null> => {
     const normalizedTimeoutMs = normalizeStartupTimeout(timeoutMs);
@@ -324,6 +321,9 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     };
   });
 
+  ipcMain.handle("updates:integrity", (event) => verifyClientIntegrity((progress) => {
+    if (!event.sender.isDestroyed()) event.sender.send("updates:integrityProgress", progress);
+  }));
   ipcMain.handle("updates:version", () => getCurrentVersion());
   ipcMain.handle("updates:check", (_event, timeoutMs?: number) =>
     checkForUpdates("compet-player-client", normalizeStartupTimeout(timeoutMs)));

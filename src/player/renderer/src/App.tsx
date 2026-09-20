@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message } from "antd";
 import { ArrowLeftOutlined, CloseOutlined, MinusOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
-import type { UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
+import type { IntegrityProgress, IntegrityReport, UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
 import type { RankmeDisplay } from "../../../rankme/rankmeStandings.js";
 import type {
   PlayerFriendDto,
@@ -41,9 +41,9 @@ import {
   saveDevModeEnabled,
   saveMatchSoundEnabled,
 } from "./playerPreferences.js";
-import { randomMatchmakingDelayMs } from "./matchTimers.js";
 import { playerAccountLabel } from "./playerDisplay.js";
 import { preloadMapImages } from "./mapAssets.js";
+import { PRELOAD_RESOURCE_VERSION } from "../../../realtime/realtimeTypes.js";
 import { serverSyncedNowMs, updateServerClockOffset } from "./serverClock.js";
 import { displayError } from "../../../language/displayError.js";
 import { useLanguage, type LanguageContextValue } from "../../../language/react.js";
@@ -134,10 +134,6 @@ function SettingsToolIcon() {
       />
     </svg>
   );
-}
-
-function waitForMatchmakingDelay(delayMs: number): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, delayMs));
 }
 
 function getCurrentRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
@@ -383,14 +379,16 @@ export function App() {
   const [changePasswordPending, setChangePasswordPending] = useState(false);
   const [passwordModalOpen, setPasswordModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [integrityPending, setIntegrityPending] = useState(false);
+  const [integrityProgress, setIntegrityProgress] = useState<IntegrityProgress | null>(null);
+  const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+  const integrityRunning = useRef(false);
   const [languageSaving, setLanguageSaving] = useState(false);
-  const [desktopShortcutPending, setDesktopShortcutPending] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
   const [clockNowMs, setClockNowMs] = useState(() => Date.now());
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState<number | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
-  const [settledMapBarrierKey, setSettledMapBarrierKey] = useState<string | null>(null);
   const [loginForm] = Form.useForm<LoginValues>();
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
@@ -408,13 +406,6 @@ export function App() {
 
   const api = window.playerApi;
   const currentRoom = getCurrentRoom(matchmaking);
-  const currentStageBarrier = currentRoom?.stageBarrier;
-  const currentStageBarrierKey = currentRoom && currentStageBarrier
-    ? `${currentRoom.id}:${currentStageBarrier.stage}`
-    : null;
-  const currentAccountStageAcknowledged = Boolean(
-    account?.id && currentStageBarrier?.acknowledgedAccountIds.includes(account.id),
-  );
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
   activeMatchRoomIdRef.current = activeMatchRoom?.id ?? null;
   const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
@@ -432,6 +423,24 @@ export function App() {
   const canUseMatchmaking = Boolean(account?.steam64?.trim());
   const syncedNowMs = serverSyncedNowMs(serverClockOffsetMs, clockNowMs);
 
+  async function handleIntegrityCheck() {
+    if (integrityRunning.current) return;
+    integrityRunning.current = true;
+    setIntegrityPending(true);
+    setIntegrityReport(null);
+    setIntegrityProgress(null);
+    const unsubscribe = window.playerApi.onIntegrityProgress(setIntegrityProgress);
+    try {
+      setIntegrityReport(await window.playerApi.verifyIntegrity());
+    } catch {
+      setIntegrityReport({ version: currentVersion, checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [] });
+    } finally {
+      unsubscribe();
+      integrityRunning.current = false;
+      setIntegrityPending(false);
+    }
+  }
+
   async function handleLanguageChange(nextLanguage: typeof language) {
     if (nextLanguage === language || languageSaving) return;
     setLanguageSaving(true);
@@ -444,18 +453,6 @@ export function App() {
     }
   }
 
-  async function handleCreateDesktopShortcut() {
-    if (desktopShortcutPending) return;
-    setDesktopShortcutPending(true);
-    try {
-      await window.playerApi.createDesktopShortcut();
-      void message.success(t("player.settings.desktopShortcutCreated"));
-    } catch {
-      void message.error(t("player.settings.desktopShortcutFailed"));
-    } finally {
-      setDesktopShortcutPending(false);
-    }
-  }
 
   function updateServerClock(serverNow: string | undefined, localNowMs = Date.now()) {
     setServerClockOffsetMs((current) => updateServerClockOffset(current, serverNow, localNowMs));
@@ -476,10 +473,41 @@ export function App() {
   }
 
   useEffect(() => {
-    preloadMapImages();
+    void preloadMapImages().catch(() => undefined);
     void window.playerApi.getVersion().then(setCurrentVersion);
     void initializeStartup();
   }, []);
+
+  useEffect(() => {
+    const matchId = party?.lockedMatchId;
+    const version = party?.preload?.resourceVersion;
+    if (!matchId || !version || !party?.matchmakingPendingAt) return;
+    let stopped = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let reportedFailure = false;
+    async function load() {
+      try {
+        if (version !== PRELOAD_RESOURCE_VERSION) throw new Error("Unsupported preload resources");
+        const [, regular, bold] = await Promise.all([
+          preloadMapImages(),
+          document.fonts.load('400 16px "Play"'),
+          document.fonts.load('700 16px "Play"'),
+        ]);
+        if (!regular.length || !bold.length) throw new Error("Required fonts unavailable");
+        if (stopped) return;
+        await api.acknowledgePreload(matchId!, version!);
+      } catch {
+        if (stopped) return;
+        if (!reportedFailure) {
+          reportedFailure = true;
+          void message.warning(t("player.home.preloadRetry"));
+        }
+        retry = setTimeout(() => void load(), 1500);
+      }
+    }
+    void load();
+    return () => { stopped = true; if (retry) clearTimeout(retry); };
+  }, [party?.lockedMatchId, party?.preload?.resourceVersion, party?.matchmakingPendingAt, t]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockNowMs(Date.now()), 250);
@@ -579,7 +607,7 @@ export function App() {
       unsubscribeEvent();
       unsubscribeAccount();
     };
-  }, [account, t]);
+  }, [account, t, party]);
 
   useEffect(() => {
     if (!account || !hasVisibleMatchResult || !matchResultMatchId) return;
@@ -605,46 +633,6 @@ export function App() {
       unsubscribeProfiles();
     };
   }, [account, hasVisibleMatchResult, matchResultBackView, matchResultMatchId, matchHistoryPlayer?.accountId]);
-
-  useEffect(() => {
-    const room = currentRoom;
-    const barrier = currentStageBarrier;
-    const acknowledgementKey = currentStageBarrierKey;
-    if (
-      activeView !== "match-room"
-      || !room
-      || !barrier
-      || !acknowledgementKey
-      || !account?.id
-      || currentAccountStageAcknowledged
-      || (barrier.stage === "map_revealed" && settledMapBarrierKey !== acknowledgementKey)
-    ) return;
-
-    let cancelled = false;
-    let retryTimer: number | undefined;
-    const acknowledgeStage = async () => {
-      try {
-        const nextRoom = await api.ackMatchStage(room.id, barrier.stage);
-        if (!cancelled) updateServerClock(nextRoom.serverNow);
-      } catch {
-        // The active stage barrier remains authoritative while the client retries.
-      }
-      if (cancelled) return;
-      retryTimer = window.setTimeout(() => void acknowledgeStage(), 1_500);
-    };
-    void acknowledgeStage();
-
-    return () => {
-      cancelled = true;
-      if (retryTimer !== undefined) window.clearTimeout(retryTimer);
-    };
-  }, [
-    account?.id,
-    activeView,
-    currentAccountStageAcknowledged,
-    currentStageBarrierKey,
-    settledMapBarrierKey,
-  ]);
 
   async function hydrateRealtimeState() {
     try {
@@ -866,7 +854,6 @@ export function App() {
           phase: "ready",
           readyDeadlineAt: event.deadlineAt,
           ready: event.ready,
-          stageBarrier: undefined,
           humanAccountIds: event.humanParticipants.flatMap((participant) => (participant.accountId ? [participant.accountId] : [])),
         }));
         return;
@@ -903,14 +890,12 @@ export function App() {
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "server_prepare",
-          stageBarrier: undefined,
         }));
         return;
       case "connect_ready":
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "connect",
-          stageBarrier: undefined,
           connect: event.connect,
         }));
         return;
@@ -946,10 +931,13 @@ export function App() {
         setActiveView("home");
         return;
       case "match_failed":
+        if (party?.lockedMatchId === event.matchId && party.preload) {
+          void message.error(t(event.error === "preload_timeout" ? "player.home.preloadTimeout" : "errors.matchFailed"));
+          setMatchmakingFeedbackPending(false);
+        }
         updateCurrentRoom(event.matchId, (room) => ({
           ...room,
           phase: "failed",
-          stageBarrier: undefined,
         }));
         if (activeMatchRoomIdRef.current !== event.matchId) return;
         invalidateMatchHistoryResultRequest();
@@ -1459,15 +1447,7 @@ export function App() {
     }
   }
 
-  async function startPartyMatchmaking(options?: { dev?: boolean }) {
-    const nextRoom = await api.startPartyMatchmaking(options);
-    updateServerClock(nextRoom.serverNow);
-    await hydrateRealtimeState();
-    invalidateMatchHistoryResultRequest();
-    playMatchFoundSound(nextRoom.id);
-    setActiveView("match-room");
-    setMatchmakingFeedbackPending(false);
-  }
+
 
   async function startMatchmakingFromHome(options?: { dev?: boolean }) {
     if (!canUseMatchmaking || hasActiveMatch || matchmakingFeedbackPending) return;
@@ -1479,17 +1459,15 @@ export function App() {
       if (!party) {
         await createParty();
       }
+      const requestSeq = latestRealtimeEventSeqRef.current;
       const pendingParty = await api.beginPartyMatchmaking(options);
       updateServerClock(pendingParty.serverNow);
       matchmakingPendingSynced = true;
-      setParty(pendingParty);
-      setMatchmaking((current) => ({
-        ...current,
-        party: pendingParty,
-        occupancy: { activeCount: 1 },
-      }));
-      await waitForMatchmakingDelay(randomMatchmakingDelayMs());
-      await startPartyMatchmaking(options);
+      if (latestRealtimeEventSeqRef.current === requestSeq) {
+        setParty(pendingParty);
+        setMatchmaking((current) => ({ ...current, party: pendingParty, occupancy: { activeCount: 1 } }));
+      }
+      setMatchmakingFeedbackPending(false);
     } catch (error) {
       let recoveredMatchmaking: PlayerMatchmakingStateDto;
       try {
@@ -1624,11 +1602,6 @@ export function App() {
           nowMs={syncedNowMs}
           onAcceptReady={() => acceptReady()}
           onDeclineReady={() => declineReady()}
-          onMapRevealComplete={() => {
-            if (currentStageBarrier?.stage === "map_revealed" && currentStageBarrierKey) {
-              setSettledMapBarrierKey(currentStageBarrierKey);
-            }
-          }}
           onCopyText={(text) => copyText(text)}
         />
       );
@@ -1644,6 +1617,7 @@ export function App() {
         matchmakingOccupancyActiveCount={matchmaking.occupancy.activeCount}
         nowMs={syncedNowMs}
         devModeEnabled={devModeEnabled}
+        onDevModeChange={setDevModeEnabled}
         onInviteFriend={!hasActiveMatch ? inviteToParty : undefined}
         onLeaveParty={party && !hasActiveMatch ? leaveParty : undefined}
         onStartMatchmaking={
@@ -1920,30 +1894,6 @@ export function App() {
                           size="small"
                         />
                       </label>
-                      <div className="player-settings-row">
-                        <span>{t("player.settings.desktopShortcut")}</span>
-                        <Button
-                          loading={desktopShortcutPending}
-                          disabled={desktopShortcutPending}
-                          onClick={() => void handleCreateDesktopShortcut()}
-                          size="small"
-                        >
-                          {t("player.settings.addDesktopShortcut")}
-                        </Button>
-                      </div>
-                      {account?.dev ? (
-                        <label className="player-settings-row">
-                          <span>{t("common.labels.devMode")}</span>
-                          <Switch
-                            aria-label={t("common.labels.devMode")}
-                            checked={devModeEnabled}
-                            checkedChildren={t("player.settings.toggleOn")}
-                            unCheckedChildren={t("player.settings.toggleOff")}
-                            onChange={setDevModeEnabled}
-                            size="small"
-                          />
-                        </label>
-                      ) : null}
                       <div className="player-settings-actions">
                         <Button
                           onClick={() => {
@@ -1966,6 +1916,19 @@ export function App() {
                   children: (
                     <div className="player-settings-pane">
                       <div className="player-settings-update">
+                        <Button loading={integrityPending} disabled={integrityPending} onClick={() => void handleIntegrityCheck()}>
+                          {t("player.integrity.verify")}
+                        </Button>
+                        {integrityPending ? <div role="status">{t("player.integrity.progress", { checked: integrityProgress?.checkedFiles ?? 0, total: integrityProgress?.totalFiles ?? 0 })}</div> : null}
+                        {integrityReport ? (
+                          <div role="status" className="player-integrity-result">
+                            <div>{t(`player.integrity.${integrityReport.status}`)}</div>
+                            {integrityReport.error ? <div>{t("player.integrity.retry")}</div> : null}
+                            {integrityReport.issues.length ? (
+                              <ul>{integrityReport.issues.map((issue) => <li key={issue.path}>{issue.path}: {t(`player.integrity.${issue.kind}`)}</li>)}</ul>
+                            ) : null}
+                          </div>
+                        ) : null}
                         <div className="player-settings-version">{t("player.settings.currentVersion", { version: currentVersion || t("common.state.loading") })}</div>
                       </div>
                     </div>

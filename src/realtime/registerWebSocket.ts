@@ -72,16 +72,19 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
     let registeredAccountId: string | undefined;
     let registeredAccount: AccountRecord | undefined;
     let cleanedUp = false;
+    let lastReceivedAt = Date.now();
+    let matchmakingHeartbeat = false;
+    let heartbeatPolicySent = false;
+    let heartbeatCheck: ReturnType<typeof setInterval> | undefined;
+    let checkingHeartbeat = false;
     const cleanup = (reason: string, closeCode?: number) => {
       if (cleanedUp) return;
       cleanedUp = true;
+      if (heartbeatCheck) clearInterval(heartbeatCheck);
       sockets.unregister(socket);
-      if (registeredAccount) {
-        void deps.matchmaking?.invalidateStageAcknowledgement(registeredAccount.id, connectionId).catch(() => undefined);
-      }
       let connectionCount: number | null = null;
       if (registeredAccountId && deps.presence) {
-        const summary = deps.presence.unregister(registeredAccountId);
+        const summary = deps.presence.unregister(registeredAccountId, matchmakingHeartbeat ? new Date(lastReceivedAt).toISOString() : undefined);
         connectionCount = summary.connectionCount;
         void publishPresenceUpdated("disconnect", deps, summary);
       }
@@ -120,6 +123,8 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
         writeActivityLog({ source: "realtime", level: "warn", message: `<--- Response WebSocket, id [${messageId}]`, context: { connectionId, result: "failed", errorCode: "unauthorized" } });
         return;
       }
+      if (cleanedUp) return;
+      lastReceivedAt = Date.now();
       await handleMessage(socket, data, account, deps, connectionId);
     });
 
@@ -135,20 +140,6 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
         return;
       }
 
-      if (socket.readyState !== SOCKET_OPEN) return;
-      try {
-        await deps.matchmaking?.invalidateStageAcknowledgement(account.id);
-      } catch {
-        writeActivityLog({
-          source: "realtime",
-          level: "error",
-          message: `<--- Connection WebSocket, id [${connectionId}]: result=failed`,
-          actor: accountActor(account),
-          context: { ip: request.ip, errorCode: "stage_ack_reset_failed" },
-        });
-        socket.close(1011, "stage state unavailable");
-        return;
-      }
       if (socket.readyState !== SOCKET_OPEN) return;
       authorizationCheck = setInterval(() => {
         void authorizeWebSocket(token, deps).then((currentAccount) => {
@@ -173,6 +164,27 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
           closeUnauthorized(socket);
         });
       }, 5_000);
+      const checkHeartbeat = async () => {
+        if (checkingHeartbeat || cleanedUp) return;
+        checkingHeartbeat = true;
+        try {
+          const active = await deps.matchmaking?.isMatchmakingParticipant(account.id) ?? false;
+          if (cleanedUp) return;
+          if (!heartbeatPolicySent || active !== matchmakingHeartbeat) {
+            heartbeatPolicySent = true;
+            sendJson(socket, { type: "heartbeat_policy", matchmaking: active });
+            matchmakingHeartbeat = active;
+            lastReceivedAt = Date.now();
+          }
+          if (active && Date.now() - lastReceivedAt >= 8000) {
+            cleanup("heartbeat_timeout");
+            socket.terminate();
+          }
+        } finally { checkingHeartbeat = false; }
+      };
+      heartbeatCheck = setInterval(() => { void checkHeartbeat().catch(() => undefined); }, 2000);
+      heartbeatCheck.unref?.();
+      void checkHeartbeat().catch(() => undefined);
       sockets.register(account.id, socket);
       registeredAccount = account;
       sendJson(socket, { type: "hello", accountId: account.id, serverTime: now() });

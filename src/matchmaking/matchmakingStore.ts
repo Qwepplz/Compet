@@ -21,7 +21,7 @@ export interface PartyRecord {
   status?: PartyStatus;
   lockedMatchId?: string;
   matchmakingPendingAt?: string;
-  matchmakingStartAt?: string;
+  preload?: { cancelled?: boolean; resourceVersion: string; completedAccountIds: string[]; deadlineAt: string };
   matchmakingDev?: boolean;
 }
 
@@ -41,15 +41,6 @@ export interface MatchRoomReadyState {
   respondedAt?: string;
 }
 
-export type MatchClientStage = "room_entered" | "map_stage_entered" | "map_revealed";
-
-interface MatchStageBarrier {
-  stage: MatchClientStage;
-  requiredAccountIds: string[];
-  acknowledgements: Array<{ accountId: string; connectionId: string }>;
-  deadlineAt: string;
-}
-
 
 export interface MatchMapSelectionState {
   mapPool: string[];
@@ -63,13 +54,13 @@ export interface MatchRoomRecord {
   id: string;
   phase: MatchPhase;
   dev?: true;
+  databaseWriteStarted?: boolean;
   teamA: MatchTeam;
   teamB: MatchTeam;
   humanAccountIds?: string[];
   botParticipantIds?: string[];
   ready?: MatchRoomReadyState[];
   readyDeadlineAt?: string;
-  stageBarrier?: MatchStageBarrier;
   partyId?: string;
   mapSelection?: MatchMapSelectionState;
   connect?: MatchConnectInfo;

@@ -7,7 +7,7 @@ import type {
 import type { MatchConnectInfo } from "../../game/matchExecutor.js";
 import type { PublicMatchRoomRecord, PublicPartyRecord } from "../../matchmaking/matchmakingService.js";
 import type { PartyInvitationDto } from "../../matchmaking/partyInvitationTypes.js";
-import type { MatchClientStage, MatchRoomReadyState, QueueEntry } from "../../matchmaking/matchmakingStore.js";
+import type { MatchRoomReadyState, QueueEntry } from "../../matchmaking/matchmakingStore.js";
 import type { MatchParticipant, MatchPlayerResult, MatchSeriesResult, MatchTeam } from "../../matchmaking/types.js";
 import type { MatchHistoryEntry } from "../../records/matchHistory.js";
 import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
@@ -25,7 +25,6 @@ export type PlayerReadyStateDto = MatchRoomReadyState;
 export type PlayerMatchParticipantDto = MatchParticipant;
 export type PlayerMatchTeamDto = MatchTeam;
 export type PlayerConnectDto = MatchConnectInfo;
-export type PlayerMatchStageDto = MatchClientStage;
 export type PlayerLiveMatchStateDto = PublicMatchRoomRecord;
 export type PlayerMatchResultDto = MatchSeriesResult;
 export type PlayerMatchPlayerResultDto = MatchPlayerResult;

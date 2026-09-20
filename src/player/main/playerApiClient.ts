@@ -10,7 +10,6 @@ import type {
   PlayerMatchParticipantDto,
   PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
-  PlayerMatchStageDto,
   PlayerMatchTeamDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
@@ -241,6 +240,11 @@ export class PlayerApiClient {
     return attachServerNow(response.party, response);
   }
 
+  async acknowledgePreload(matchId: string, resourceVersion: string): Promise<void> {
+    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503, "service_unavailable");
+    await this.realtimeCommandSender("party.preloadReady", { matchId, resourceVersion });
+  }
+
   async cancelPartyMatchmaking(): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> {
     const response = await this.commandOrRequest<{ party?: PlayerPartyDto } & ServerTimedResponse>(
       "party.cancelMatchmaking",
@@ -273,14 +277,7 @@ export class PlayerApiClient {
     return this.getMatchmakingState();
   }
 
-  async ackMatchStage(roomId: string, stage: PlayerMatchStageDto): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
-    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503, "service_unavailable");
-    const response = await this.realtimeCommandSender<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
-      "matchRoom.stageAck",
-      { roomId, stage },
-    );
-    return attachServerNow(response.room, response);
-  }
+
 
   async acceptReady(): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
     const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(

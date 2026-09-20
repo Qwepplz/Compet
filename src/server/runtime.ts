@@ -123,13 +123,17 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       presence,
     });
     await matchmakingService.recoverCompletedMatches();
-    await matchmakingService.resumePendingTimeouts();
     matchmaking = matchmakingService;
     await completeRoomsIfGameServerUnavailable(matchmakingService, config.gameServer.portRange.start);
+    await matchmakingService.resumePendingTimeouts();
     const offlineCleanupGraceMs = resolveOfflineCleanupGraceMs();
     const offlineCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    events.subscribe((event) => {
-      if (event.type !== "presence_updated") return;
+    let closing = false;
+    const presenceRevisions = new Map<string, object>();
+    const unsubscribePresence = events.subscribe((event) => {
+      if (closing || event.type !== "presence_updated") return;
+      const revision = {};
+      presenceRevisions.set(event.accountId, revision);
       const existingTimer = offlineCleanupTimers.get(event.accountId);
       if (existingTimer) {
         clearTimeout(existingTimer);
@@ -137,14 +141,19 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       }
       if (event.online) return;
 
-      const timer = setTimeout(() => {
-        offlineCleanupTimers.delete(event.accountId);
-        if (presence.isOnline(event.accountId)) return;
-        void friends.expireDisconnectedRequests(event.accountId).catch(() => undefined);
-        void matchmakingService.handleAccountOffline(event.accountId).catch(() => undefined);
-      }, offlineCleanupGraceMs);
-      timer.unref?.();
-      offlineCleanupTimers.set(event.accountId, timer);
+      void matchmakingService.isMatchmakingParticipant(event.accountId).then((matching) => {
+        if (closing || presenceRevisions.get(event.accountId) !== revision || presence.isOnline(event.accountId)) return;
+        const lastSeen = presence.get(event.accountId).lastSeenAt;
+        const delay = matching ? Math.max(0, 8000 - (lastSeen ? Date.now() - Date.parse(lastSeen) : 0)) : offlineCleanupGraceMs;
+        const timer = setTimeout(() => {
+          offlineCleanupTimers.delete(event.accountId);
+          if (presence.isOnline(event.accountId)) return;
+          void friends.expireDisconnectedRequests(event.accountId).catch(() => undefined);
+          void matchmakingService.handleAccountOffline(event.accountId).catch(() => undefined);
+        }, delay);
+        timer.unref?.();
+        offlineCleanupTimers.set(event.accountId, timer);
+      }).catch(() => undefined);
     });
 
     const auth = new AuthService(accounts, sessions, new InMemoryLoginRateLimiter());
@@ -161,10 +170,14 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       https: { key: certificate.keyPem, cert: certificate.certPem },
     });
     app.addHook("onClose", async () => {
+      closing = true;
+      unsubscribePresence();
+      presenceRevisions.clear();
       for (const timer of offlineCleanupTimers.values()) {
         clearTimeout(timer);
       }
       offlineCleanupTimers.clear();
+      await matchmakingService.stopBackgroundTasks();
       database.close();
     });
 

@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { IntegrityProgress, IntegrityReport } from "../../desktop/updateTypes.js";
 import type { PlayerAuthenticatedSession, RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { AccountView } from "../../manager/shared/types.js";
 import { createPreviewPlayerApi } from "./previewPlayerApi.js";
@@ -12,7 +13,6 @@ import type {
   PlayerLiveMatchStateDto,
   PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
-  PlayerMatchStageDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
@@ -58,12 +58,11 @@ export const playerApi = {
   declinePartyInvite: (invitationId: string): Promise<void> => invoke("party:declineInvite", invitationId),
   ignorePartyInvite: (invitationId: string): Promise<void> => invoke("party:ignoreInvite", invitationId),
   leaveParty: (): Promise<void> => invoke("party:leave"),
+  acknowledgePreload: (matchId: string, resourceVersion: string): Promise<void> => invoke("party:preloadReady", matchId, resourceVersion),
   beginPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerPartyDto>> => invoke("party:beginMatchmaking", options),
   cancelPartyMatchmaking: (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => invoke("party:cancelMatchmaking"),
   startPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("party:startMatchmaking", options),
   getMatchmakingState: (): Promise<PlayerMatchmakingStateDto> => invoke("matchmaking:getState"),
-  ackMatchStage: (roomId: string, stage: PlayerMatchStageDto): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> =>
-    invoke("matchmaking:stageAck", roomId, stage),
   acceptReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:acceptReady"),
   declineReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:declineReady"),
   refreshRealtimeSnapshot: (): Promise<void> => invoke("matchmaking:refreshSnapshot"),
@@ -79,9 +78,11 @@ export const playerApi = {
     subscribe("player:profiles:updated", () => listener()),
   copyText: (text: string): Promise<void> => invoke("player:copyText", text),
   openConnectUrl: (connectUrl: string): Promise<void> => invoke("player:openConnectUrl", connectUrl),
-  createDesktopShortcut: (): Promise<void> => invoke("player:desktopShortcut:create"),
   minimizeWindow: (): Promise<void> => invoke("player:window:minimize"),
   closeWindow: (): Promise<void> => invoke("player:window:close"),
+  verifyIntegrity: (): Promise<IntegrityReport> => invoke("updates:integrity"),
+  onIntegrityProgress: (listener: (progress: IntegrityProgress) => void): (() => void) =>
+    subscribe("updates:integrityProgress", listener),
   getVersion: (): Promise<string> => invoke("updates:version"),
   checkUpdate: (timeoutMs?: number) => invoke("updates:check", timeoutMs),
   installUpdate: () => invoke("updates:install"),

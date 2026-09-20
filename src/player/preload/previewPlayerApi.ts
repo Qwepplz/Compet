@@ -1,5 +1,6 @@
+import { PRELOAD_RESOURCE_VERSION } from "../../realtime/realtimeTypes.js";
 import type { AccountView } from "../../manager/shared/types.js";
-import type { UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
+import type { IntegrityProgress, IntegrityReport, UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
 import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../language/translate.js";
 import type { SupportedLanguage } from "../../language/types.js";
 import type { PlayerAuthenticatedSession, RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
@@ -12,7 +13,6 @@ import type {
   PlayerMatchHistoryDto,
   PlayerMatchResultDto,
   PlayerMatchmakingStateDto,
-  PlayerMatchStageDto,
   PlayerPartyDto,
   PlayerPartyInvitationDto,
   PlayerRealtimeEvent,
@@ -128,10 +128,7 @@ function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
     humanAccountIds: [previewAccount.id],
     botParticipantIds: ["preview-bot-1", "preview-bot-2"],
     ready: [{ accountId: previewAccount.id, ready: false }],
-    stageBarrier: {
-      stage: "room_entered",
-      acknowledgedAccountIds: [],
-    },
+    readyDeadlineAt: new Date(Date.now() + 45_000).toISOString(),
     teamA: {
       id: "teamA",
       gameSide: "t",
@@ -317,14 +314,20 @@ export function createPreviewPlayerApi() {
     },
     beginPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
       const now = new Date().toISOString();
-      const nextParty = { ...ensureParty(), matchmakingPendingAt: now, updatedAt: now };
+      const nextParty = { ...ensureParty(), lockedMatchId: `preview-${Date.now()}`, matchmakingPendingAt: now, preload: { resourceVersion: PRELOAD_RESOURCE_VERSION, completedAccountIds: [], deadlineAt: new Date(Date.now() + 45_000).toISOString() }, updatedAt: now };
       party = nextParty;
       publishSnapshot();
       return nextParty;
     },
+    acknowledgePreload: async (matchId: string, resourceVersion: string): Promise<void> => {
+      if (!party?.preload || party.lockedMatchId !== matchId || party.preload.resourceVersion !== resourceVersion) throw new Error("match preload is not active");
+      room = makeReadyRoom(party);
+      party = { ...party, status: "matchmaking", lockedMatchId: room.id, preload: undefined, matchmakingPendingAt: undefined };
+      publishSnapshot();
+    },
     cancelPartyMatchmaking: async (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => {
       if (!party) return undefined;
-      party = { ...party, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
+      party = { ...party, lockedMatchId: undefined, preload: undefined, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
       publishSnapshot();
       return party;
     },
@@ -335,33 +338,6 @@ export function createPreviewPlayerApi() {
       return room;
     },
     getMatchmakingState: async (): Promise<PlayerMatchmakingStateDto> => matchmaking(),
-    ackMatchStage: async (_roomId: string, stage: PlayerMatchStageDto): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
-      const nextParty = ensureParty();
-      room = room ?? makeReadyRoom(nextParty);
-      if (stage === "room_entered") {
-        room = { ...room, stageBarrier: undefined, readyDeadlineAt: new Date(Date.now() + 45_000).toISOString() };
-      } else if (stage === "map_stage_entered") {
-        const startedAt = new Date().toISOString();
-        room = {
-          ...room,
-          mapSelection: {
-            mapPool: ["de_mirage", "de_inferno", "de_nuke"],
-            reel: ["de_inferno", "de_nuke", "de_mirage"],
-            finalMap: "de_mirage",
-            startedAt,
-            revealAt: new Date(Date.now() + 7_000).toISOString(),
-          },
-          stageBarrier: {
-            stage: "map_revealed",
-            acknowledgedAccountIds: [],
-          },
-        };
-      } else {
-        room = { ...room, stageBarrier: undefined, phase: "server_prepare" };
-      }
-      publishSnapshot();
-      return room;
-    },
     acceptReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
       const nextParty = ensureParty();
       room = room ?? makeReadyRoom(nextParty);
@@ -370,9 +346,12 @@ export function createPreviewPlayerApi() {
         phase: "map_randomizing",
         ready: [{ accountId: previewAccount.id, ready: true }],
         readyDeadlineAt: undefined,
-        stageBarrier: {
-          stage: "map_stage_entered",
-          acknowledgedAccountIds: [],
+        mapSelection: {
+          mapPool: ["de_mirage", "de_inferno", "de_nuke"],
+          reel: ["de_inferno", "de_nuke", "de_mirage"],
+          finalMap: "de_mirage",
+          startedAt: new Date().toISOString(),
+          revealAt: new Date(Date.now() + 7000).toISOString(),
         },
       };
       publishSnapshot();
@@ -406,7 +385,8 @@ export function createPreviewPlayerApi() {
     },
     copyText: async (): Promise<void> => undefined,
     openConnectUrl: async (): Promise<void> => undefined,
-    createDesktopShortcut: async (): Promise<void> => undefined,
+    verifyIntegrity: async (): Promise<IntegrityReport> => ({ version: "preview", checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [], error: "integrity_unavailable" }),
+    onIntegrityProgress: (_callback: (progress: IntegrityProgress) => void): (() => void) => () => {},
     getVersion: async (): Promise<string> => "preview",
     checkUpdate: async (_timeoutMs?: number): Promise<UpdateCheckResult> => ({
       currentVersion: "preview",

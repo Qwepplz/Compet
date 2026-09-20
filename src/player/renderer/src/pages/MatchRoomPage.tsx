@@ -18,7 +18,6 @@ interface MatchRoomPageProps {
   nowMs: number;
   onAcceptReady?: () => Promise<void>;
   onDeclineReady?: () => Promise<void>;
-  onMapRevealComplete?: () => void;
   onCopyText?: (text: string) => Promise<void>;
 }
 
@@ -125,7 +124,6 @@ export function MatchRoomPage({
   nowMs,
   onAcceptReady,
   onDeclineReady,
-  onMapRevealComplete,
   onCopyText,
 }: MatchRoomPageProps) {
   const { t } = useLanguage();
@@ -241,7 +239,7 @@ export function MatchRoomPage({
 
             {room.phase === "map_randomizing" ? (
               room.mapSelection
-                ? <RandomMapReel mapSelection={room.mapSelection} onSettled={onMapRevealComplete} />
+                ? <RandomMapReel mapSelection={room.mapSelection} nowMs={nowMs} />
                 : (
                     <section className="faceit-connect-panel" aria-live="polite">
                       <span>{t("player.match.mapStage")}</span>

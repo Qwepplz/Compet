@@ -8,14 +8,16 @@ export function mapReelOffset(index: number): number {
   return 50 - (index + 0.5) * (100 / MAP_REEL_VISIBLE_TILES);
 }
 
-export function mapReelDurationMs(mapSelection: NonNullable<MapSelection>, nowMs: number): number {
-  const revealMs = Date.parse(mapSelection.revealAt);
-  if (!Number.isFinite(revealMs)) return 0;
-  return Math.max(0, revealMs - nowMs);
-}
-
 export function isMapRandomizingRevealed(mapSelection: MapSelection, nowMs: number): boolean {
   if (!mapSelection) return false;
   const revealMs = Date.parse(mapSelection.revealAt);
   return Number.isFinite(revealMs) && nowMs >= revealMs;
+}
+
+export function mapReelPosition(mapSelection: NonNullable<MapSelection>, nowMs: number): number {
+  const start = Date.parse(mapSelection.startedAt);
+  const end = Date.parse(mapSelection.revealAt);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return 1;
+  const progress = Math.max(0, Math.min(1, (nowMs - start) / (end - start)));
+  return 1 + (mapSelection.reel.length - 2) * (1 - (1 - progress) ** 3);
 }
