@@ -1,4 +1,5 @@
 import type { PlayerLiveMatchStateDto, PlayerMatchmakingStateDto } from "../../shared/types.js";
+import { isMapRandomizingRevealed } from "./randomMapAnimation.js";
 
 export function isTerminalMatchPhase(phase: PlayerLiveMatchStateDto["phase"] | undefined): boolean {
   return phase === "completed" || phase === "failed";
@@ -53,9 +54,13 @@ export function mergeMatchmakingSnapshotState(
   current: PlayerMatchmakingStateDto,
   snapshot: PlayerMatchmakingStateDto,
   latestRealtimeSeq = 0,
+  source: "request" | "realtime-sync" = "request",
 ): PlayerMatchmakingStateDto {
-  const { rooms, room } = mergeMatchmakingSnapshotRooms(current, snapshot);
-  const snapshotIsBehindRealtime = snapshot.baseSeq < latestRealtimeSeq;
+  // The main process pauses events, serializes this refresh and replays later events.
+  // Its snapshot establishes a new cursor, including after a server sequence reset.
+  if (source === "realtime-sync") return snapshot;
+  const snapshotIsBehindRealtime = snapshot.baseSeq < Math.max(current.baseSeq, latestRealtimeSeq);
+  const { rooms, room } = snapshotIsBehindRealtime ? current : mergeMatchmakingSnapshotRooms(current, snapshot);
   return {
     ...(snapshotIsBehindRealtime ? current : snapshot),
     rooms,
@@ -93,9 +98,17 @@ export function isAccountInReadyRoom(room: PlayerLiveMatchStateDto | null, accou
 }
 
 export function getSelectedMap(room: PlayerLiveMatchStateDto | null, nowMs: number): string | undefined {
-  const revealMs = Date.parse(room?.mapSelection?.revealAt ?? "");
-  const revealedRandomMap = room?.mapSelection && Number.isFinite(revealMs) && nowMs >= revealMs
-    ? room.mapSelection.finalMap
-    : undefined;
-  return revealedRandomMap ?? room?.connect?.map;
+  if (!room || isTerminalMatchPhase(room.phase)) return undefined;
+  return isMapRandomizingRevealed(room.mapSelection, nowMs) ? room.mapSelection!.finalMap : undefined;
+}
+
+export function getMatchPresentationPhase(room: PlayerLiveMatchStateDto | null, nowMs: number): PlayerLiveMatchStateDto["phase"] | undefined {
+  if (!room || isTerminalMatchPhase(room.phase)) return room?.phase;
+  const selection = room.mapSelection;
+  if (!selection) return room.phase;
+  const start = Date.parse(selection.startedAt ?? "");
+  const end = Date.parse(selection.revealAt ?? "");
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || nowMs < start) return "ready";
+  if (nowMs < end) return "map_randomizing";
+  return room.phase === "map_randomizing" ? "server_prepare" : room.phase;
 }

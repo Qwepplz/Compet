@@ -44,6 +44,7 @@ export interface RestoredPlayerSession {
 export type PlayerRealtimeCommandSender = <T>(name: string, payload: unknown) => Promise<T>;
 
 export interface PlayerRealtimeEventsResult {
+  streamId?: string;
   events: PlayerRealtimeEvent[];
   gap: boolean;
   latestSeq: number;
@@ -245,6 +246,11 @@ export class PlayerApiClient {
     await this.realtimeCommandSender("party.preloadReady", { matchId, resourceVersion });
   }
 
+  async acknowledgeReadyView(matchId: string, token: string): Promise<void> {
+    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503, "service_unavailable");
+    await this.realtimeCommandSender("match.readyViewReady", { matchId, token });
+  }
+
   async cancelPartyMatchmaking(): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> {
     const response = await this.commandOrRequest<{ party?: PlayerPartyDto } & ServerTimedResponse>(
       "party.cancelMatchmaking",
@@ -305,7 +311,7 @@ export class PlayerApiClient {
 
   async fetchRealtimeEvents(afterSeq: number, timeoutMs: number): Promise<PlayerRealtimeEventsResult> {
     const query = new URLSearchParams({ afterSeq: String(afterSeq), timeoutMs: String(timeoutMs) });
-    const response = await this.request<{ events: Array<PlayerRealtimeEvent & { accountIds?: string[] }>; gap: boolean; latestSeq?: number } & ServerTimedResponse>(
+    const response = await this.request<{ events: Array<PlayerRealtimeEvent & { accountIds?: string[] }>; gap: boolean; latestSeq?: number; streamId?: string } & ServerTimedResponse>(
       "GET",
       `/realtime/events?${query.toString()}`,
       undefined,
@@ -313,6 +319,7 @@ export class PlayerApiClient {
     );
     return {
       gap: response.gap,
+      streamId: response.streamId,
       latestSeq: typeof response.latestSeq === "number" ? response.latestSeq : afterSeq,
       serverNow: response.serverNow,
       events: response.events.map(stripRealtimeAudience),

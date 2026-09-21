@@ -641,7 +641,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const matchmaking = requireMatchmaking(deps);
     try {
       const baseSeq = deps.events?.latestSeq() ?? 0;
-      return withServerNow({ ...(await matchmaking.getState(auth.account.id)), baseSeq });
+      return withServerNow({ ...(await matchmaking.getState(auth.account.id)), baseSeq, streamId: deps.events?.streamId });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

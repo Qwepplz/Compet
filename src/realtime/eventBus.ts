@@ -1,6 +1,8 @@
+import { randomUUID } from "node:crypto";
 import type { RealtimeEvent, SequencedRealtimeEvent } from "./realtimeTypes.js";
 
 export interface RealtimeReplayResult {
+  streamId: string;
   events: SequencedRealtimeEvent[];
   gap: boolean;
   latestSeq: number;
@@ -11,6 +13,7 @@ export type RealtimeEventListener = (event: SequencedRealtimeEvent) => void;
 const MAX_REPLAY_EVENTS = 500;
 
 export class RealtimeEventBus {
+  readonly streamId = randomUUID();
   private readonly listeners = new Set<RealtimeEventListener>();
   private readonly history: SequencedRealtimeEvent[] = [];
   private nextSeq = 1;
@@ -22,6 +25,7 @@ export class RealtimeEventBus {
   publish(event: RealtimeEvent): void {
     const sequencedEvent: SequencedRealtimeEvent = {
       ...event,
+      streamId: this.streamId,
       seq: event.seq ?? this.nextSeq++,
       serverNow: event.serverNow ?? new Date().toISOString(),
     } as SequencedRealtimeEvent;
@@ -44,6 +48,7 @@ export class RealtimeEventBus {
     const latestSeq = this.latestSeq();
     const gap = afterSeq > latestSeq || (firstSeq !== undefined && afterSeq < firstSeq - 1);
     return {
+      streamId: this.streamId,
       gap,
       latestSeq,
       events: this.history.filter((event) => event.seq > afterSeq && eventIncludesAccount(event, accountId)),

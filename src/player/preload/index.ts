@@ -59,6 +59,7 @@ export const playerApi = {
   ignorePartyInvite: (invitationId: string): Promise<void> => invoke("party:ignoreInvite", invitationId),
   leaveParty: (): Promise<void> => invoke("party:leave"),
   acknowledgePreload: (matchId: string, resourceVersion: string): Promise<void> => invoke("party:preloadReady", matchId, resourceVersion),
+  acknowledgeReadyView: (matchId: string, token: string): Promise<void> => invoke("match:readyViewReady", matchId, token),
   beginPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerPartyDto>> => invoke("party:beginMatchmaking", options),
   cancelPartyMatchmaking: (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => invoke("party:cancelMatchmaking"),
   startPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("party:startMatchmaking", options),

@@ -1677,9 +1677,39 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 }
 
 .faceit-center-panel {
+  position: relative;
   display: grid;
   align-content: start;
   gap: 18px;
+}
+
+.match-flow-panel {
+  position: absolute;
+  top: 26px;
+  left: 0;
+  width: 100%;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.match-flow-panel.is-active {
+  position: relative;
+  top: auto;
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.player-match-flow-host {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.player-match-flow-host.is-active {
+  position: relative;
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .faceit-progress-line {

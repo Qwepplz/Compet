@@ -58,6 +58,7 @@ export interface PlayerMatchmakingStateDto {
   occupancy: PlayerMatchmakingOccupancyDto;
   serverNow?: string;
   baseSeq: number;
+  streamId?: string;
 }
 
 export interface PlayerRealtimeSnapshotDto {
@@ -65,7 +66,7 @@ export interface PlayerRealtimeSnapshotDto {
   matchmaking: PlayerMatchmakingStateDto;
 }
 
-type PlayerRealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string };
+type PlayerRealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string; streamId?: string };
 
 export type PlayerRealtimeEvent =
   | PlayerRealtimeEventWithSeq<{
@@ -86,6 +87,7 @@ export type PlayerRealtimeEvent =
   | PlayerRealtimeEventWithSeq<{ type: "matchmaking_occupancy_updated"; occupancy: PlayerMatchmakingOccupancyDto }>
   | PlayerRealtimeEventWithSeq<{
       type: "ready_check_started";
+      startsAt?: string;
       matchId: string;
       roomId: string;
       deadlineAt: string;
@@ -94,6 +96,7 @@ export type PlayerRealtimeEvent =
     }>
   | PlayerRealtimeEventWithSeq<{
       type: "ready_check_updated";
+      startsAt?: string;
       matchId: string;
       roomId: string;
       deadlineAt: string;

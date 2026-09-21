@@ -1,9 +1,9 @@
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
 import type { PartyInvitationDto } from "../matchmaking/partyInvitationTypes.js";
 
-export const PRELOAD_RESOURCE_VERSION = "match-flow-1";
+export const PRELOAD_RESOURCE_VERSION = "match-flow-2";
 
-type RealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string };
+type RealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string; streamId?: string };
 
 export type RealtimeEvent =
   | RealtimeEventWithSeq<{
@@ -25,6 +25,7 @@ export type RealtimeEvent =
   | RealtimeEventWithSeq<{ type: "matchmaking_occupancy_updated"; occupancy: { activeCount: number } }>
   | RealtimeEventWithSeq<{
       type: "ready_check_started";
+      startsAt?: string;
       matchId: string;
       roomId: string;
       accountIds: string[];
@@ -34,6 +35,7 @@ export type RealtimeEvent =
     }>
   | RealtimeEventWithSeq<{
       type: "ready_check_updated";
+      startsAt?: string;
       matchId: string;
       roomId: string;
       accountIds: string[];

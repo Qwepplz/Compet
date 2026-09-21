@@ -23,6 +23,7 @@ export interface PartyRecord {
   matchmakingPendingAt?: string;
   preload?: { cancelled?: boolean; resourceVersion: string; completedAccountIds: string[]; deadlineAt: string };
   matchmakingDev?: boolean;
+  draft?: PendingMatchDraft;
 }
 
 export interface PartyInvitationRecord {
@@ -41,13 +42,28 @@ export interface MatchRoomReadyState {
   respondedAt?: string;
 }
 
+export interface ReadyPresentationState {
+  token: string;
+  completedAccountIds: string[];
+  deadlineAt: string;
+}
 
-export interface MatchMapSelectionState {
+
+export interface MapSelectionContent {
   mapPool: string[];
   reel: string[];
   finalMap: string;
-  startedAt: string;
-  revealAt: string;
+}
+
+export type MatchMapSelectionState = MapSelectionContent & (
+  | { startedAt: string; revealAt: string }
+  | { startedAt?: undefined; revealAt?: undefined }
+);
+
+export interface PendingMatchDraft {
+  teamA: MatchTeam;
+  teamB: MatchTeam;
+  mapSelection: MapSelectionContent;
 }
 
 export interface MatchRoomRecord {
@@ -60,6 +76,8 @@ export interface MatchRoomRecord {
   humanAccountIds?: string[];
   botParticipantIds?: string[];
   ready?: MatchRoomReadyState[];
+  readyPresentation?: ReadyPresentationState;
+  readyStartsAt?: string;
   readyDeadlineAt?: string;
   partyId?: string;
   mapSelection?: MatchMapSelectionState;

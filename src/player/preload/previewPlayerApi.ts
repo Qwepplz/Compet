@@ -122,13 +122,14 @@ function makeParty(): PlayerPartyDto {
 
 function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
   return {
-    id: "preview-room",
+    id: party.lockedMatchId!,
     phase: "ready",
     partyId: party.id,
     humanAccountIds: [previewAccount.id],
     botParticipantIds: ["preview-bot-1", "preview-bot-2"],
     ready: [{ accountId: previewAccount.id, ready: false }],
-    readyDeadlineAt: new Date(Date.now() + 45_000).toISOString(),
+    readyPresentation: { token: crypto.randomUUID(), completedAccountIds: [], deadlineAt: new Date(Date.now() + 45_000).toISOString() },
+    mapSelection: party.mapSelection,
     teamA: {
       id: "teamA",
       gameSide: "t",
@@ -313,53 +314,63 @@ export function createPreviewPlayerApi() {
       publishSnapshot();
     },
     beginPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
+      if (party?.preload) return party;
       const now = new Date().toISOString();
       const nextParty = { ...ensureParty(), lockedMatchId: `preview-${Date.now()}`, matchmakingPendingAt: now, preload: { resourceVersion: PRELOAD_RESOURCE_VERSION, completedAccountIds: [], deadlineAt: new Date(Date.now() + 45_000).toISOString() }, updatedAt: now };
       party = nextParty;
+      party.mapSelection = { mapPool: ["de_mirage", "de_inferno", "de_nuke"], reel: ["de_inferno", "de_nuke", "de_mirage"], finalMap: "de_mirage" };
       publishSnapshot();
       return nextParty;
     },
     acknowledgePreload: async (matchId: string, resourceVersion: string): Promise<void> => {
+      if (room?.id === matchId && party?.lockedMatchId === matchId && resourceVersion === PRELOAD_RESOURCE_VERSION) return;
       if (!party?.preload || party.lockedMatchId !== matchId || party.preload.resourceVersion !== resourceVersion) throw new Error("match preload is not active");
       room = makeReadyRoom(party);
-      party = { ...party, status: "matchmaking", lockedMatchId: room.id, preload: undefined, matchmakingPendingAt: undefined };
+      party = { ...party, status: "matchmaking", lockedMatchId: room.id, preload: undefined, mapSelection: undefined, matchmakingPendingAt: undefined };
+      publishSnapshot();
+    },
+    acknowledgeReadyView: async (matchId: string, token: string): Promise<void> => {
+      if (!room || room.id !== matchId || room.phase !== "ready" || room.readyPresentation?.token !== token) throw new Error("ready presentation is not active");
+      if (room.readyStartsAt) return;
+      if (Date.now() >= Date.parse(room.readyPresentation.deadlineAt)) throw new Error("ready presentation expired");
+      const startMs = Date.now() + 1000;
+      room = { ...room, readyPresentation: { ...room.readyPresentation, completedAccountIds: [previewAccount.id] },
+        readyStartsAt: new Date(startMs).toISOString(), readyDeadlineAt: new Date(startMs + 45_000).toISOString() };
       publishSnapshot();
     },
     cancelPartyMatchmaking: async (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => {
       if (!party) return undefined;
-      party = { ...party, lockedMatchId: undefined, preload: undefined, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
+      party = { ...party, lockedMatchId: undefined, preload: undefined, mapSelection: undefined, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
       publishSnapshot();
       return party;
     },
     startPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
-      const nextParty = ensureParty();
-      room = makeReadyRoom(nextParty);
-      publishSnapshot();
+      if (!room) throw new Error("match preload is incomplete");
       return room;
     },
     getMatchmakingState: async (): Promise<PlayerMatchmakingStateDto> => matchmaking(),
     acceptReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
-      const nextParty = ensureParty();
-      room = room ?? makeReadyRoom(nextParty);
+      if (!room?.readyStartsAt || !room.readyDeadlineAt || Date.now() < Date.parse(room.readyStartsAt)) throw new Error("ready check has not started");
+      if (Date.now() >= Date.parse(room.readyDeadlineAt)) throw new Error("ready check expired");
+      const startMs = Date.now() + 1000;
       room = {
         ...room,
         phase: "map_randomizing",
         ready: [{ accountId: previewAccount.id, ready: true }],
         readyDeadlineAt: undefined,
         mapSelection: {
-          mapPool: ["de_mirage", "de_inferno", "de_nuke"],
-          reel: ["de_inferno", "de_nuke", "de_mirage"],
-          finalMap: "de_mirage",
-          startedAt: new Date().toISOString(),
-          revealAt: new Date(Date.now() + 7000).toISOString(),
+          ...room.mapSelection!,
+          startedAt: new Date(startMs).toISOString(),
+          revealAt: new Date(startMs + 7000).toISOString(),
         },
       };
       publishSnapshot();
       return room;
     },
     declineReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
-      const nextParty = ensureParty();
-      room = room ?? makeReadyRoom(nextParty);
+      if (!room?.readyStartsAt || !room.readyDeadlineAt || Date.now() < Date.parse(room.readyStartsAt)) throw new Error("ready check has not started");
+      if (Date.now() >= Date.parse(room.readyDeadlineAt)) throw new Error("ready check expired");
+      room = { ...room, phase: "failed" };
       publishSnapshot();
       return room;
     },

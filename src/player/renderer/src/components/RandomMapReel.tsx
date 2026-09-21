@@ -8,7 +8,7 @@ type MapSelection = NonNullable<PlayerLiveMatchStateDto["mapSelection"]>;
 
 const TRAILING_PAD = 2;
 
-export function RandomMapReel({ mapSelection, nowMs }: { mapSelection: MapSelection; nowMs: number }) {
+export function RandomMapReel({ mapSelection, nowMs, active = true }: { mapSelection: MapSelection; nowMs: number; active?: boolean }) {
   const { reel, finalMap } = mapSelection;
   const { t } = useLanguage();
   const winnerIndex = reel.length - 1;
@@ -19,17 +19,18 @@ export function RandomMapReel({ mapSelection, nowMs }: { mapSelection: MapSelect
   const clock = useRef({ nowMs, sampledAt: performance.now() });
   clock.current = { nowMs, sampledAt: performance.now() };
   useLayoutEffect(() => {
+    if (!active || !mapSelection.startedAt || !mapSelection.revealAt) return;
     let frame = 0;
     const draw = () => {
       const syncedTime = clock.current.nowMs + performance.now() - clock.current.sampledAt;
       if (stripRef.current) {
         stripRef.current.style.transform = `translateX(${mapReelOffset(mapReelPosition(mapSelection, syncedTime))}%)`;
       }
-      frame = requestAnimationFrame(draw);
+      if (syncedTime < Date.parse(mapSelection.revealAt!)) frame = requestAnimationFrame(draw);
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [mapSelection.startedAt, mapSelection.revealAt, winnerIndex]);
+  }, [active, mapSelection.startedAt, mapSelection.revealAt, winnerIndex]);
 
   return (
     <section className="faceit-connect-panel faceit-reel-panel" aria-live="polite">

@@ -1,5 +1,6 @@
 
 export type RealtimeCommand =
+  | { type: "command"; commandId: string; name: "match.readyViewReady"; payload: { matchId: string; token: string } }
   | { type: "command"; commandId: string; name: "friends.sendRequest"; payload: { accountId: string } }
   | { type: "command"; commandId: string; name: "friends.acceptRequest"; payload: { requestId: string } }
   | { type: "command"; commandId: string; name: "friends.declineRequest"; payload: { requestId: string } }
@@ -45,6 +46,8 @@ export interface RealtimeCommandFriends {
 }
 
 export interface RealtimeCommandMatchmaking {
+  acknowledgeReadyView(accountId: string, matchId: string, token: string, isConnectionActive?: () => boolean): Promise<void>;
+  invalidateReadyPresentation(accountId: string): Promise<void>;
   createParty(ownerAccountId: string): Promise<unknown>;
   inviteToParty(ownerAccountId: string, toAccountId: string): Promise<unknown>;
   acceptPartyInvite(accountId: string, invitationId: string): Promise<unknown>;
@@ -61,6 +64,7 @@ export interface RealtimeCommandMatchmaking {
 }
 
 export interface RealtimeCommandDeps {
+  isConnectionActive?: () => boolean;
   friends?: RealtimeCommandFriends;
   matchmaking?: RealtimeCommandMatchmaking;
 }
@@ -71,6 +75,10 @@ export function parseRealtimeCommand(message: unknown): RealtimeCommand | undefi
   if (record.type !== "command" || typeof record.commandId !== "string" || typeof record.name !== "string") return undefined;
   const payload = typeof record.payload === "object" && record.payload !== null ? record.payload as Record<string, unknown> : {};
   switch (record.name) {
+    case "match.readyViewReady":
+      return typeof payload.matchId === "string" && payload.matchId.length > 0 && typeof payload.token === "string" && payload.token.length > 0
+        ? { type: "command", commandId: record.commandId, name: record.name, payload: { matchId: payload.matchId, token: payload.token } }
+        : undefined;
     case "friends.sendRequest":
     case "party.invite":
       return typeof payload.accountId === "string"
@@ -125,6 +133,10 @@ export async function executeRealtimeCommand(
 
   try {
     switch (command.name) {
+      case "match.readyViewReady":
+        if (!matchmaking) return commandUnavailable(command.commandId);
+        await matchmaking.acknowledgeReadyView(accountId, command.payload.matchId, command.payload.token, deps.isConnectionActive);
+        return { type: "command_ack", commandId: command.commandId, ok: true, result: {} };
       case "friends.sendRequest":
         if (!friends) return commandUnavailable(command.commandId);
         return { type: "command_ack", commandId: command.commandId, ok: true, result: { request: await friends.sendRequest(accountId, command.payload.accountId) } };

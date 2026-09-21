@@ -400,6 +400,7 @@ export function App() {
   const matchSoundEnabledRef = useRef(matchSoundEnabled);
   const activeMatchRoomIdRef = useRef<string | null>(null);
   const latestRealtimeEventSeqRef = useRef(0);
+  const realtimeSnapshotGenerationRef = useRef(0);
   const pendingMatchRoomViewIdRef = useRef<string | null>(null);
   const matchHistoryScrollTopRef = useRef(0);
   const matchHistoryResultRequestIdRef = useRef<number>(0);
@@ -412,6 +413,14 @@ export function App() {
   const syncedMatchmakingPendingAt = party?.status === "open" ? party.matchmakingPendingAt ?? null : null;
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
+  const pendingFlowRoom: PlayerLiveMatchStateDto | null = party?.matchmakingPendingAt && party.lockedMatchId && party.mapSelection ? {
+    id: party.lockedMatchId, phase: "ready", partyId: party.id, createdAt: party.matchmakingPendingAt,
+    mapSelection: party.mapSelection, humanAccountIds: party.memberAccountIds,
+    ready: party.memberAccountIds.map((accountId) => ({ accountId, ready: false })),
+    teamA: { id: "teamA", gameSide: "t", name: "", participants: Array.from({ length: 5 }, (_, i) => ({ id: `pending-a-${i}`, kind: "human", displayName: "" })) },
+    teamB: { id: "teamB", gameSide: "ct", name: "", participants: Array.from({ length: 5 }, (_, i) => ({ id: `pending-b-${i}`, kind: "human", displayName: "" })) },
+  } : null;
+  const matchFlowRoom = activeMatchRoom ? currentRoomWithKnownProfiles : pendingFlowRoom;
   const hasActiveMatch = Boolean(activeMatchRoom);
   const hasVisibleMatchResult = activeView === "match-result" && matchResult !== null && matchResultMatchId !== null;
   const viewingMatchHistory = activeView === "match-history" || (activeView === "match-result" && matchResultBackView === "match-history");
@@ -477,37 +486,6 @@ export function App() {
     void window.playerApi.getVersion().then(setCurrentVersion);
     void initializeStartup();
   }, []);
-
-  useEffect(() => {
-    const matchId = party?.lockedMatchId;
-    const version = party?.preload?.resourceVersion;
-    if (!matchId || !version || !party?.matchmakingPendingAt) return;
-    let stopped = false;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let reportedFailure = false;
-    async function load() {
-      try {
-        if (version !== PRELOAD_RESOURCE_VERSION) throw new Error("Unsupported preload resources");
-        const [, regular, bold] = await Promise.all([
-          preloadMapImages(),
-          document.fonts.load('400 16px "Play"'),
-          document.fonts.load('700 16px "Play"'),
-        ]);
-        if (!regular.length || !bold.length) throw new Error("Required fonts unavailable");
-        if (stopped) return;
-        await api.acknowledgePreload(matchId!, version!);
-      } catch {
-        if (stopped) return;
-        if (!reportedFailure) {
-          reportedFailure = true;
-          void message.warning(t("player.home.preloadRetry"));
-        }
-        retry = setTimeout(() => void load(), 1500);
-      }
-    }
-    void load();
-    return () => { stopped = true; if (retry) clearTimeout(retry); };
-  }, [party?.lockedMatchId, party?.preload?.resourceVersion, party?.matchmakingPendingAt, t]);
 
   useEffect(() => {
     const timer = window.setInterval(() => setClockNowMs(Date.now()), 250);
@@ -643,7 +621,8 @@ export function App() {
   }
 
   function applyRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto) {
-    rememberRealtimeSequence(snapshot.matchmaking.baseSeq);
+    realtimeSnapshotGenerationRef.current += 1;
+    resetRealtimeSequence(snapshot.matchmaking.baseSeq);
     setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends, resolvedFriendRequestIds.current));
     setParty((current) => mergePartySnapshot(current, snapshot.matchmaking.party));
     const snapshotActiveRoom = getActiveMatchRoom(snapshot.matchmaking);
@@ -654,7 +633,8 @@ export function App() {
       const nextMatchmaking = mergeMatchmakingSnapshotState(
         current,
         snapshot.matchmaking,
-        latestRealtimeEventSeqRef.current,
+        snapshot.matchmaking.baseSeq,
+        "realtime-sync",
       );
       const nextParty = mergePartySnapshot(current.party, snapshot.matchmaking.party);
       return {
@@ -853,6 +833,7 @@ export function App() {
           ...room,
           phase: "ready",
           readyDeadlineAt: event.deadlineAt,
+          readyStartsAt: event.startsAt ?? room.readyStartsAt,
           ready: event.ready,
           humanAccountIds: event.humanParticipants.flatMap((participant) => (participant.accountId ? [participant.accountId] : [])),
         }));
@@ -1460,19 +1441,25 @@ export function App() {
         await createParty();
       }
       const requestSeq = latestRealtimeEventSeqRef.current;
+      const requestSnapshotGeneration = realtimeSnapshotGenerationRef.current;
       const pendingParty = await api.beginPartyMatchmaking(options);
       updateServerClock(pendingParty.serverNow);
       matchmakingPendingSynced = true;
-      if (latestRealtimeEventSeqRef.current === requestSeq) {
+      if (latestRealtimeEventSeqRef.current === requestSeq && realtimeSnapshotGenerationRef.current === requestSnapshotGeneration) {
         setParty(pendingParty);
         setMatchmaking((current) => ({ ...current, party: pendingParty, occupancy: { activeCount: 1 } }));
       }
       setMatchmakingFeedbackPending(false);
     } catch (error) {
       let recoveredMatchmaking: PlayerMatchmakingStateDto;
+      const recoverySnapshotGeneration = realtimeSnapshotGenerationRef.current;
       try {
         recoveredMatchmaking = await api.getMatchmakingState();
       } catch {
+        setMatchmakingFeedbackPending(false);
+        return;
+      }
+      if (realtimeSnapshotGenerationRef.current !== recoverySnapshotGeneration) {
         setMatchmakingFeedbackPending(false);
         return;
       }
@@ -1595,16 +1582,7 @@ export function App() {
       return <MatchResultPage result={matchResult} selfSteam64={matchResultPlayerSteam64} onBackHome={backFromMatchResult} />;
     }
     if (activeView === "match-room") {
-      return (
-        <MatchRoomPage
-          account={account}
-          room={currentRoomWithKnownProfiles}
-          nowMs={syncedNowMs}
-          onAcceptReady={() => acceptReady()}
-          onDeclineReady={() => declineReady()}
-          onCopyText={(text) => copyText(text)}
-        />
-      );
+      return null;
     }
     return (
       <HomePage
@@ -1790,7 +1768,23 @@ export function App() {
         </div>
 
         <div className={`player-app-layout${friendsExpanded ? "" : " player-app-layout--collapsed"}`}>
-          <main className="player-app-main">{renderAuthenticatedView()}</main>
+          <main className="player-app-main" style={{ position: "relative" }}>
+            {renderAuthenticatedView()}
+            {matchFlowRoom ? (
+              <div className={`player-match-flow-host${activeView === "match-room" ? " is-active" : ""}`} inert={activeView !== "match-room"} aria-hidden={activeView !== "match-room"}>
+                <MatchRoomPage key={matchFlowRoom.id} account={account} room={matchFlowRoom} nowMs={syncedNowMs}
+                  active={activeView === "match-room"} connection={realtimeStatus.connection}
+                  preloadVersion={party?.matchmakingPendingAt ? party.preload?.resourceVersion : undefined}
+                  onPreloadReady={async () => {
+                    if (!party?.lockedMatchId || party.preload?.resourceVersion !== PRELOAD_RESOURCE_VERSION) throw new Error("Unsupported preload resources");
+                    await api.acknowledgePreload(party.lockedMatchId, party.preload.resourceVersion);
+                  }}
+                  onReadyViewReady={(id, token) => api.acknowledgeReadyView(id, token)}
+                  onPreloadFailure={() => { void message.warning(t("player.home.preloadRetry")); }}
+                  onAcceptReady={() => acceptReady()} onDeclineReady={() => declineReady()} onCopyText={(text) => copyText(text)} />
+              </div>
+            ) : null}
+          </main>
           <aside
             className="player-app-sidebar"
             onMouseEnter={() => setFriendsExpanded(true)}

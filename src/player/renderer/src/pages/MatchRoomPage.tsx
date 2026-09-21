@@ -1,13 +1,13 @@
 import { Button, Spin } from "antd";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
 import { RankmeBadges } from "../components/RankmeBadges.js";
-import { formatMapName, mapImageUrl } from "../mapAssets.js";
+import { formatMapName, mapImageUrl, preloadMapImages } from "../mapAssets.js";
 import { formatReadyCountdown } from "../matchTimers.js";
-import { getSelectedMap, isAccountInReadyRoom } from "../matchRoomState.js";
+import { getSelectedMap, getMatchPresentationPhase, isAccountInReadyRoom } from "../matchRoomState.js";
 import { RandomMapReel } from "../components/RandomMapReel.js";
 import { participantDisplayName } from "../playerDisplay.js";
 import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
@@ -16,6 +16,12 @@ interface MatchRoomPageProps {
   account: AccountView | null;
   room: PlayerLiveMatchStateDto | null;
   nowMs: number;
+  active?: boolean;
+  preloadVersion?: string;
+  onPreloadReady?: () => Promise<void>;
+  onPreloadFailure?: () => void;
+  onReadyViewReady?: (matchId: string, token: string) => Promise<void>;
+  connection?: string;
   onAcceptReady?: () => Promise<void>;
   onDeclineReady?: () => Promise<void>;
   onCopyText?: (text: string) => Promise<void>;
@@ -122,15 +128,81 @@ export function MatchRoomPage({
   account,
   room,
   nowMs,
+  active = true,
+  preloadVersion,
+  onPreloadReady,
+  onPreloadFailure,
+  onReadyViewReady,
+  connection,
   onAcceptReady,
   onDeclineReady,
   onCopyText,
 }: MatchRoomPageProps) {
   const { t } = useLanguage();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const callbacks = useRef({ onPreloadReady, onReadyViewReady, onPreloadFailure });
+  callbacks.current = { onPreloadReady, onReadyViewReady, onPreloadFailure };
+  const reported = useRef(new Set<string>());
+  useEffect(() => {
+    if (connection && connection !== "connected") {
+      for (const key of reported.current) if (key.includes(":ready:")) reported.current.delete(key);
+      return;
+    }
+    if (!room?.id || !room.mapSelection) return;
+    const id = room.id;
+    const token = room.readyPresentation?.token;
+    const kind = preloadVersion ? `preload:${preloadVersion}` : active && room.phase === "ready" && token && !room.readyStartsAt ? `ready:${token}:${connection}` : undefined;
+    if (!kind) return;
+    const key = `${id}:${kind}`;
+    if (reported.current.has(key)) return;
+    let stopped = false;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    let frame = 0;
+    let failureReported = false;
+    const retryFailure = () => {
+      if (stopped) return;
+      if (!failureReported && preloadVersion) { failureReported = true; callbacks.current.onPreloadFailure?.(); }
+      retry = setTimeout(() => void load(), 1500);
+    };
+    const load = async () => {
+      try {
+        const [, regular, bold] = await Promise.all([preloadMapImages(), document.fonts.load('400 16px "Play"'), document.fonts.load('700 16px "Play"')]);
+        if (!regular.length || !bold.length) throw new Error("Required fonts unavailable");
+        if (stopped) return;
+        const inspect = () => {
+          if (stopped) return;
+          const panels = [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-flow-panel]") ?? [])];
+          const bounds = rootRef.current?.getBoundingClientRect();
+          if (!bounds || bounds.width <= 0 || bounds.height <= 0 || panels.length !== 5 || panels.some((panel) => { const rect = panel.getBoundingClientRect(); return rect.width <= 0 || rect.height <= 0 || rect.width > bounds.width; })) {
+            retry = setTimeout(() => void load(), 250);
+            return;
+          }
+          frame = requestAnimationFrame(() => {
+            if (stopped) return;
+            const report = preloadVersion ? callbacks.current.onPreloadReady : () => callbacks.current.onReadyViewReady?.(id, token!);
+            if (!report) return;
+            void Promise.resolve(report()).then(() => { if (!stopped) reported.current.add(key); }).catch(() => {
+              retryFailure();
+            });
+          });
+        };
+        frame = requestAnimationFrame(inspect);
+      } catch { retryFailure(); }
+    };
+    void load();
+    return () => { stopped = true; cancelAnimationFrame(frame); if (retry) clearTimeout(retry); };
+  }, [room?.id, Boolean(room?.mapSelection), preloadVersion, active, room?.phase, room?.readyPresentation?.token, room?.readyStartsAt, connection]);
+  const panelProps = (name: string, visible: boolean) => ({
+    "data-flow-panel": name,
+    "aria-hidden": !active || !visible,
+    inert: !active || !visible,
+    className: `match-flow-panel${active && visible ? " is-active" : ""}`,
+  });
   const connect = room?.connect;
   const selectedMap = getSelectedMap(room, nowMs);
-  const roomPhase = phaseLabel(room?.phase, t);
-  const readyCountdownStarted = room?.phase === "ready" && Boolean(room.readyDeadlineAt);
+  const presentationPhase = getMatchPresentationPhase(room, nowMs);
+  const roomPhase = phaseLabel(presentationPhase, t);
+  const readyCountdownStarted = active && room?.phase === "ready" && Boolean(room.readyStartsAt && room.readyDeadlineAt) && nowMs >= Date.parse(room.readyStartsAt!) && nowMs < Date.parse(room.readyDeadlineAt!);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
   const selfReady = room?.ready?.find((entry) => entry.accountId === account?.id)?.ready === true;
   const [readyActionPending, setReadyActionPending] = useState<"accept" | "decline" | null>(null);
@@ -160,7 +232,7 @@ export function MatchRoomPage({
   }
 
   return (
-    <div className="faceit-matchroom">
+    <div className="faceit-matchroom" ref={rootRef}>
       <section className="faceit-match-header">
         <div className="faceit-match-status">
           <strong>{t("player.match.format")}</strong>
@@ -176,22 +248,22 @@ export function MatchRoomPage({
         </section>
       ) : (
         <div className="faceit-match-grid">
-          {renderTeam(room.teamA, "left", account?.id, room.phase, t)}
+          {renderTeam(room.teamA, "left", account?.id, presentationPhase, t)}
 
           <main className="faceit-center-panel">
             <div className="faceit-progress-line" />
 
-            {selectedMap ? (
+            <div {...panelProps("final", Boolean(selectedMap))}>
               <section className="faceit-final-map-preview" aria-label={t("player.match.finalMap")}>
                 <span>{t("player.match.finalMap")}</span>
-                <strong>{formatMapName(selectedMap)}</strong>
+                <strong>{selectedMap ? formatMapName(selectedMap) : "??"}</strong>
                 <span
                   className="faceit-final-map-thumb"
-                  style={mapImageUrl(selectedMap) ? { backgroundImage: `url("${mapImageUrl(selectedMap)}")` } : undefined}
+                  style={selectedMap && mapImageUrl(selectedMap) ? { backgroundImage: `url("${mapImageUrl(selectedMap)}")` } : undefined}
                   aria-hidden="true"
                 />
               </section>
-            ) : null}
+            </div>
 
             {room.phase === "queue" ? (
               <section className="faceit-connect-panel" aria-live="polite">
@@ -201,14 +273,14 @@ export function MatchRoomPage({
               </section>
             ) : null}
 
-            {room.phase === "ready" ? (
+            <div {...panelProps("ready", presentationPhase === "ready")}>
               <section className="faceit-connect-panel">
                 <span>{readyCountdownStarted ? t("player.match.readyCountdown") : t("player.match.readyCountdownStarting")}</span>
                 <strong className="faceit-countdown">{readyCountdownStarted ? formatReadyCountdown(room.readyDeadlineAt, nowMs) : "--:--"}</strong>
                 <div className="faceit-ready-list">
                   {(room.ready ?? []).map((entry) => (
                     <div className="faceit-ready-row" key={entry.accountId}>
-                      <span>{participantNames.get(entry.accountId) ?? entry.accountId}</span>
+                      <span>{entry.accountId === account?.id ? participantNames.get(entry.accountId) ?? t("common.player.unknown") : t("player.match.anonymousPlayer")}</span>
                       <strong>{entry.ready ? t("common.state.ready") : t("common.state.waiting")}</strong>
                     </div>
                   ))}
@@ -235,11 +307,11 @@ export function MatchRoomPage({
                   </div>
                 ) : null}
               </section>
-            ) : null}
+            </div>
 
-            {room.phase === "map_randomizing" ? (
-              room.mapSelection
-                ? <RandomMapReel mapSelection={room.mapSelection} nowMs={nowMs} />
+            <div {...panelProps("reel", presentationPhase === "map_randomizing")}>
+              {room.mapSelection
+                ? <RandomMapReel mapSelection={room.mapSelection} nowMs={nowMs} active={active && presentationPhase === "map_randomizing"} />
                 : (
                     <section className="faceit-connect-panel" aria-live="polite">
                       <span>{t("player.match.mapStage")}</span>
@@ -247,33 +319,31 @@ export function MatchRoomPage({
                       <small>{t("player.match.mapStageWaiting")}</small>
                     </section>
                   )
-            ) : null}
+              }
+            </div>
 
-            {room.phase === "match_room" || room.phase === "server_prepare" ? (
+            <div {...panelProps("waiting", presentationPhase === "match_room" || presentationPhase === "server_prepare")}>
               <section className="faceit-connect-panel">
-                <span>{room.phase === "server_prepare" ? t("common.labels.server") : t("common.labels.match")}</span>
-                <strong>{room.phase === "server_prepare" ? t("player.match.phase.serverPrepare") : t("player.match.finalTeams")}</strong>
+                <span>{presentationPhase === "server_prepare" ? t("common.labels.server") : t("common.labels.match")}</span>
+                <strong>{presentationPhase === "server_prepare" ? t("player.match.phase.serverPrepare") : t("player.match.finalTeams")}</strong>
                 <small>{t("player.match.waitingGet5")}</small>
               </section>
-            ) : null}
+            </div>
 
-            {room.phase === "connect" || room.phase === "live" ? (
+            <div {...panelProps("connect", presentationPhase === "connect" || presentationPhase === "live")}>
               <section className="faceit-connect-panel">
-                {connect ? (
                   <Button
                     aria-label={t("player.match.copyConnectCommand")}
                     type="primary"
                     className="faceit-connect-button"
-                    onClick={() => void onCopyText?.(connect.connectCommand)}
-                    disabled={!onCopyText}
+                    onClick={() => { if (active && connect && (presentationPhase === "connect" || presentationPhase === "live")) void onCopyText?.(connect.connectCommand); }}
+                    disabled={!active || !connect || !onCopyText || (presentationPhase !== "connect" && presentationPhase !== "live")}
                   >
                     {t("player.match.copyConnectCommand")}
                   </Button>
-                ) : (
-                  <small>{t("player.match.connectUnavailable")}</small>
-                )}
+                {!connect ? <small>{t("player.match.connectUnavailable")}</small> : null}
               </section>
-            ) : null}
+            </div>
 
             {room.phase === "completed" || room.phase === "failed" ? (
               <section className="faceit-connect-panel">
@@ -284,7 +354,7 @@ export function MatchRoomPage({
             ) : null}
           </main>
 
-          {renderTeam(room.teamB, "right", account?.id, room.phase, t)}
+          {renderTeam(room.teamB, "right", account?.id, presentationPhase, t)}
         </div>
       )}
     </div>

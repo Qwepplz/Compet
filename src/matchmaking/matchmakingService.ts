@@ -18,6 +18,9 @@ import type { GameSide, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayer
 import {
   MatchmakingStore,
   type MatchMapSelectionState,
+  type MapSelectionContent,
+  type PendingMatchDraft,
+  type ReadyPresentationState,
   type MatchRoomReadyState,
   type MatchRoomRecord,
   type PartyInvitationRecord,
@@ -33,6 +36,7 @@ const MAX_PARTY_HUMANS = 5;
 const PRELOAD_TIMEOUT_MS = 45_000;
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 45_000;
+const FLOW_START_LEAD_MS = 1_000;
 
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
 
@@ -238,6 +242,8 @@ export interface PublicMatchRoomRecord {
   humanAccountIds?: string[];
   botParticipantIds?: string[];
   ready?: MatchRoomReadyState[];
+  readyPresentation?: ReadyPresentationState;
+  readyStartsAt?: string;
   readyDeadlineAt?: string;
   partyId?: string;
   mapSelection?: MatchMapSelectionState;
@@ -245,7 +251,8 @@ export interface PublicMatchRoomRecord {
   createdAt: string;
 }
 
-export interface PublicPartyRecord extends PartyRecord {
+export interface PublicPartyRecord extends Omit<PartyRecord, "draft"> {
+  mapSelection?: MapSelectionContent;
   rankmeStandings: Record<string, RankmeDisplay | null>;
 }
 
@@ -273,10 +280,11 @@ export class MatchmakingService {
   private readonly partyInviteTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly partyMatchmakingTimeouts = new Map<string, { startAt: string; timeout: ReadyTimeoutHandle }>();
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
+  private readonly pendingReadyInvalidations = new Map<string, symbol>();
   private readonly mapRevealTimers = new Map<string, ReadyTimeoutHandle>();
   private readonly recoveredOfflineTimers = new Map<string, { matchId: string; timeout: ReadyTimeoutHandle }>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
-  private readonly matchTasks = new Map<string, { controller: AbortController; backup: Promise<void>; prepare?: Promise<void>; cancelled: boolean }>();
+  private readonly matchTasks = new Map<string, { controller: AbortController; backup: Promise<void>; draft?: Promise<void>; prepare?: Promise<void>; cancelled: boolean }>();
 
   private ensureMatchTask(matchId: string) {
     let task = this.matchTasks.get(matchId);
@@ -290,6 +298,31 @@ export class MatchmakingService {
     return task;
   }
 
+  private ensurePendingDraft(partyId: string, matchId: string): Promise<void> {
+    const task = this.ensureMatchTask(matchId);
+    if (task.draft) return task.draft;
+    task.draft = (async () => {
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((entry) => entry.id === partyId && entry.lockedMatchId === matchId);
+      if (!party?.preload || party.preload.cancelled || party.draft || task.cancelled) return;
+      if ((await this.deps.store.listRooms()).some((room) => room.id === matchId)) return;
+      const humans = await Promise.all(party.memberAccountIds.map((id) => this.toHumanParticipant(id)));
+      const teams = party.matchmakingDev
+        ? assignDevTeams({ humans, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random })
+        : assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
+      const draft: PendingMatchDraft = { ...teams, mapSelection: await this.buildMapSelection() };
+      await this.enqueueMutation(async () => {
+        const latest = await this.deps.store.listParties();
+        const current = latest.find((entry) => entry.id === partyId && entry.lockedMatchId === matchId);
+        if (!current?.preload || current.preload.cancelled || current.draft || task.cancelled) return;
+        const updated = { ...current, draft };
+        await this.deps.store.saveParties(latest.map((entry) => entry.id === partyId ? updated : entry));
+        await this.emitPartyUpdated(await this.toPlayerPublicParty(updated));
+      });
+    })().catch((error) => { task.draft = undefined; throw error; });
+    return task.draft;
+  }
+
   private async stopMatchTask(matchId: string): Promise<void> {
     this.clearRecoveredOfflineTimers(matchId);
     const task = this.matchTasks.get(matchId);
@@ -298,6 +331,7 @@ export class MatchmakingService {
       task.controller.abort();
       await task.backup.catch(() => undefined);
       await task.prepare?.catch(() => undefined);
+      await task.draft?.catch(() => undefined);
     }
     await this.deps.databaseBackup?.discard(matchId);
     this.matchTasks.delete(matchId);
@@ -327,18 +361,33 @@ export class MatchmakingService {
   async stopBackgroundTasks(): Promise<void> {
     this.clearPendingTimeouts();
     for (const task of this.matchTasks.values()) { task.cancelled = true; task.controller.abort(); }
-    await Promise.allSettled([...this.matchTasks.values()].flatMap((task) => [task.backup, ...(task.prepare ? [task.prepare] : [])]));
+    await Promise.allSettled([...this.matchTasks.values()].flatMap((task) => [task.backup, ...(task.draft ? [task.draft] : []), ...(task.prepare ? [task.prepare] : [])]));
     await Promise.allSettled([...this.cleanupTasks]);
     await this.mutationQueue;
     this.clearPendingTimeouts();
   }
 
   async resumePendingTimeouts(): Promise<void> {
+    await this.enqueueMutation(async () => {
+      for (const candidate of await this.deps.store.listRooms()) {
+        if (candidate.phase === "ready" && (!candidate.mapSelection || !candidate.readyPresentation)) {
+          await this.failMatchRoom(await this.deps.store.listRooms(), candidate, "match_failed");
+        }
+      }
+    });
     const [rooms, parties] = await Promise.all([
       this.deps.store.listRooms(),
       this.deps.store.listParties(),
     ]);
+    const recoveredRooms = rooms.map((room) => room.phase === "ready" && !room.readyStartsAt && room.readyPresentation
+      ? { ...room, readyPresentation: { ...room.readyPresentation, token: randomUUID(), completedAccountIds: [] } }
+      : room);
+    if (recoveredRooms.some((room, index) => room !== rooms[index])) await this.deps.store.saveRooms(recoveredRooms);
     const resumedParties = parties.map((party) => {
+      const room = rooms.find((entry) => entry.id === party.lockedMatchId && entry.partyId === party.id && !isTerminalMatchPhase(entry.phase));
+      if (room && (party.preload || party.draft || party.matchmakingPendingAt)) {
+        return { ...party, status: "matchmaking" as const, preload: undefined, draft: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined };
+      }
       if (!party.matchmakingPendingAt || (party.preload && party.lockedMatchId)) return party;
       return { ...party, matchmakingPendingAt: undefined, matchmakingDev: undefined, lockedMatchId: undefined, updatedAt: this.now() };
     });
@@ -347,6 +396,14 @@ export class MatchmakingService {
     }
 
     for (const party of resumedParties) {
+      if (party.preload && !party.preload.cancelled && party.lockedMatchId) {
+        if (party.preload.resourceVersion !== PRELOAD_RESOURCE_VERSION) {
+          await this.cancelScheduledPartyMatchmaking(party.id, party.preload.deadlineAt, "match_failed");
+          continue;
+        }
+        try { await this.ensurePendingDraft(party.id, party.lockedMatchId); }
+        catch { await this.cancelScheduledPartyMatchmaking(party.id, party.preload.deadlineAt, "match_failed"); continue; }
+      }
       if (party.preload?.cancelled) {
         await this.cancelScheduledPartyMatchmaking(party.id, party.preload.deadlineAt);
       } else {
@@ -498,8 +555,7 @@ export class MatchmakingService {
           } else if (room.phase === "ready" && this.isConfirmedOffline(accountId)) {
             if (room.readyDeadlineAt) return { ready: accountId };
             const updated = { ...room, ready: room.ready?.map((entry) => entry.accountId === accountId ? { ...entry, ready: true, respondedAt: this.now() } : entry) };
-            await this.deps.store.saveRooms(rooms.map((entry) => entry.id === room.id ? updated : entry));
-            await this.emitRoomUpdated(updated);
+            await this.startReadyClockIfPresented(rooms, updated);
           }
         }
         return;
@@ -738,7 +794,14 @@ export class MatchmakingService {
       await this.emitOccupancyUpdated();
       return publicParty;
     });
-    return accepted;
+    try { await this.ensurePendingDraft(accepted.id, accepted.lockedMatchId!); }
+    catch (error) {
+      await this.cancelScheduledPartyMatchmaking(accepted.id, accepted.preload?.deadlineAt, "match_failed");
+      throw error;
+    }
+    const current = (await this.deps.store.listParties()).find((party) => party.id === accepted.id);
+    if (!current || current.lockedMatchId !== accepted.lockedMatchId || current.preload?.cancelled) throw new Error("match preload is not active");
+    return this.toPlayerPublicParty(current);
   }
 
   async cancelPartyMatchmaking(ownerAccountId: string): Promise<PublicPartyRecord | undefined> {
@@ -753,9 +816,9 @@ export class MatchmakingService {
     return current ? this.toPlayerPublicParty(current) : undefined;
   }
 
-  startPartyMatchmaking(ownerAccountId: string, options: { dev?: boolean } = {}, expectedMatchId?: string): Promise<PublicMatchRoomRecord> {
+  startPartyMatchmaking(ownerAccountId: string, _options: { dev?: boolean } = {}, expectedMatchId?: string): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
-      const ownerAccount = await this.requireMatchmakingAccount(ownerAccountId);
+      await this.requireMatchmakingAccount(ownerAccountId);
       const parties = await this.deps.store.listParties();
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
@@ -769,36 +832,35 @@ export class MatchmakingService {
             && !isTerminalMatchPhase(candidate.phase)
           ))
         : undefined;
-      if ((party.status ?? "open") === "matchmaking" && lockedRoom) {
+      if (lockedRoom) {
+        if (party.preload || party.draft || party.matchmakingPendingAt) {
+          const updated = { ...party, status: "matchmaking" as const, preload: undefined, draft: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined };
+          await this.deps.store.saveParties(parties.map((entry) => entry.id === party.id ? updated : entry));
+          this.clearPartyMatchmakingTimeout(party.id);
+        }
         return this.toPlayerPublicRoom(lockedRoom, ownerAccountId);
       }
       this.requireOpenParty(party, true);
-      if (!party.preload || party.preload.cancelled || !party.lockedMatchId || !party.memberAccountIds.some((id) => !this.isConfirmedOffline(id)) || !party.memberAccountIds.every((id) => this.isConfirmedOffline(id) || party.preload!.completedAccountIds.includes(id))) throw new Error("match preload is incomplete");
-      const useDev = party.matchmakingDev === true && ownerAccount.dev === true;
+      if (!party.draft || !party.preload || party.preload.resourceVersion !== PRELOAD_RESOURCE_VERSION || party.preload.cancelled || !party.lockedMatchId || !party.memberAccountIds.some((id) => !this.isConfirmedOffline(id)) || !party.memberAccountIds.every((id) => this.isConfirmedOffline(id) || party.preload!.completedAccountIds.includes(id))) throw new Error("match preload is incomplete");
+      const useDev = party.matchmakingDev === true;
       if (party.memberAccountIds.length > MAX_PARTY_HUMANS) throw new Error("party is full");
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
       if (this.hasActiveMatchmaking(existingRooms, parties, { allowedPendingPartyId: party.id })) {
         throw new Error("matchmaking is already active");
       }
 
-      const startedAt = this.now();
-      const humans = await Promise.all(party.memberAccountIds.map((accountId) => this.toHumanParticipant(accountId)));
-      const teams = useDev
-        ? assignDevTeams({
-            humans,
-            botCandidates: this.deps.botCatalog.candidates,
-            botRosters: this.deps.botCatalog.rosters,
-            random: this.random,
-          })
-        : assignTeams({ humans, parties, botCandidates: this.deps.botCatalog.candidates, botRosters: this.deps.botCatalog.rosters, random: this.random });
+      const { mapSelection } = party.draft;
       const [teamA, teamB] = await Promise.all([
-        this.withRankmeStandings(teams.teamA),
-        this.withRankmeStandings(teams.teamB),
+        this.withRankmeStandings(party.draft.teamA),
+        this.withRankmeStandings(party.draft.teamB),
       ]);
+      const startedAt = this.now();
       const participants = [...teamA.participants, ...teamB.participants];
+      const humans = participants.filter((participant) => participant.kind === "human");
       const humanAccountIds = humans.map((participant) => participant.accountId ?? participant.id);
       const room: MatchRoomRecord = {
         id: party.lockedMatchId,
+        mapSelection,
         phase: "ready",
         ...(useDev ? { dev: true as const } : {}),
         teamA,
@@ -806,7 +868,7 @@ export class MatchmakingService {
         humanAccountIds,
         botParticipantIds: participants.filter((participant) => participant.kind === "bot").map((participant) => participant.id),
         ready: this.buildReadyStates(humans).map((entry) => this.isConfirmedOffline(entry.accountId) ? { ...entry, ready: true, respondedAt: startedAt } : entry),
-        readyDeadlineAt: this.buildReadyDeadlineAt(startedAt),
+        readyPresentation: { token: randomUUID(), completedAccountIds: [], deadlineAt: this.buildReadyDeadlineAt(startedAt) },
         partyId: party.id,
         createdAt: startedAt,
       };
@@ -816,6 +878,7 @@ export class MatchmakingService {
         lockedMatchId: room.id,
         matchmakingPendingAt: undefined,
         preload: undefined,
+        draft: undefined,
         matchmakingDev: undefined,
         updatedAt: startedAt,
       };
@@ -827,10 +890,9 @@ export class MatchmakingService {
       await this.expirePendingInvitationsForParty(party.id);
       this.scheduleReadyTimeout(room);
       const publicParty = await this.toPlayerPublicParty(updatedParty);
+      await this.emitReadyRoomCreatedPerAccount(room);
       await this.emitPartyUpdated(publicParty);
       await this.emitOccupancyUpdated();
-      await this.emitReadyRoomCreatedPerAccount(room);
-      await this.emit(this.toReadyEvent("ready_check_started", room));
       return this.toPlayerPublicRoom(room, ownerAccountId);
     });
   }
@@ -871,13 +933,81 @@ export class MatchmakingService {
 
 
 
+  acknowledgeReadyView(accountId: string, matchId: string, token: string, isConnectionActive?: () => boolean): Promise<void> {
+    const pendingInvalidation = this.pendingReadyInvalidations.get(accountId);
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((entry) => entry.id === matchId);
+      if (isConnectionActive && !isConnectionActive()) throw new Error("ready presentation connection is closed");
+      if (!room || room.phase !== "ready" || !this.roomAudience(room).includes(accountId) || room.readyPresentation?.token !== token) throw new Error("ready presentation is not active");
+      if (Date.parse(this.now()) >= Date.parse(room.readyDeadlineAt ?? room.readyPresentation.deadlineAt)) {
+        await this.failMatchRoom(rooms, room, "match_failed");
+        throw new Error("ready presentation expired");
+      }
+      if (room.readyStartsAt) return;
+      // A new valid receipt can also recover from a failed invalidation write.
+      if (pendingInvalidation && this.pendingReadyInvalidations.get(accountId) === pendingInvalidation) {
+        this.pendingReadyInvalidations.delete(accountId);
+      }
+      const updated = { ...room, readyPresentation: { ...room.readyPresentation, completedAccountIds: [...new Set([...room.readyPresentation.completedAccountIds, accountId])] } };
+      await this.startReadyClockIfPresented(rooms, updated);
+    });
+  }
+
+  invalidateReadyPresentation(accountId: string): Promise<void> {
+    const invalidation = Symbol();
+    this.pendingReadyInvalidations.set(accountId, invalidation);
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((entry) => entry.phase === "ready" && !entry.readyStartsAt && entry.readyPresentation && this.roomAudience(entry).includes(accountId));
+      if (!room?.readyPresentation?.completedAccountIds.includes(accountId)) return;
+      const updated = { ...room, readyPresentation: { ...room.readyPresentation, completedAccountIds: room.readyPresentation.completedAccountIds.filter((id) => id !== accountId) } };
+      await this.deps.store.saveRooms(rooms.map((entry) => entry.id === room.id ? updated : entry));
+      await this.emitRoomUpdated(updated);
+    }).then(() => {
+      if (this.pendingReadyInvalidations.get(accountId) === invalidation) this.pendingReadyInvalidations.delete(accountId);
+    });
+  }
+
+  private async startReadyClockIfPresented(rooms: MatchRoomRecord[], room: MatchRoomRecord): Promise<void> {
+    const nowMs = Date.parse(this.now());
+    if (!room.readyStartsAt && (!room.readyPresentation || nowMs >= Date.parse(room.readyPresentation.deadlineAt))) {
+      await this.failMatchRoom(rooms, room, "match_failed");
+      return;
+    }
+    const required = this.roomAudience(room).filter((id) => !this.isConfirmedOffline(id));
+    if (!required.length) { await this.failMatchRoom(rooms, room, "match_failed"); return; }
+    const starts = !room.readyStartsAt && required.every((id) =>
+      !this.pendingReadyInvalidations.has(id)
+      && (!this.deps.presence || this.deps.presence.get(id).online)
+      && room.readyPresentation?.completedAccountIds.includes(id));
+    const startMs = nowMs + FLOW_START_LEAD_MS;
+    const updated = starts
+      ? { ...room, readyStartsAt: new Date(startMs).toISOString(), readyDeadlineAt: new Date(startMs + READY_TIMEOUT_MS).toISOString() }
+      : room;
+    await this.deps.store.saveRooms(rooms.map((entry) => entry.id === room.id ? updated : entry));
+    this.scheduleReadyTimeout(updated);
+    await this.emitRoomUpdated(updated);
+    if (starts) await this.emit(this.toReadyEvent("ready_check_started", updated));
+  }
+
+  private async requireReadyResponseWindow(rooms: MatchRoomRecord[], room: MatchRoomRecord, accountId: string): Promise<void> {
+    if (!room.readyStartsAt || !room.readyDeadlineAt) throw new Error("ready check has not started");
+    const now = Date.parse(this.now());
+    if (now >= Date.parse(room.readyDeadlineAt)) {
+      await this.failMatchRoom(rooms, room, "match_failed");
+      throw new Error("ready check expired");
+    }
+    if (now < Date.parse(room.readyStartsAt) && !this.isConfirmedOffline(accountId)) throw new Error("ready check has not started");
+  }
+
   acceptReady(accountId: string): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
       const rooms = await this.deps.store.listRooms();
       const room = this.findReadyRoomForAccount(rooms, accountId);
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
-      if (!room.readyDeadlineAt) throw new Error("ready check has not started");
+      await this.requireReadyResponseWindow(rooms, room, accountId);
 
       const acceptedAt = this.now();
       const ready = (room.ready ?? []).map((entry) => {
@@ -894,9 +1024,8 @@ export class MatchmakingService {
         return this.toPlayerPublicRoom(updatedReadyRoom, accountId);
       }
 
-      let mapSelection: MatchMapSelectionState;
-      try { mapSelection = await this.buildMapSelection(acceptedAt); }
-      catch { return this.toPublicRoom(await this.failMatchRoom(updatedRooms, updatedReadyRoom, "match_failed")); }
+      if (!room.mapSelection) return this.toPublicRoom(await this.failMatchRoom(updatedRooms, updatedReadyRoom, "match_failed"));
+      const mapSelection: MatchMapSelectionState = { ...room.mapSelection, startedAt: new Date(Date.parse(acceptedAt) + FLOW_START_LEAD_MS).toISOString(), revealAt: new Date(Date.parse(acceptedAt) + FLOW_START_LEAD_MS + MAP_RANDOMIZATION_MS).toISOString() };
       const randomizingRoom: MatchRoomRecord = {
         ...updatedReadyRoom,
         phase: "map_randomizing",
@@ -922,7 +1051,7 @@ export class MatchmakingService {
       const rooms = await this.deps.store.listRooms();
       const room = this.findReadyRoomForAccount(rooms, accountId);
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
-      if (!room.readyDeadlineAt) throw new Error("ready check has not started");
+      await this.requireReadyResponseWindow(rooms, room, accountId);
       const readyEntry = room.ready?.find((entry) => entry.accountId === accountId);
       if (!readyEntry) throw new Error("ready state not found for account");
       if (readyEntry.ready) throw new Error("ready response is already accepted");
@@ -935,11 +1064,12 @@ export class MatchmakingService {
     });
   }
 
-  expireReady(roomId: string): Promise<PublicMatchRoomRecord> {
+  expireReady(roomId: string, expectedDeadline?: string): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId && candidate.phase === "ready");
       if (!room) throw new Error(`ready room not found: ${roomId}`);
+      if (expectedDeadline && ((room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt) !== expectedDeadline || Date.parse(this.now()) < Date.parse(expectedDeadline))) return this.toPublicRoom(room);
       return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
     });
   }
@@ -1380,7 +1510,7 @@ export class MatchmakingService {
       const parties = await this.deps.store.listParties();
       const party = parties.find((entry) => entry.memberAccountIds.includes(accountId));
       if (party?.lockedMatchId === matchId && party.status === "matchmaking" && resourceVersion === PRELOAD_RESOURCE_VERSION) return undefined;
-      if (!party?.preload || party.preload.cancelled || party.lockedMatchId !== matchId || party.preload.resourceVersion !== resourceVersion) throw new Error("match preload is not active");
+      if (!party?.draft || !party.preload || party.preload.cancelled || party.lockedMatchId !== matchId || resourceVersion !== PRELOAD_RESOURCE_VERSION || party.preload.resourceVersion !== resourceVersion) throw new Error("match preload is not active");
       if (Date.parse(party.preload.deadlineAt) <= Date.parse(this.now())) throw new Error("match preload expired");
       const completedAccountIds = [...new Set([...party.preload.completedAccountIds, accountId])];
       const updated = { ...party, preload: { ...party.preload, completedAccountIds } };
@@ -1391,8 +1521,17 @@ export class MatchmakingService {
     if (ownerId) {
       try { await this.startPartyMatchmaking(ownerId, {}, matchId); }
       catch (error) {
-        const current = (await this.deps.store.listParties()).find((entry) => entry.lockedMatchId === matchId && entry.preload);
-        if (current) await this.cancelScheduledPartyMatchmaking(current.id, current.preload!.deadlineAt, "match_failed");
+        const persistedRoom = await this.enqueueMutation(async () => {
+          const rooms = await this.deps.store.listRooms();
+          const room = rooms.find((entry) => entry.id === matchId);
+          if (!room) return false;
+          if (!isTerminalMatchPhase(room.phase)) await this.failMatchRoom(rooms, room, "match_failed");
+          return true;
+        });
+        if (!persistedRoom) {
+          const current = (await this.deps.store.listParties()).find((entry) => entry.lockedMatchId === matchId && entry.preload);
+          if (current) await this.cancelScheduledPartyMatchmaking(current.id, current.preload!.deadlineAt, "match_failed");
+        }
         throw error;
       }
     }
@@ -1432,7 +1571,7 @@ export class MatchmakingService {
       const party = parties.find((entry) => entry.id === partyId);
       if (party?.lockedMatchId !== matchId || !party.preload?.cancelled) return;
       if (reason) await this.emit({ type: "match_failed", matchId, accountIds: party.memberAccountIds, error: reason });
-      const updated = { ...party, lockedMatchId: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined, preload: undefined, updatedAt: this.now() };
+      const updated = { ...party, lockedMatchId: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined, preload: undefined, draft: undefined, updatedAt: this.now() };
       await this.deps.store.saveParties(parties.map((entry) => entry.id === partyId ? updated : entry));
       await this.emitPartyUpdated(await this.toPlayerPublicParty(updated));
       await this.emitOccupancyUpdated();
@@ -1774,7 +1913,8 @@ export class MatchmakingService {
         return [accountId, standing] as const;
       }),
     );
-    return { ...party, rankmeStandings: Object.fromEntries(rankmeEntries) };
+    const { draft, ...publicParty } = party;
+    return { ...publicParty, ...(draft ? { mapSelection: draft.mapSelection } : {}), rankmeStandings: Object.fromEntries(rankmeEntries) };
   }
 
   private async requireMatchmakingAccount(accountId: string): Promise<AccountRecord> {
@@ -1813,15 +1953,15 @@ export class MatchmakingService {
 
 
   private scheduleReadyTimeout(room: MatchRoomRecord): void {
-    if (room.phase !== "ready" || !room.readyDeadlineAt) return;
+    if (room.phase !== "ready") return;
 
-    const deadlineMs = Date.parse(room.readyDeadlineAt);
+    const deadlineMs = Date.parse(room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt ?? "");
     const nowMs = Date.parse(this.now());
     if (!Number.isFinite(deadlineMs) || !Number.isFinite(nowMs)) return;
 
     this.clearReadyTimeout(room.id);
     const timeout = this.setTimeoutFn(() => {
-      void this.expireReady(room.id).catch(() => undefined);
+      void this.expireReady(room.id, room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt).catch(() => undefined);
     }, Math.max(0, deadlineMs - nowMs));
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.readyTimeouts.set(room.id, timeout);
@@ -1866,7 +2006,7 @@ export class MatchmakingService {
     return Math.min(Math.floor(random() * length), length - 1);
   }
 
-  private async buildMapSelection(startedAt: string): Promise<MatchMapSelectionState> {
+  private async buildMapSelection(): Promise<MapSelectionContent> {
     const mapPool = this.getMapPool();
     const recentMatchMaps = await this.listRecentMatchMaps();
     const finalMapPool = this.getFinalMapPool(mapPool, recentMatchMaps);
@@ -1882,8 +2022,6 @@ export class MatchmakingService {
       mapPool: mapPool.slice(),
       reel,
       finalMap,
-      startedAt,
-      revealAt: new Date(Date.parse(startedAt) + MAP_RANDOMIZATION_MS).toISOString(),
     };
   }
 
@@ -1898,7 +2036,7 @@ export class MatchmakingService {
   }
 
   private scheduleMapReveal(room: MatchRoomRecord): void {
-    if (room.phase !== "map_randomizing" || !room.mapSelection) return;
+    if (room.phase !== "map_randomizing" || !room.mapSelection?.startedAt || !room.mapSelection.revealAt || !Number.isFinite(Date.parse(room.mapSelection.startedAt)) || !Number.isFinite(Date.parse(room.mapSelection.revealAt))) return;
     this.clearMapReveal(room.id);
     const revealAt = room.mapSelection.revealAt;
     const timeout = this.setTimeoutFn(() => {
@@ -1959,15 +2097,16 @@ export class MatchmakingService {
       humanAccountIds: room.humanAccountIds?.slice(),
       botParticipantIds: room.botParticipantIds?.slice(),
       ready: room.ready?.map((entry) => ({ ...entry })),
+      readyStartsAt: room.readyStartsAt,
+      readyPresentation: room.readyPresentation ? { ...room.readyPresentation, completedAccountIds: room.readyPresentation.completedAccountIds.slice() } : undefined,
       readyDeadlineAt: room.readyDeadlineAt,
       partyId: room.partyId,
       mapSelection: room.mapSelection
         ? {
+            ...room.mapSelection,
             mapPool: room.mapSelection.mapPool.slice(),
             reel: room.mapSelection.reel.slice(),
             finalMap: room.mapSelection.finalMap,
-            startedAt: room.mapSelection.startedAt,
-            revealAt: room.mapSelection.revealAt,
           }
         : undefined,
       connect: room.connect ? { ...room.connect } : undefined,
@@ -2054,11 +2193,12 @@ export class MatchmakingService {
       roomId: room.id,
       accountIds: this.roomAudience(room),
       deadlineAt: room.readyDeadlineAt ?? room.createdAt,
+      startsAt: room.readyStartsAt,
       ready: room.ready ?? this.buildReadyStates(this.humanParticipantsForRoom(room)),
       humanParticipants: this.humanParticipantsForRoom(room).map((p) => ({
         id: p.id,
         kind: p.kind,
-        displayName: p.displayName,
+        displayName: "",
         accountId: p.accountId,
       })),
     };
@@ -2080,6 +2220,7 @@ export class MatchmakingService {
   ): Promise<MatchRoomRecord> {
     const failedAt = this.now();
     const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
+    if (room.partyId) this.clearPartyMatchmakingTimeout(room.partyId);
     this.clearReadyTimeout(room.id);
     this.clearMapReveal(room.id);
     const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
@@ -2143,7 +2284,10 @@ export class MatchmakingService {
     if (party.lockedMatchId && party.lockedMatchId !== room.id) return;
     if ((party.status ?? "open") === "open" && !party.lockedMatchId) return;
 
-    const updatedParty: PartyRecord = { ...party, status: "open", lockedMatchId: undefined, updatedAt };
+    const updatedParty: PartyRecord = {
+      ...party, status: "open", lockedMatchId: undefined, updatedAt,
+      matchmakingPendingAt: undefined, matchmakingDev: undefined, preload: undefined, draft: undefined,
+    };
     await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
     try {
       const publicParty = await this.toPlayerPublicParty(updatedParty);

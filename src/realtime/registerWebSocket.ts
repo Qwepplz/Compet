@@ -86,6 +86,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       if (registeredAccountId && deps.presence) {
         const summary = deps.presence.unregister(registeredAccountId, matchmakingHeartbeat ? new Date(lastReceivedAt).toISOString() : undefined);
         connectionCount = summary.connectionCount;
+        if (summary.connectionCount === 0) void deps.matchmaking?.invalidateReadyPresentation(registeredAccountId).catch(() => undefined);
         void publishPresenceUpdated("disconnect", deps, summary);
       }
       writeActivityLog({
@@ -125,7 +126,7 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       }
       if (cleanedUp) return;
       lastReceivedAt = Date.now();
-      await handleMessage(socket, data, account, deps, connectionId);
+      await handleMessage(socket, data, account, deps, connectionId, () => !cleanedUp && socket.readyState === SOCKET_OPEN);
     });
 
     void accountPromise.then(async (account) => {
@@ -222,7 +223,7 @@ async function authorizeWebSocket(
   return account;
 }
 
-async function handleMessage(socket: WebSocket, data: RawData, account: AccountRecord, deps: WebSocketDeps, connectionId: string): Promise<void> {
+async function handleMessage(socket: WebSocket, data: RawData, account: AccountRecord, deps: WebSocketDeps, connectionId: string, isConnectionActive: () => boolean): Promise<void> {
   let message: unknown;
   try {
     message = JSON.parse(data.toString());
@@ -241,7 +242,7 @@ async function handleMessage(socket: WebSocket, data: RawData, account: AccountR
 
   const command = parseRealtimeCommand(message);
   if (command) {
-    const ack = await executeRealtimeCommand(command, account.id, deps, connectionId);
+    const ack = await executeRealtimeCommand(command, account.id, { ...deps, isConnectionActive }, connectionId);
     logRealtimeCommand(account, command, ack);
     sendJson(socket, withCommandServerNow(ack), (error) => {
       writeActivityLog({

@@ -56,6 +56,8 @@ let pauseRealtimeEvents = false;
 let realtimeDeliveryQueue = Promise.resolve();
 let quitAfterSessionCleanup = false;
 let lastDeliveredRealtimeSeq = 0;
+let realtimeStreamId: string | undefined;
+let realtimeDeliveryGeneration = 0;
 const queuedRealtimeEvents: PlayerRealtimeEvent[] = [];
 let realtimeStatus: PlayerRealtimeStatusDto = { connection: "disconnected", stale: false };
 let realtimeStatusRevision = 0;
@@ -84,6 +86,7 @@ function queueRealtimeEvent(nextEvent: PlayerRealtimeEvent): void {
 }
 
 function acceptRealtimeEvent(event: PlayerRealtimeEvent): boolean {
+  if (realtimeStreamId && event.streamId !== realtimeStreamId) return false;
   if (typeof event.seq !== "number") return true;
   if (event.seq <= lastDeliveredRealtimeSeq) return false;
   lastDeliveredRealtimeSeq = event.seq;
@@ -223,6 +226,17 @@ async function performRealtimeSnapshotRefresh(): Promise<void> {
       return;
     }
 
+    const streamChanged = snapshot.matchmaking.streamId !== realtimeStreamId;
+    const sequenceReset = snapshot.matchmaking.baseSeq < lastDeliveredRealtimeSeq;
+    if (streamChanged || sequenceReset) {
+      realtimeDeliveryGeneration += 1;
+      realtimeDeliveryQueue = Promise.resolve();
+      const currentStreamEvents = snapshot.matchmaking.streamId
+        ? queuedRealtimeEvents.filter((event) => event.streamId === snapshot.matchmaking.streamId)
+        : [];
+      queuedRealtimeEvents.splice(0, queuedRealtimeEvents.length, ...currentStreamEvents);
+    }
+    realtimeStreamId = snapshot.matchmaking.streamId;
     realtimeClient.setLastSeq(snapshot.matchmaking.baseSeq);
     lastDeliveredRealtimeSeq = snapshot.matchmaking.baseSeq;
     publishRealtimeSnapshot(snapshot);
@@ -241,6 +255,8 @@ async function performRealtimeSnapshotRefresh(): Promise<void> {
 
 function connectRealtime(baseUrl: string, token: string): void {
   realtimeSessionVersion += 1;
+  realtimeStreamId = undefined;
+  realtimeDeliveryGeneration += 1;
   connectedInCurrentSession = false;
   realtimeWebSocketConnected = false;
   activeRealtimePollSession = undefined;
@@ -258,6 +274,8 @@ function sendRealtimeCommand<T>(name: string, payload: unknown): Promise<T> {
 
 function disconnectRealtime(): void {
   realtimeSessionVersion += 1;
+  realtimeStreamId = undefined;
+  realtimeDeliveryGeneration += 1;
   connectedInCurrentSession = false;
   realtimeWebSocketConnected = false;
   activeRealtimePollSession = undefined;
@@ -316,10 +334,11 @@ async function pollRealtimeEvents(sessionVersion: number, pollGeneration: number
         || pollGeneration !== realtimePollGeneration
         || realtimeWebSocketConnected
       ) return;
-      if (result.gap) {
+      if (result.gap || result.streamId !== realtimeStreamId) {
         await refreshRealtimeSnapshot();
         if (sessionVersion !== realtimeSessionVersion || pollGeneration !== realtimePollGeneration) return;
       }
+      if (result.streamId !== realtimeStreamId) continue;
       if (!connectedInCurrentSession) connectedInCurrentSession = true;
       pauseRealtimeEvents = false;
       publishRealtimeStatus({ connection: "connected", stale: false });
@@ -400,14 +419,15 @@ realtimeClient.onStatus((connection) => {
 });
 
 function publishEnrichedRealtimeEvent(event: PlayerRealtimeEvent, sessionVersion: number): void {
+  const deliveryGeneration = realtimeDeliveryGeneration;
   const publishedBeforeEnrich = shouldPublishRealtimeEventBeforeEnrich(event);
   realtimeDeliveryQueue = realtimeDeliveryQueue
-    .then(() => deliverRealtimeEvent(event, sessionVersion, (next) => currentApiClient().enrichRealtimeEvent(next), {
+    .then(() => deliveryGeneration !== realtimeDeliveryGeneration ? undefined : deliverRealtimeEvent(event, sessionVersion, (next) => currentApiClient().enrichRealtimeEvent(next), {
       getSessionVersion: () => realtimeSessionVersion,
       isPaused: () => pauseRealtimeEvents,
-      isSuperseded: (next) => publishedBeforeEnrich
-        && typeof next.seq === "number"
-        && next.seq < lastDeliveredRealtimeSeq,
+      isSuperseded: (next) => deliveryGeneration !== realtimeDeliveryGeneration
+        || Boolean(realtimeStreamId && next.streamId !== realtimeStreamId)
+        || (publishedBeforeEnrich && typeof next.seq === "number" && next.seq < lastDeliveredRealtimeSeq),
       queue: queueRealtimeEvent,
       publish: publishRealtimeEvent,
       enrichTimeoutMs: REALTIME_EVENT_ENRICH_TIMEOUT_MS,
