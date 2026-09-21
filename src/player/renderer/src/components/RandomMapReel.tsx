@@ -6,9 +6,16 @@ import { isMapRandomizingRevealed, mapReelPosition, mapReelOffset } from "../ran
 
 type MapSelection = NonNullable<PlayerLiveMatchStateDto["mapSelection"]>;
 
+type RandomMapReelProps = {
+  mapSelection: MapSelection;
+  nowMs: number;
+  active?: boolean;
+  onRevealBoundary?: (revealAtMs: number) => void;
+};
+
 const TRAILING_PAD = 2;
 
-export function RandomMapReel({ mapSelection, nowMs, active = true }: { mapSelection: MapSelection; nowMs: number; active?: boolean }) {
+export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoundary }: RandomMapReelProps) {
   const { reel, finalMap } = mapSelection;
   const { t } = useLanguage();
   const winnerIndex = reel.length - 1;
@@ -16,21 +23,37 @@ export function RandomMapReel({ mapSelection, nowMs, active = true }: { mapSelec
 
   const stripRef = useRef<HTMLDivElement>(null);
   const settled = isMapRandomizingRevealed(mapSelection, nowMs);
-  const clock = useRef({ nowMs, sampledAt: performance.now() });
-  clock.current = { nowMs, sampledAt: performance.now() };
+  const onRevealBoundaryRef = useRef(onRevealBoundary);
+  onRevealBoundaryRef.current = onRevealBoundary;
+  const animationKey = [mapSelection.startedAt ?? "", mapSelection.revealAt ?? "", finalMap, reel.length].join("|");
+  const clock = useRef({ animationKey, nowMs, sampledAt: performance.now() });
+  if (clock.current.animationKey !== animationKey || clock.current.nowMs !== nowMs) {
+    clock.current = { animationKey, nowMs, sampledAt: performance.now() };
+  }
+  const reportedBoundaryRef = useRef<string | null>(null);
   useLayoutEffect(() => {
-    if (!active || !mapSelection.startedAt || !mapSelection.revealAt) return;
+    const revealAtMs = Date.parse(mapSelection.revealAt ?? "");
+    if (!active || !mapSelection.startedAt || !Number.isFinite(revealAtMs)) return;
     let frame = 0;
+    const reportBoundary = () => {
+      if (reportedBoundaryRef.current === animationKey) return;
+      reportedBoundaryRef.current = animationKey;
+      onRevealBoundaryRef.current?.(revealAtMs);
+    };
     const draw = () => {
       const syncedTime = clock.current.nowMs + performance.now() - clock.current.sampledAt;
       if (stripRef.current) {
         stripRef.current.style.transform = `translateX(${mapReelOffset(mapReelPosition(mapSelection, syncedTime))}%)`;
       }
-      if (syncedTime < Date.parse(mapSelection.revealAt!)) frame = requestAnimationFrame(draw);
+      if (syncedTime >= revealAtMs) {
+        reportBoundary();
+        return;
+      }
+      frame = requestAnimationFrame(draw);
     };
     draw();
     return () => cancelAnimationFrame(frame);
-  }, [active, mapSelection.startedAt, mapSelection.revealAt, winnerIndex]);
+  }, [active, animationKey, winnerIndex]);
 
   return (
     <section className="faceit-connect-panel faceit-reel-panel" aria-live="polite">

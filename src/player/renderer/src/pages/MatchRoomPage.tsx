@@ -27,6 +27,11 @@ interface MatchRoomPageProps {
   onCopyText?: (text: string) => Promise<void>;
 }
 
+type RevealedTimeline = {
+  key: string;
+  revealAtMs: number;
+};
+
 function phaseLabel(phase: PlayerLiveMatchStateDto["phase"] | undefined, t: LanguageContextValue["t"]): string | null {
   switch (phase) {
     case "ready":
@@ -192,6 +197,23 @@ export function MatchRoomPage({
     void load();
     return () => { stopped = true; cancelAnimationFrame(frame); if (retry) clearTimeout(retry); };
   }, [room?.id, Boolean(room?.mapSelection), preloadVersion, active, room?.phase, room?.readyPresentation?.token, room?.readyStartsAt, connection]);
+  const selection = room?.mapSelection;
+  const timelineKey = room && selection?.startedAt && selection.revealAt
+    ? [room.id, selection.startedAt, selection.revealAt, selection.finalMap].join("|")
+    : undefined;
+  const revealAtMs = Date.parse(selection?.revealAt ?? "");
+  const [revealedTimeline, setRevealedTimeline] = useState<RevealedTimeline | null>(null);
+  const presentationNowMs = timelineKey && revealedTimeline?.key === timelineKey
+    ? Math.max(nowMs, revealedTimeline.revealAtMs)
+    : nowMs;
+  const markRevealBoundary = (boundaryMs: number) => {
+    if (!timelineKey || !Number.isFinite(revealAtMs) || boundaryMs !== revealAtMs) return;
+    setRevealedTimeline((current) => (
+      current?.key === timelineKey && current.revealAtMs >= boundaryMs
+        ? current
+        : { key: timelineKey, revealAtMs: boundaryMs }
+    ));
+  };
   const panelProps = (name: string, visible: boolean) => ({
     "data-flow-panel": name,
     "aria-hidden": !active || !visible,
@@ -199,8 +221,8 @@ export function MatchRoomPage({
     className: `match-flow-panel${active && visible ? " is-active" : ""}`,
   });
   const connect = room?.connect;
-  const selectedMap = getSelectedMap(room, nowMs);
-  const presentationPhase = getMatchPresentationPhase(room, nowMs);
+  const selectedMap = getSelectedMap(room, presentationNowMs);
+  const presentationPhase = getMatchPresentationPhase(room, presentationNowMs);
   const roomPhase = phaseLabel(presentationPhase, t);
   const readyCountdownStarted = active && room?.phase === "ready" && Boolean(room.readyStartsAt && room.readyDeadlineAt) && nowMs >= Date.parse(room.readyStartsAt!) && nowMs < Date.parse(room.readyDeadlineAt!);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
@@ -311,7 +333,7 @@ export function MatchRoomPage({
 
             <div {...panelProps("reel", presentationPhase === "map_randomizing")}>
               {room.mapSelection
-                ? <RandomMapReel mapSelection={room.mapSelection} nowMs={nowMs} active={active && presentationPhase === "map_randomizing"} />
+                ? <RandomMapReel mapSelection={room.mapSelection} nowMs={presentationNowMs} active={active && presentationPhase === "map_randomizing"} onRevealBoundary={markRevealBoundary} />
                 : (
                     <section className="faceit-connect-panel" aria-live="polite">
                       <span>{t("player.match.mapStage")}</span>
