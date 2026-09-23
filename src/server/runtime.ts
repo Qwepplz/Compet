@@ -14,8 +14,7 @@ import { FriendStore } from "../friends/friendStore.js";
 import { MatchExecutor } from "../game/matchExecutor.js";
 import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
 import { MysqlDatabaseBackup } from "../game/mysqlDatabaseBackup.js";
-import { isSourceServerObservable, type SourceServerExitMonitorSpec } from "../game/sourceServerMonitor.js";
-import { MatchmakingService } from "../matchmaking/matchmakingService.js";
+import { MatchmakingService, type ServiceShutdownSummary } from "../matchmaking/matchmakingService.js";
 import { MatchmakingStore } from "../matchmaking/matchmakingStore.js";
 import { PresenceService } from "../presence/presenceService.js";
 import { ServerSteamPersonaDirectory } from "../profiles/serverSteamPersonaDirectory.js";
@@ -29,6 +28,7 @@ import { createServer } from "./createServer.js";
 
 export interface Runtime {
   app: Awaited<ReturnType<typeof createServer>>;
+  close(reason: string): Promise<ServiceShutdownSummary>;
   accounts: AccountService;
   sessions: SessionService;
   auth: AuthService;
@@ -124,7 +124,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     });
     await matchmakingService.recoverCompletedMatches();
     matchmaking = matchmakingService;
-    await completeRoomsIfGameServerUnavailable(matchmakingService, config.gameServer.portRange.start);
+    await matchmakingService.recoverInterruptedMatches();
     await matchmakingService.resumePendingTimeouts();
     const offlineCleanupGraceMs = resolveOfflineCleanupGraceMs();
     const offlineCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -181,7 +181,19 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       database.close();
     });
 
-    return { app, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
+    let closePromise: Promise<ServiceShutdownSummary> | undefined;
+    const close = (reason: string): Promise<ServiceShutdownSummary> => {
+      void reason;
+      closePromise ??= (async () => {
+        try {
+          return await matchmakingService.shutdownForServiceStop();
+        } finally {
+          await app.close();
+        }
+      })();
+      return closePromise;
+    };
+    return { app, close, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
   } catch (error) {
     if (database.isOpen) database.close();
     throw error;
@@ -194,19 +206,6 @@ function resolveOfflineCleanupGraceMs(): number {
     return configured;
   }
   return DEFAULT_OFFLINE_CLEANUP_GRACE_MS;
-}
-
-async function completeRoomsIfGameServerUnavailable(matchmaking: MatchmakingService, port: number): Promise<void> {
-  const monitor: SourceServerExitMonitorSpec = {
-    host: "127.0.0.1",
-    port,
-    intervalMs: 1_000,
-    queryTimeoutMs: 750,
-    missedResponsesBeforeExit: 3,
-    startupObservationTimeoutMs: 60_000,
-  };
-  if (await isSourceServerObservable(monitor)) return;
-  await matchmaking.completeServerManagedRoomsFromServerUnavailable();
 }
 
 async function loadRuntimeBotCatalog(serverRoot: string) {

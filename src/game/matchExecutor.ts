@@ -5,7 +5,7 @@ import path from "node:path";
 import type { GameServerConfig } from "../config/config.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
-import { EmptyServerWatchdog, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
+import { EmptyServerWatchdog, readCurrentStatus, requestSourceModShutdown, type EmptyServerWatchdogConfig } from "./emptyServerWatchdog.js";
 import { GameServerPresenceMonitor } from "./gameServerPresenceMonitor.js";
 import {
   competMatchStatsPath,
@@ -22,7 +22,8 @@ import {
 import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
 import { installRunCsgoAssets } from "./runCsgoAssets.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
-import { waitForSourceServerExit, type SourceServerExitMonitorResult, type SourceServerExitMonitorSpec } from "./sourceServerMonitor.js";
+import { isSourceServerObservable, waitForSourceServerExit, type SourceServerExitMonitorResult, type SourceServerExitMonitorSpec } from "./sourceServerMonitor.js";
+import { delay } from "../shared/async.js";
 import type { MatchParticipant, MatchPlan } from "../matchmaking/types.js";
 
 export interface MatchConnectInfo {
@@ -42,7 +43,11 @@ export interface MatchExecutorOptions {
   onServerExit?: (matchId: string, report: MatchServerExitReport) => Promise<void> | void;
   onGameServerPresence?: (matchId: string, steam64s: readonly string[]) => Promise<void> | void;
   emptyServerWatchdog?: EmptyServerWatchdogConfig;
+  gameServerShutdownTimeoutMs?: number;
+  gameServerShutdownPollIntervalMs?: number;
 }
+
+export type GameServerShutdownResult = "stopped" | "not_observed" | "timeout" | "not_owned";
 
 export interface MatchServerExitReport {
   exitInfo: GameServerExitInfo;
@@ -64,6 +69,9 @@ const TEAMLOGO_CFG_LINES = [
   "teamlogo_randomlogos 0",
   "teamlogo_teamnames 0",
 ];
+const DEFAULT_GAME_SERVER_SHUTDOWN_TIMEOUT_MS = 30_000;
+const GAME_SERVER_SHUTDOWN_POLL_INTERVAL_MS = 1_000;
+const GAME_SERVER_SHUTDOWN_STARTUP_OBSERVATION_TIMEOUT_MS = 5_000;
 const WARMUP_CFG_LINES = [
   WARMUP_CFG_COMMENT,
   "mp_do_warmup_period 1",
@@ -118,6 +126,29 @@ export class MatchExecutor {
     const monitor = this.gameServerPresenceMonitors.get(matchId);
     if (!monitor) return;
     await this.stopGameServerPresenceMonitor(matchId, monitor);
+  }
+
+  async requestGameServerShutdown(matchId: string): Promise<GameServerShutdownResult> {
+    const status = await readCurrentStatus(this.options.config.serverRoot, matchId, {
+      staleAfterMs: 90_000,
+      nowMs: Date.now,
+    });
+    if (!status && !this.gameServerPresenceMonitors.has(matchId)) return "not_owned";
+
+    await requestSourceModShutdown(this.options.config.serverRoot, matchId);
+    const timeoutMs = this.options.gameServerShutdownTimeoutMs ?? DEFAULT_GAME_SERVER_SHUTDOWN_TIMEOUT_MS;
+    const pollIntervalMs = this.options.gameServerShutdownPollIntervalMs ?? GAME_SERVER_SHUTDOWN_POLL_INTERVAL_MS;
+    const result = await this.waitForGameServerShutdown({
+      host: "127.0.0.1",
+      port: this.options.config.portRange.start,
+      intervalMs: pollIntervalMs,
+      queryTimeoutMs: Math.min(750, timeoutMs),
+      missedResponsesBeforeExit: 3,
+      startupObservationTimeoutMs: GAME_SERVER_SHUTDOWN_STARTUP_OBSERVATION_TIMEOUT_MS,
+    });
+    if (result === "closed") return "stopped";
+    if (result === "not_observed") return "not_observed";
+    return "timeout";
   }
 
   async deleteMatchArtifacts(matchId: string): Promise<void> {
@@ -264,6 +295,35 @@ export class MatchExecutor {
         this.gameServerPresenceMonitors.delete(matchId);
       }
     }
+  }
+
+  private async waitForGameServerShutdown(spec: SourceServerExitMonitorSpec): Promise<"closed" | "not_observed" | "timeout"> {
+    const startedAt = Date.now();
+    let observed = false;
+    let missedResponses = 0;
+    const timeoutMs = this.options.gameServerShutdownTimeoutMs ?? DEFAULT_GAME_SERVER_SHUTDOWN_TIMEOUT_MS;
+    const missedResponsesBeforeExit = Math.max(1, spec.missedResponsesBeforeExit);
+    const observationBudgetMs = Math.max(1, Math.floor(timeoutMs * 0.8));
+    const maxObservationStepMs = Math.max(1, Math.floor(observationBudgetMs / (missedResponsesBeforeExit * 2 - 1)));
+    const intervalMs = Math.min(spec.intervalMs, maxObservationStepMs);
+    const queryTimeoutMs = Math.min(
+      spec.queryTimeoutMs,
+      Math.max(1, Math.floor((observationBudgetMs - intervalMs * (missedResponsesBeforeExit - 1)) / missedResponsesBeforeExit)),
+    );
+    while (Date.now() - startedAt < timeoutMs) {
+      const alive = await isSourceServerObservable({ ...spec, queryTimeoutMs });
+      if (alive) {
+        observed = true;
+        missedResponses = 0;
+      } else if (observed) {
+        missedResponses += 1;
+        if (missedResponses >= missedResponsesBeforeExit) return "closed";
+      } else if (Date.now() - startedAt >= spec.startupObservationTimeoutMs) {
+        return "not_observed";
+      }
+      await delay(Math.min(intervalMs, Math.max(1, timeoutMs - (Date.now() - startedAt))));
+    }
+    return observed ? "timeout" : "not_observed";
   }
 }
 

@@ -1,24 +1,32 @@
 import { EventEmitter } from "node:events";
 import { spawn as nodeSpawn, type ChildProcessByStdio } from "node:child_process";
 import path from "node:path";
-import type { Readable } from "node:stream";
+import type { Readable, Writable } from "node:stream";
 import type { ManagerConfig, ServiceStatus } from "../shared/types.js";
 import { isActivityLogInput, SERVER_ACTIVITY_PREFIX, type ActivityLogInput } from "../../shared/activityLog.js";
+import { MANAGER_SHUTDOWN_COMMAND } from "../../shared/serviceControl.js";
 
 type SpawnFn = typeof nodeSpawn;
-type ManagedChildProcess = ChildProcessByStdio<null, Readable, Readable>;
+type ManagedChildProcess = ChildProcessByStdio<Writable, Readable, Readable>;
 type ServiceEvents = "log" | "status";
+
+export const GRACEFUL_STOP_TIMEOUT_MS = 120_000;
 
 export class ManagedServiceProcess extends EventEmitter {
   private child?: ManagedChildProcess;
   private stopPromise?: Promise<ServiceStatus>;
-  private readonly stoppingChildren = new WeakSet<ManagedChildProcess>();
+  private readonly failedStoppingChildren = new WeakSet<ManagedChildProcess>();
+  private readonly failedStoppingErrors = new WeakMap<ManagedChildProcess, string>();
   private readonly stderrBuffers = new WeakMap<ManagedChildProcess, string>();
   private readonly stdoutLineBuffers = new WeakMap<ManagedChildProcess, string>();
   private readonly stderrLineBuffers = new WeakMap<ManagedChildProcess, string>();
   private current: ServiceStatus = { state: "stopped", baseUrl: "https://127.0.0.1:8443" };
 
-  constructor(private readonly cwd: string, private readonly spawnFn: SpawnFn = nodeSpawn) {
+  constructor(
+    private readonly cwd: string,
+    private readonly spawnFn: SpawnFn = nodeSpawn,
+    private readonly gracefulStopTimeoutMs = GRACEFUL_STOP_TIMEOUT_MS,
+  ) {
     super();
   }
 
@@ -41,7 +49,7 @@ export class ManagedServiceProcess extends EventEmitter {
       env.ELECTRON_RUN_AS_NODE = "1";
     }
     try {
-      const child = this.spawnFn(config.serverCommand, config.serverArgs, { cwd: this.cwd, env, stdio: ["ignore", "pipe", "pipe"] });
+      const child = this.spawnFn(config.serverCommand, config.serverArgs, { cwd: this.cwd, env, stdio: ["pipe", "pipe", "pipe"] });
       this.child = child;
       this.bindChild(child, config);
       this.setStatus({ state: "running", pid: child.pid, baseUrl: this.baseUrl(config) });
@@ -52,19 +60,57 @@ export class ManagedServiceProcess extends EventEmitter {
     }
   }
 
-  async stop(): Promise<ServiceStatus> {
-    if (!this.child) return this.current;
+  stop(): Promise<ServiceStatus> {
+    if (!this.child) return Promise.resolve(this.current);
     if (this.stopPromise) return this.stopPromise;
     const child = this.child;
-    this.stoppingChildren.add(child);
     this.setStatus({ ...this.current, state: "stopping" });
     this.stopPromise = new Promise<ServiceStatus>((resolve) => {
+      let settled = false;
+      const timeout = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        const timeoutError = `graceful stop timed out after ${this.gracefulStopTimeoutMs}ms`;
+        this.failedStoppingChildren.add(child);
+        this.failedStoppingErrors.set(child, timeoutError);
+        this.setStatus({
+          ...this.current,
+          state: "failed",
+          lastError: timeoutError,
+        });
+        try {
+          child.kill();
+        } catch (error) {
+          const forceStopError = `${timeoutError}; force stop failed: ${this.errorMessage(error)}`;
+          this.failedStoppingErrors.set(child, forceStopError);
+          this.setStatus({ ...this.current, state: "failed", lastError: forceStopError });
+        }
+        resolve(this.current);
+      }, this.gracefulStopTimeoutMs);
       child.once("exit", () => {
+        if (settled) {
+          this.stopPromise = undefined;
+          return;
+        }
+        settled = true;
+        clearTimeout(timeout);
         this.stopPromise = undefined;
         resolve(this.current);
       });
+      try {
+        child.stdin.write(`${MANAGER_SHUTDOWN_COMMAND}\n`);
+        child.stdin.end();
+      } catch (error) {
+        settled = true;
+        clearTimeout(timeout);
+        this.failedStoppingChildren.add(child);
+        const failure = this.errorMessage(error);
+        this.failedStoppingErrors.set(child, failure);
+        this.setStatus({ ...this.current, state: "failed", lastError: failure });
+        child.kill();
+        resolve(this.current);
+      }
     });
-    child.kill();
     return this.stopPromise;
   }
 
@@ -82,13 +128,16 @@ export class ManagedServiceProcess extends EventEmitter {
     child.on("exit", (code) => {
       this.flushLines(this.stdoutLineBuffers, child, (line) => this.emitStdoutLine(line));
       this.flushLines(this.stderrLineBuffers, child, (line) => this.emitLog({ source: "server", level: "error", message: line }));
-      const wasStopping = this.stoppingChildren.has(child);
       if (this.child !== child) {
         return;
       }
       this.child = undefined;
-      if (!wasStopping && code !== 0) {
-        this.setStatus({ state: "failed", baseUrl: this.baseUrl(config), lastError: this.exitFailureMessage(child, code) });
+      if (this.failedStoppingChildren.has(child) || code !== 0) {
+        this.setStatus({
+          state: "failed",
+          baseUrl: this.baseUrl(config),
+          lastError: this.failedStoppingErrors.get(child) ?? this.exitFailureMessage(child, code),
+        });
       } else {
         this.setStatus({ state: "stopped", baseUrl: this.baseUrl(config) });
       }

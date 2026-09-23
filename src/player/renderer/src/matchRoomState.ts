@@ -5,6 +5,27 @@ export function isTerminalMatchPhase(phase: PlayerLiveMatchStateDto["phase"] | u
   return phase === "completed" || phase === "failed";
 }
 
+const MATCH_PHASE_ORDER: Record<PlayerLiveMatchStateDto["phase"], number> = {
+  queue: 0,
+  ready: 1,
+  match_room: 2,
+  map_randomizing: 3,
+  server_prepare: 4,
+  connect: 5,
+  live: 6,
+  completed: 7,
+  failed: 7,
+};
+
+export function isMatchPhaseRegression(
+  previous: PlayerLiveMatchStateDto["phase"] | undefined,
+  next: PlayerLiveMatchStateDto["phase"] | undefined,
+): boolean {
+  if (!previous || !next || isTerminalMatchPhase(next)) return false;
+  if (isTerminalMatchPhase(previous)) return true;
+  return MATCH_PHASE_ORDER[next] < MATCH_PHASE_ORDER[previous];
+}
+
 export function getActiveMatchRoom(matchmaking: PlayerMatchmakingStateDto): PlayerLiveMatchStateDto | null {
   if (matchmaking.room && !isTerminalMatchPhase(matchmaking.room.phase)) {
     return matchmaking.room;
@@ -29,6 +50,9 @@ export function mergeMatchmakingSnapshotRooms(
   const mergeSnapshotRoomProgress = (room: PlayerLiveMatchStateDto): PlayerLiveMatchStateDto => {
     const currentRoom = current.room?.id === room.id ? current.room : current.rooms.find((candidate) => candidate.id === room.id);
     if (currentRoom && isTerminalMatchPhase(currentRoom.phase) && !isTerminalMatchPhase(room.phase)) {
+      return currentRoom;
+    }
+    if (currentRoom && isMatchPhaseRegression(currentRoom.phase, room.phase)) {
       return currentRoom;
     }
     return currentRoom ? mergeReadyRoomProgress(currentRoom, room) : room;

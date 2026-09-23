@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import type { PlayerLiveMatchStateDto } from "../../../shared/types.js";
 import { useLanguage } from "../../../../language/react.js";
 import { formatMapName, mapImageUrl } from "../mapAssets.js";
@@ -22,10 +22,11 @@ export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoun
   const tiles = [...reel, ...reel.slice(0, TRAILING_PAD)];
 
   const stripRef = useRef<HTMLDivElement>(null);
-  const settled = isMapRandomizingRevealed(mapSelection, nowMs);
+  const animationKey = [mapSelection.startedAt ?? "", mapSelection.revealAt ?? "", finalMap, reel.length].join("|");
+  const [revealedAnimationKey, setRevealedAnimationKey] = useState<string | null>(null);
+  const settled = revealedAnimationKey === animationKey || isMapRandomizingRevealed(mapSelection, nowMs);
   const onRevealBoundaryRef = useRef(onRevealBoundary);
   onRevealBoundaryRef.current = onRevealBoundary;
-  const animationKey = [mapSelection.startedAt ?? "", mapSelection.revealAt ?? "", finalMap, reel.length].join("|");
   const clock = useRef({ animationKey, nowMs, sampledAt: performance.now() });
   if (clock.current.animationKey !== animationKey || clock.current.nowMs !== nowMs) {
     clock.current = { animationKey, nowMs, sampledAt: performance.now() };
@@ -38,6 +39,7 @@ export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoun
     const reportBoundary = () => {
       if (reportedBoundaryRef.current === animationKey) return;
       reportedBoundaryRef.current = animationKey;
+      setRevealedAnimationKey(animationKey);
       onRevealBoundaryRef.current?.(revealAtMs);
     };
     const draw = () => {
@@ -64,7 +66,7 @@ export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoun
       >
         <div className="faceit-reel-strip" ref={stripRef}>
           {tiles.map((map, index) => {
-            const hidden = !settled && map === finalMap;
+            const hidden = !settled && index === winnerIndex;
             const url = hidden ? undefined : mapImageUrl(map);
             return (
               <div

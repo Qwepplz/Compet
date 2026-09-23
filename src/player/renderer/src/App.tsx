@@ -26,6 +26,7 @@ import {
   getActiveMatchRoom,
   getDisplayedMatchRoom,
   isTerminalMatchPhase,
+  isMatchPhaseRegression,
   mergeMatchmakingSnapshotState,
   mergeReadyRoomProgress,
   upsertRoom,
@@ -401,6 +402,8 @@ export function App() {
   const activeMatchRoomIdRef = useRef<string | null>(null);
   const latestRealtimeEventSeqRef = useRef(0);
   const realtimeSnapshotGenerationRef = useRef(0);
+  const realtimeStreamIdRef = useRef<string | undefined>(undefined);
+  const realtimeEventHandlerRef = useRef<(event: PlayerRealtimeEvent) => void>(() => undefined);
   const pendingMatchRoomViewIdRef = useRef<string | null>(null);
   const matchHistoryScrollTopRef = useRef(0);
   const matchHistoryResultRequestIdRef = useRef<number>(0);
@@ -409,6 +412,8 @@ export function App() {
   const currentRoom = getCurrentRoom(matchmaking);
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
   activeMatchRoomIdRef.current = activeMatchRoom?.id ?? null;
+  realtimeStreamIdRef.current = matchmaking.streamId;
+  realtimeEventHandlerRef.current = applyRealtimeEvent;
   const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
   const syncedMatchmakingPendingAt = party?.status === "open" ? party.matchmakingPendingAt ?? null : null;
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
@@ -573,11 +578,12 @@ export function App() {
     });
     const unsubscribeEvent = api.onRealtimeEvent((event) => {
       updateServerClock(event.serverNow);
-      applyRealtimeEvent(event);
+      realtimeEventHandlerRef.current(event);
     });
     const unsubscribeAccount = api.onAccountUpdated((nextAccount) => {
       setAccount((current) => (current ? nextAccount : current));
     });
+    void refreshFriendsList();
 
     return () => {
       unsubscribeStatus();
@@ -585,7 +591,7 @@ export function App() {
       unsubscribeEvent();
       unsubscribeAccount();
     };
-  }, [account, t, party]);
+  }, [account]);
 
   useEffect(() => {
     if (!account || !hasVisibleMatchResult || !matchResultMatchId) return;
@@ -621,7 +627,18 @@ export function App() {
   }
 
   function applyRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto) {
+    const snapshotStreamId = snapshot.matchmaking.streamId;
+    const snapshotIsSameStream = Boolean(
+      snapshotStreamId
+      && realtimeStreamIdRef.current === snapshotStreamId,
+    );
+    const snapshotIsStaleSameStream = Boolean(
+      snapshotIsSameStream
+      && snapshot.matchmaking.baseSeq <= latestRealtimeEventSeqRef.current,
+    );
+    if (snapshotIsStaleSameStream) return;
     realtimeSnapshotGenerationRef.current += 1;
+    realtimeStreamIdRef.current = snapshotStreamId;
     resetRealtimeSequence(snapshot.matchmaking.baseSeq);
     setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends, resolvedFriendRequestIds.current));
     setParty((current) => mergePartySnapshot(current, snapshot.matchmaking.party));
@@ -634,7 +651,7 @@ export function App() {
         current,
         snapshot.matchmaking,
         snapshot.matchmaking.baseSeq,
-        "realtime-sync",
+        snapshotIsSameStream ? "request" : "realtime-sync",
       );
       const nextParty = mergePartySnapshot(current.party, snapshot.matchmaking.party);
       return {
@@ -705,6 +722,9 @@ export function App() {
       if (!sourceRoom) return current;
       const nextRoom = mergeRoomSteamProfileData(sourceRoom, mergeReadyRoomProgress(sourceRoom, updater(sourceRoom)));
       if (isTerminalMatchPhase(sourceRoom.phase) && !isTerminalMatchPhase(nextRoom.phase)) {
+        return current;
+      }
+      if (isMatchPhaseRegression(sourceRoom.phase, nextRoom.phase)) {
         return current;
       }
       const baseRooms = current.rooms.length > 0 ? current.rooms : current.room ? [current.room] : [];
@@ -841,6 +861,15 @@ export function App() {
       case "match_room_created":
         playMatchFoundSound(event.matchId);
         setMatchmaking((current) => {
+          const currentRoom = current.room?.id === event.matchId
+            ? current.room
+            : current.rooms.find((room) => room.id === event.matchId);
+          if (currentRoom && isTerminalMatchPhase(currentRoom.phase) && !isTerminalMatchPhase(event.room.phase)) {
+            return current;
+          }
+          if (currentRoom && isMatchPhaseRegression(currentRoom.phase, event.room.phase)) {
+            return current;
+          }
           const nextRooms = upsertRoom(current.rooms, event.room);
           const nextCurrentRoom = !isTerminalMatchPhase(event.room.phase)
             ? event.room
@@ -856,13 +885,24 @@ export function App() {
         }
         return;
       case "match_room_updated":
-        setMatchmaking((current) => ({
-          ...current,
-          room: !isTerminalMatchPhase(event.room.phase)
-            ? event.room
-            : current.room?.id === event.matchId || !current.room ? event.room : current.room,
-          rooms: upsertRoom(current.rooms, event.room),
-        }));
+        setMatchmaking((current) => {
+          const currentRoom = current.room?.id === event.matchId
+            ? current.room
+            : current.rooms.find((room) => room.id === event.matchId);
+          if (currentRoom && isTerminalMatchPhase(currentRoom.phase) && !isTerminalMatchPhase(event.room.phase)) {
+            return current;
+          }
+          if (currentRoom && isMatchPhaseRegression(currentRoom.phase, event.room.phase)) {
+            return current;
+          }
+          return {
+            ...current,
+            room: !isTerminalMatchPhase(event.room.phase)
+              ? event.room
+              : current.room?.id === event.matchId || !current.room ? event.room : current.room,
+            rooms: upsertRoom(current.rooms, event.room),
+          };
+        });
         if (!isTerminalMatchPhase(event.room.phase)) {
           setActiveView("match-room");
         }
@@ -1515,7 +1555,6 @@ export function App() {
     if (!currentRoom) return;
     const nextRoom = await api.acceptReady();
     updateServerClock(nextRoom.serverNow);
-    await hydrateRealtimeState();
   }
 
   async function declineReady() {

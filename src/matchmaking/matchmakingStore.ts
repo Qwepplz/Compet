@@ -71,6 +71,7 @@ export interface MatchRoomRecord {
   phase: MatchPhase;
   dev?: true;
   databaseWriteStarted?: boolean;
+  databaseBackupSupersededBy?: string;
   teamA: MatchTeam;
   teamB: MatchTeam;
   humanAccountIds?: string[];
@@ -99,6 +100,7 @@ interface PartyInvitationsFile {
 
 interface RoomsFile {
   rooms: MatchRoomRecord[];
+  pendingBackupCleanupMatchIds?: string[];
 }
 
 export class MatchmakingStore {
@@ -115,7 +117,7 @@ export class MatchmakingStore {
       ensureJsonFile(store.queuePath, { queue: [] }),
       ensureJsonFile(store.partiesPath, { parties: [] }),
       ensureJsonFile(store.invitationsPath, { invitations: [] }),
-      ensureJsonFile(store.roomsPath, { rooms: [] }),
+      ensureJsonFile(store.roomsPath, { rooms: [], pendingBackupCleanupMatchIds: [] }),
     ]);
     await store.recoverRuntimeStateOnLoad();
     return store;
@@ -151,7 +153,24 @@ export class MatchmakingStore {
     return readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] }).then((file) => file.rooms);
   }
   saveRooms(rooms: MatchRoomRecord[]): Promise<void> {
-    return this.enqueueRoomWrite(() => writeJsonFileAtomic(this.roomsPath, { rooms }));
+    return this.enqueueRoomWrite(async () => {
+      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
+      await writeJsonFileAtomic(this.roomsPath, { ...file, rooms });
+    });
+  }
+
+  listPendingBackupCleanupMatchIds(): Promise<string[]> {
+    return readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] }).then((file) => file.pendingBackupCleanupMatchIds ?? []);
+  }
+
+  savePendingBackupCleanupMatchIds(matchIds: string[]): Promise<void> {
+    return this.enqueueRoomWrite(async () => {
+      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
+      await writeJsonFileAtomic(this.roomsPath, {
+        ...file,
+        pendingBackupCleanupMatchIds: [...new Set(matchIds)],
+      });
+    });
   }
 
   private get queuePath(): string {

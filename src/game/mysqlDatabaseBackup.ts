@@ -63,6 +63,10 @@ export class MysqlDatabaseBackup {
     }
   }
 
+  async exists(matchId: string): Promise<boolean> {
+    return existsSync(mysqlBackupFilePath(this.options.backupDir, matchId));
+  }
+
   async discard(matchId: string): Promise<void> {
     const filePath = mysqlBackupFilePath(this.options.backupDir, matchId);
     await rm(filePath, { force: true });
