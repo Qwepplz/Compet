@@ -419,7 +419,6 @@ $forbiddenArchiveEntryPatterns = @(
   "*/recent-maps.json",
   "*/server-data*",
   "*/src/*",
-  "*/tests/*",
   "*/scripts/*",
   "*/tsconfig*.json",
   "*.map",
