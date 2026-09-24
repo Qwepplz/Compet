@@ -1551,14 +1551,13 @@ export class MatchmakingService {
       catch { return this.toPublicRoom(await this.failMatchRoom(updatedRooms, updatedReadyRoom, "match_failed")); }
       await this.deps.store.saveRooms(finalizedRooms);
       this.clearReadyTimeout(room.id);
+      await this.emitRoomUpdated(randomizingRoom);
       if (this.deps.executor) {
         const preparing = await this.saveRoomAfterMapSelected(finalizedRooms, randomizingRoom, mapSelection.finalMap);
         this.scheduleMapReveal(preparing);
         return this.toPublicRoom(preparing);
       }
       this.scheduleMapReveal(randomizingRoom);
-
-      await this.emitRoomUpdated(randomizingRoom);
       return this.toPublicRoom(randomizingRoom);
     });
   }
