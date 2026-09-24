@@ -8,6 +8,7 @@
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
     "icon:generate": "tsx scripts/generate-app-icon.ts",
+    "sourcemod:build": "pwsh -NoProfile -File scripts/build-sourcemod.ps1",
     "build": "pwsh -NoProfile -File scripts/clean-server-build.ps1 && tsc -p tsconfig.build.json",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.quality.json",
     "quality:check": "npm run typecheck",

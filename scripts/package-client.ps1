@@ -1,5 +1,6 @@
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "resolve-csharp-compiler.ps1")
+. (Join-Path $PSScriptRoot "package-common.ps1")
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
 $artifacts = Join-Path $repo "artifacts"
 $stagingRoot = Join-Path $artifacts "staging"
@@ -18,28 +19,6 @@ $clientExe = "Compet Player Client.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
 $repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
 $packageVersion = [string]((Get-Content -LiteralPath (Join-Path $repo "packaging\client\app-package.json") -Raw | ConvertFrom-Json).version)
-
-function Get-ArchiveEntryPath {
-  param(
-    [Parameter(Mandatory = $true)][string]$RootDir,
-    [Parameter(Mandatory = $true)][string]$FilePath
-  )
-
-  $root = [System.IO.Path]::GetFullPath($RootDir)
-  $path = [System.IO.Path]::GetFullPath($FilePath)
-  if (-not $path.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
-    throw "File path is outside the stage directory: $FilePath"
-  }
-
-  return $path.Substring($root.Length).TrimStart('\').Replace('\', '/')
-}
-
-function Get-SevenZipCommand {
-  if (Test-Path -LiteralPath $repoLocal7z) {
-    return $repoLocal7z
-  }
-  throw "Packaging 7z executable not found: $repoLocal7z"
-}
 
 function Get-PackageVersion {
   if ($packageVersion -match '^\d+\.\d+\.\d+$') {
@@ -107,83 +86,6 @@ function New-CSharpExe {
   $cscArgs += $SourcePath
   & $csc @cscArgs
   if ($LASTEXITCODE -ne 0) { throw "C# compilation failed with exit code $LASTEXITCODE" }
-}
-
-function Convert-ArchivePath {
-  param([Parameter(Mandatory = $true)][string]$Path)
-
-  $entry = $Path.Trim().Replace('\', '/')
-  while ($entry.StartsWith("./", [System.StringComparison]::Ordinal)) {
-    $entry = $entry.Substring(2)
-  }
-  return $entry
-}
-
-function New-Validated7zArchive {
-  param(
-    [Parameter(Mandatory = $true)][string]$SourceDir,
-    [Parameter(Mandatory = $true)][string]$ArchivePath,
-    [Parameter(Mandatory = $true)][string[]]$RequiredEntries,
-    [string[]]$ForbiddenEntryPatterns = @()
-  )
-
-  Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
-  Remove-Item -LiteralPath "$ArchivePath.tmp" -Force -ErrorAction SilentlyContinue
-  if (Test-Path -LiteralPath $ArchivePath) {
-    throw "Unable to remove stale archive before packaging: $ArchivePath"
-  }
-
-  $stageFileCount = (Get-ChildItem -LiteralPath $SourceDir -Recurse -File | Measure-Object).Count
-  if ($stageFileCount -lt $RequiredEntries.Count) {
-    throw "Stage directory is missing expected files: $SourceDir"
-  }
-
-  $sevenZip = Get-SevenZipCommand
-  try {
-    Push-Location $SourceDir
-    try {
-      & $sevenZip a -t7z $ArchivePath ".\*" -r -mx=9 -m0=LZMA2:d=128m:fb=273 -ms=on -mmt=on -bb0 -bd -y
-      if ($LASTEXITCODE -ne 0) { throw "7z archive creation failed with exit code $LASTEXITCODE" }
-    } finally {
-      Pop-Location
-    }
-
-    & $sevenZip t $ArchivePath -bb0 -bd -y | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw "7z archive verification failed with exit code $LASTEXITCODE" }
-
-    $archiveSelfPath = Convert-ArchivePath -Path ([System.IO.Path]::GetFullPath($ArchivePath))
-    $entries = @(
-      & $sevenZip l -slt $ArchivePath |
-        Where-Object { $_.StartsWith("Path = ", [System.StringComparison]::Ordinal) } |
-        ForEach-Object { Convert-ArchivePath -Path $_.Substring(7) } |
-        Where-Object { $_ -and $_ -ne $archiveSelfPath }
-    )
-
-    $missing = New-Object System.Collections.Generic.List[string]
-    foreach ($requiredEntry in $RequiredEntries) {
-      if (-not ($entries -contains $requiredEntry)) {
-        [void]$missing.Add($requiredEntry)
-      }
-    }
-    if ($missing.Count -gt 0) {
-      throw "Archive verification failed. Missing entries: $($missing -join ', ')"
-    }
-
-    $forbidden = @(
-      foreach ($entry in $entries) {
-        foreach ($pattern in $ForbiddenEntryPatterns) {
-          if ($entry -like $pattern) { $entry; break }
-        }
-      }
-    )
-    if ($forbidden.Count -gt 0) {
-      throw "Archive verification failed. Forbidden entries: $($forbidden -join ', ')"
-    }
-  } catch {
-    Remove-Item -LiteralPath $ArchivePath -Force -ErrorAction SilentlyContinue
-    Remove-Item -LiteralPath "$ArchivePath.tmp" -Force -ErrorAction SilentlyContinue
-    throw
-  }
 }
 
 function Remove-UnusedElectronFiles {
@@ -270,7 +172,7 @@ $forbiddenArchiveEntryPatterns = @(
   "*.map",
   "*.tmp"
 )
-New-Validated7zArchive -SourceDir $stage -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
+New-Validated7zArchive -SourceDir $stage -SevenZipPath $repoLocal7z -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
 $updateBaseUrl = if ($env:COMPET_CLIENT_UPDATE_BASE_URL) { $env:COMPET_CLIENT_UPDATE_BASE_URL } else { "https://qwepplz111.site/update/client" }
 & pwsh -NoProfile -File (Join-Path $repo "scripts\create-update-manifest.ps1") `
   -AppId "compet-player-client" `
