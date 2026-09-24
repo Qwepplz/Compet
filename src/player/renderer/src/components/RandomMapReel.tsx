@@ -66,8 +66,7 @@ export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoun
       >
         <div className="faceit-reel-strip" ref={stripRef}>
           {tiles.map((map, index) => {
-            const hidden = !settled && index === winnerIndex;
-            const url = hidden ? undefined : mapImageUrl(map);
+            const url = mapImageUrl(map);
             return (
               <div
                 key={`${map}-${index}`}
@@ -75,14 +74,14 @@ export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoun
                 style={url ? { backgroundImage: `url("${url}")` } : undefined}
                 aria-hidden="true"
               >
-                <span className="faceit-reel-tile-label">{hidden ? "??" : formatMapName(map)}</span>
+                <span className="faceit-reel-tile-label">{formatMapName(map)}</span>
               </div>
             );
           })}
         </div>
         <div className="faceit-reel-marker" aria-hidden="true" />
       </div>
-      <strong className="faceit-reel-final-name">{settled ? formatMapName(finalMap) : "??"}</strong>
+      <strong className="faceit-reel-final-name">{formatMapName(finalMap)}</strong>
       <small>{settled ? t("player.reel.revealedNote") : t("player.reel.randomizingNote")}</small>
     </section>
   );

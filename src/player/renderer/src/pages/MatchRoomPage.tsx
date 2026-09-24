@@ -148,6 +148,11 @@ export function MatchRoomPage({
   const callbacks = useRef({ onPreloadReady, onReadyViewReady, onPreloadFailure });
   callbacks.current = { onPreloadReady, onReadyViewReady, onPreloadFailure };
   const reported = useRef(new Set<string>());
+  const requiredMaps = [...new Set([
+    ...(room?.mapSelection?.reel ?? []),
+    ...(room?.mapSelection?.finalMap ? [room.mapSelection.finalMap] : []),
+  ])].sort();
+  const requiredMapKey = JSON.stringify(requiredMaps);
   useEffect(() => {
     if (connection && connection !== "connected") {
       for (const key of reported.current) if (key.includes(":ready:")) reported.current.delete(key);
@@ -158,7 +163,7 @@ export function MatchRoomPage({
     const token = room.readyPresentation?.token;
     const kind = preloadVersion ? `preload:${preloadVersion}` : active && room.phase === "ready" && token && !room.readyStartsAt ? `ready:${token}:${connection}` : undefined;
     if (!kind) return;
-    const key = `${id}:${kind}`;
+    const key = `${id}:${kind}:${requiredMapKey}`;
     if (reported.current.has(key)) return;
     let stopped = false;
     let retry: ReturnType<typeof setTimeout> | undefined;
@@ -171,7 +176,7 @@ export function MatchRoomPage({
     };
     const load = async () => {
       try {
-        const [, regular, bold] = await Promise.all([preloadMapImages(), document.fonts.load('400 16px "Play"'), document.fonts.load('700 16px "Play"')]);
+        const [, regular, bold] = await Promise.all([preloadMapImages(requiredMaps), document.fonts.load('400 16px "Play"'), document.fonts.load('700 16px "Play"')]);
         if (!regular.length || !bold.length) throw new Error("Required fonts unavailable");
         if (stopped) return;
         const inspect = () => {
@@ -196,7 +201,7 @@ export function MatchRoomPage({
     };
     void load();
     return () => { stopped = true; cancelAnimationFrame(frame); if (retry) clearTimeout(retry); };
-  }, [room?.id, Boolean(room?.mapSelection), preloadVersion, active, room?.phase, room?.readyPresentation?.token, room?.readyStartsAt, connection]);
+  }, [room?.id, Boolean(room?.mapSelection), requiredMapKey, preloadVersion, active, room?.phase, room?.readyPresentation?.token, room?.readyStartsAt, connection]);
   const selection = room?.mapSelection;
   const timelineKey = room && selection?.startedAt && selection.revealAt
     ? [room.id, selection.startedAt, selection.revealAt, selection.finalMap].join("|")
@@ -278,10 +283,10 @@ export function MatchRoomPage({
             <div {...panelProps("final", Boolean(selectedMap))}>
               <section className="faceit-final-map-preview" aria-label={t("player.match.finalMap")}>
                 <span>{t("player.match.finalMap")}</span>
-                <strong>{selectedMap ? formatMapName(selectedMap) : "??"}</strong>
+                <strong>{selection ? formatMapName(selection.finalMap) : null}</strong>
                 <span
                   className="faceit-final-map-thumb"
-                  style={selectedMap && mapImageUrl(selectedMap) ? { backgroundImage: `url("${mapImageUrl(selectedMap)}")` } : undefined}
+                  style={selection && mapImageUrl(selection.finalMap) ? { backgroundImage: `url("${mapImageUrl(selection.finalMap)}")` } : undefined}
                   aria-hidden="true"
                 />
               </section>

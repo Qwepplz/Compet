@@ -72,7 +72,6 @@ export interface MatchRoomRecord {
   phase: MatchPhase;
   dev?: true;
   databaseWriteStarted?: boolean;
-  databaseBackupSupersededBy?: string;
   teamA: MatchTeam;
   teamB: MatchTeam;
   humanAccountIds?: string[];

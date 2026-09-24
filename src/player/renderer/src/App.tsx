@@ -634,7 +634,7 @@ export function App() {
     );
     const snapshotIsStaleSameStream = Boolean(
       snapshotIsSameStream
-      && snapshot.matchmaking.baseSeq <= latestRealtimeEventSeqRef.current,
+      && snapshot.matchmaking.baseSeq < latestRealtimeEventSeqRef.current,
     );
     if (snapshotIsStaleSameStream) return;
     realtimeSnapshotGenerationRef.current += 1;

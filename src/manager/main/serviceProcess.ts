@@ -67,25 +67,25 @@ export class ManagedServiceProcess extends EventEmitter {
     this.setStatus({ ...this.current, state: "stopping" });
     this.stopPromise = new Promise<ServiceStatus>((resolve) => {
       let settled = false;
-      const timeout = setTimeout(() => {
+      const failStop = (error: unknown): void => {
         if (settled) return;
         settled = true;
-        const timeoutError = `graceful stop timed out after ${this.gracefulStopTimeoutMs}ms`;
+        clearTimeout(timeout);
         this.failedStoppingChildren.add(child);
-        this.failedStoppingErrors.set(child, timeoutError);
-        this.setStatus({
-          ...this.current,
-          state: "failed",
-          lastError: timeoutError,
-        });
+        let failure = this.errorMessage(error);
+        this.failedStoppingErrors.set(child, failure);
+        this.setStatus({ ...this.current, state: "failed", lastError: failure });
         try {
           child.kill();
-        } catch (error) {
-          const forceStopError = `${timeoutError}; force stop failed: ${this.errorMessage(error)}`;
-          this.failedStoppingErrors.set(child, forceStopError);
-          this.setStatus({ ...this.current, state: "failed", lastError: forceStopError });
+        } catch (killError) {
+          failure += "; force stop failed: " + this.errorMessage(killError);
+          this.failedStoppingErrors.set(child, failure);
+          this.setStatus({ ...this.current, state: "failed", lastError: failure });
         }
         resolve(this.current);
+      };
+      const timeout = setTimeout(() => {
+        failStop(new Error(`graceful stop timed out after ${this.gracefulStopTimeoutMs}ms`));
       }, this.gracefulStopTimeoutMs);
       child.once("exit", () => {
         if (settled) {
@@ -97,18 +97,15 @@ export class ManagedServiceProcess extends EventEmitter {
         this.stopPromise = undefined;
         resolve(this.current);
       });
+      child.stdin.on("error", failStop);
+      child.stdin.once("close", () => child.stdin.removeListener("error", failStop));
       try {
-        child.stdin.write(`${MANAGER_SHUTDOWN_COMMAND}\n`);
+        child.stdin.write(`${MANAGER_SHUTDOWN_COMMAND}\n`, (error) => {
+          if (error) failStop(error);
+        });
         child.stdin.end();
       } catch (error) {
-        settled = true;
-        clearTimeout(timeout);
-        this.failedStoppingChildren.add(child);
-        const failure = this.errorMessage(error);
-        this.failedStoppingErrors.set(child, failure);
-        this.setStatus({ ...this.current, state: "failed", lastError: failure });
-        child.kill();
-        resolve(this.current);
+        failStop(error);
       }
     });
     return this.stopPromise;

@@ -89,7 +89,6 @@ const roomsFileSchema = z.object({
       "connect", "live", "completed", "failed"]),
     dev: z.literal(true).optional(),
     databaseWriteStarted: z.boolean().optional(),
-    databaseBackupSupersededBy: z.string().optional(),
     teamA: teamSchema,
     teamB: teamSchema,
     humanAccountIds: z.array(z.string()).optional(),

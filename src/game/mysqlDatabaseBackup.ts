@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { execFile } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { access, mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -60,6 +60,18 @@ export class MysqlDatabaseBackup {
     await (await this.resolveProcess()).restore(await this.resolveDatabase(), filePath);
     if (options.preserveBackup !== true) {
       await this.discard(matchId);
+    }
+  }
+
+  async createdAt(matchId: string): Promise<string | undefined> {
+    try {
+      const info = await stat(mysqlBackupFilePath(this.options.backupDir, matchId));
+      // Never use a later modification time to exempt an intervening writer.
+      const earliest = Math.min(info.birthtimeMs, info.mtimeMs);
+      return Number.isFinite(earliest) && earliest > 0 ? new Date(earliest).toISOString() : undefined;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
     }
   }
 

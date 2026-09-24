@@ -19,18 +19,27 @@ export function mapImageUrl(map: string): string | undefined {
   return MAP_IMAGE_URLS[map.toLowerCase()];
 }
 
-let preloadPromise: Promise<void> | undefined;
+const preloadByUrl = new Map<string, Promise<void>>();
 
-export function preloadMapImages(): Promise<void> {
-  if (!preloadPromise) {
-    preloadPromise = Promise.all(Object.values(MAP_IMAGE_URLS).map(async (url) => {
-      const image = new Image();
-      image.src = url;
-      await image.decode();
-    })).then(() => undefined).catch((error: unknown) => {
-      preloadPromise = undefined;
-      throw error;
-    });
-  }
-  return preloadPromise;
+export async function preloadMapImages(maps: readonly string[] = Object.keys(MAP_IMAGE_URLS)): Promise<void> {
+  const urls = [...new Set(maps.map((map) => {
+    const url = mapImageUrl(map);
+    if (!url) throw new Error("Missing map image: " + map);
+    return url;
+  }))];
+  await Promise.all(urls.map((url) => {
+    let pending = preloadByUrl.get(url);
+    if (!pending) {
+      pending = Promise.resolve().then(async () => {
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+      }).catch((error: unknown) => {
+        preloadByUrl.delete(url);
+        throw error;
+      });
+      preloadByUrl.set(url, pending);
+    }
+    return pending;
+  }));
 }

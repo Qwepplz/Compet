@@ -278,10 +278,10 @@ async function hasSameFileHash(filePath: string, sha256: string, size: number): 
   }
 }
 
-function hashFile(filePath: string): Promise<string> {
+function hashFile(filePath: string, signal?: AbortSignal): Promise<string> {
   return new Promise((resolve, reject) => {
     const hash = createHash("sha256");
-    const stream = createReadStream(filePath);
+    const stream = createReadStream(filePath, { signal });
     stream.on("error", reject);
     stream.on("data", (chunk) => hash.update(chunk));
     stream.on("end", () => resolve(hash.digest("hex").toUpperCase()));
@@ -319,6 +319,28 @@ export async function verifyClientIntegrity(onProgress?: (progress: IntegrityPro
   }
 }
 
+function awaitIntegrityOperation<T>(operation: () => Promise<T>, signal: AbortSignal): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener("abort", onAbort);
+      reject(signal.reason);
+    };
+    if (signal.aborted) { reject(signal.reason); return; }
+    signal.addEventListener("abort", onAbort, { once: true });
+    Promise.resolve().then(() => {
+      signal.throwIfAborted();
+      return operation();
+    }).then((value) => {
+      signal.removeEventListener("abort", onAbort);
+      if (signal.aborted) reject(signal.reason);
+      else resolve(value);
+    }, (error: unknown) => {
+      signal.removeEventListener("abort", onAbort);
+      reject(error);
+    });
+  });
+}
+
 async function performIntegrityCheck(): Promise<IntegrityReport> {
   const version = app.getVersion();
   const report: IntegrityReport = { version, checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [] };
@@ -341,10 +363,11 @@ async function performIntegrityCheck(): Promise<IntegrityReport> {
       if (paths.has(key)) throw updateError("integrity_manifest_invalid", "Manifest has duplicate paths");
       paths.add(key);
     }
-    const root = await realpath(getInstallRoot());
+    const root = await awaitIntegrityOperation(() => realpath(getInstallRoot()), controller.signal);
     report.totalFiles = files.length;
     let lastProgressAt = 0;
     const publish = () => {
+      controller.signal.throwIfAborted();
       if (report.checkedFiles !== report.totalFiles && Date.now() - lastProgressAt < 100) return;
       lastProgressAt = Date.now();
       for (const listener of integrityListeners) listener({ version, checkedFiles: report.checkedFiles, totalFiles: report.totalFiles });
@@ -352,8 +375,9 @@ async function performIntegrityCheck(): Promise<IntegrityReport> {
     publish();
     for (const file of files) {
       let target: string;
-      try { target = await realpath(path.resolve(root, file.path)); }
+      try { target = await awaitIntegrityOperation(() => realpath(path.resolve(root, file.path)), controller.signal); }
       catch (error) {
+        controller.signal.throwIfAborted();
         report.issues.push({ path: file.path, kind: (error as NodeJS.ErrnoException).code === "ENOENT" ? "missing" : "read_failed" });
         report.checkedFiles++;
         publish();
@@ -363,18 +387,20 @@ async function performIntegrityCheck(): Promise<IntegrityReport> {
       if (!relative || relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative)) throw updateError("integrity_path_outside", "Managed file resolves outside the installation");
 
       try {
-        const info = await stat(target);
+        const info = await awaitIntegrityOperation(() => stat(target), controller.signal);
         if (!info.isFile()) report.issues.push({ path: file.path, kind: "read_failed" });
         else if (info.size !== file.size) report.issues.push({ path: file.path, kind: "size_mismatch" });
-        else if (await hashFile(target) !== file.sha256) report.issues.push({ path: file.path, kind: "hash_mismatch" });
+        else if (await awaitIntegrityOperation(() => hashFile(target, controller.signal), controller.signal) !== file.sha256) report.issues.push({ path: file.path, kind: "hash_mismatch" });
       } catch {
+        controller.signal.throwIfAborted();
         report.issues.push({ path: file.path, kind: "read_failed" });
       }
       report.checkedFiles++;
       publish();
     }
-    const installed = JSON.parse(await readFile(path.join(app.getAppPath(), "package.json"), "utf8")) as { version?: unknown };
+    const installed = JSON.parse(await awaitIntegrityOperation(() => readFile(path.join(app.getAppPath(), "package.json"), "utf8"), controller.signal)) as { version?: unknown };
     if (app.getVersion() !== version || installed.version !== version) throw updateError("integrity_version_changed", "Installation version changed during verification");
+    controller.signal.throwIfAborted();
     report.status = report.issues.some((issue) => issue.kind === "read_failed") ? "unavailable" : report.issues.length ? "issues" : "passed";
   } catch (error) {
     report.error = controller.signal.aborted ? "integrity_timeout" : (error as Partial<CodedUpdateError>).code ?? "integrity_failed";

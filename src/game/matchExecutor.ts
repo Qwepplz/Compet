@@ -133,9 +133,10 @@ export class MatchExecutor {
       staleAfterMs: 90_000,
       nowMs: Date.now,
     });
-    if (!status && !this.gameServerPresenceMonitors.has(matchId)) return "not_owned";
-
-    await requestSourceModShutdown(this.options.config.serverRoot, matchId);
+    const owned = Boolean(status) || this.gameServerPresenceMonitors.has(matchId);
+    // Losing ownership does not prove the server is running or stopped.
+    // Observe without sending commands to a potentially unrelated server.
+    if (owned) await requestSourceModShutdown(this.options.config.serverRoot, matchId);
     const timeoutMs = this.options.gameServerShutdownTimeoutMs ?? DEFAULT_GAME_SERVER_SHUTDOWN_TIMEOUT_MS;
     const pollIntervalMs = this.options.gameServerShutdownPollIntervalMs ?? GAME_SERVER_SHUTDOWN_POLL_INTERVAL_MS;
     const result = await this.waitForGameServerShutdown({
@@ -148,7 +149,7 @@ export class MatchExecutor {
     });
     if (result === "closed") return "stopped";
     if (result === "not_observed") return "not_observed";
-    return "timeout";
+    return owned ? "timeout" : "not_owned";
   }
 
   async deleteMatchArtifacts(matchId: string): Promise<void> {
