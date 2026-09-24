@@ -2,6 +2,7 @@ import path from "node:path";
 import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
 import type { MatchPhase, MatchTeam } from "./types.js";
+import { assertQueueFile, assertPartiesFile, assertInvitationsFile, assertRoomsFile } from "./matchmakingStoreValidation.js";
 
 export interface QueueEntry {
   accountId: string;
@@ -86,15 +87,15 @@ export interface MatchRoomRecord {
   createdAt: string;
   terminalStateAt?: string;
 }
-interface QueueFile {
+export interface QueueFile {
   queue: QueueEntry[];
 }
 
-interface PartiesFile {
+export interface PartiesFile {
   parties: PartyRecord[];
 }
 
-interface PartyInvitationsFile {
+export interface PartyInvitationsFile {
   invitations: PartyInvitationRecord[];
 }
 
@@ -102,11 +103,11 @@ export interface MatchFailedEventOutboxEntry {
   eventId: string;
   matchId: string;
   accountIds: string[];
-  error: unknown;
+  error?: unknown;
   readyDeclinedByDisplayName?: string;
 }
 
-interface RoomsFile {
+export interface RoomsFile {
   rooms: MatchRoomRecord[];
   pendingBackupCleanupMatchIds?: string[];
   pendingMatchFailedEvents?: MatchFailedEventOutboxEntry[];
@@ -128,43 +129,64 @@ export class MatchmakingStore {
       ensureJsonFile(store.invitationsPath, { invitations: [] }),
       ensureJsonFile(store.roomsPath, { rooms: [], pendingBackupCleanupMatchIds: [] }),
     ]);
+    await Promise.all([
+      store.readQueueFile(),
+      store.readPartiesFile(),
+      store.readInvitationsFile(),
+      store.readRoomsFile(),
+    ]);
     await store.recoverRuntimeStateOnLoad();
     return store;
   }
 
   listQueue(): Promise<QueueEntry[]> {
-    return readJsonFile<QueueFile>(this.queuePath, { queue: [] }).then((file) => file.queue);
+    return this.readQueueFile().then((file) => file.queue);
   }
 
   saveQueue(entries: QueueEntry[]): Promise<void> {
-    return this.enqueueQueueWrite(() => writeJsonFileAtomic(this.queuePath, { queue: entries }));
+    return this.enqueueQueueWrite(async () => {
+      const file = await this.readQueueFile();
+      const next = { ...file, queue: entries };
+      assertQueueFile(next);
+      await writeJsonFileAtomic(this.queuePath, next);
+    });
   }
 
   listParties(): Promise<PartyRecord[]> {
-    return readJsonFile<PartiesFile>(this.partiesPath, { parties: [] }).then((file) =>
+    return this.readPartiesFile().then((file) =>
       file.parties.map((party) => ({ ...party, status: party.status ?? "open" })),
     );
   }
 
   saveParties(parties: PartyRecord[]): Promise<void> {
-    return this.enqueuePartyWrite(() => writeJsonFileAtomic(this.partiesPath, { parties }));
+    return this.enqueuePartyWrite(async () => {
+      const file = await this.readPartiesFile();
+      const next = { ...file, parties: parties };
+      assertPartiesFile(next);
+      await writeJsonFileAtomic(this.partiesPath, next);
+    });
   }
 
   listInvitations(): Promise<PartyInvitationRecord[]> {
-    return readJsonFile<PartyInvitationsFile>(this.invitationsPath, { invitations: [] }).then((file) => file.invitations);
+    return this.readInvitationsFile().then((file) => file.invitations);
   }
 
   saveInvitations(invitations: PartyInvitationRecord[]): Promise<void> {
-    return this.enqueueInvitationWrite(() => writeJsonFileAtomic(this.invitationsPath, { invitations }));
+    return this.enqueueInvitationWrite(async () => {
+      const file = await this.readInvitationsFile();
+      const next = { ...file, invitations: invitations };
+      assertInvitationsFile(next);
+      await writeJsonFileAtomic(this.invitationsPath, next);
+    });
   }
 
   listRooms(): Promise<MatchRoomRecord[]> {
-    return readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] }).then((file) => file.rooms);
+    return this.readRoomsFile().then((file) => file.rooms);
   }
   saveRooms(rooms: MatchRoomRecord[]): Promise<void> {
     return this.enqueueRoomWrite(async () => {
-      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
-      await writeJsonFileAtomic(this.roomsPath, { ...file, rooms });
+      const file = await this.readRoomsFile();
+      await this.writeRoomsFile({ ...file, rooms });
     });
   }
 
@@ -173,7 +195,8 @@ export class MatchmakingStore {
     events: MatchFailedEventOutboxEntry[],
   ): Promise<void> {
     return this.enqueueRoomWrite(async () => {
-      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
+      const file = await this.readRoomsFile();
+      assertRoomsFile({ ...file, rooms, pendingMatchFailedEvents: events });
       const pending = file.pendingMatchFailedEvents ?? [];
       const seenEventIds = new Set(pending.map((event) => event.eventId));
       const nextPending = [...pending];
@@ -182,7 +205,7 @@ export class MatchmakingStore {
         seenEventIds.add(event.eventId);
         nextPending.push(event);
       }
-      await writeJsonFileAtomic(this.roomsPath, {
+      await this.writeRoomsFile({
         ...file,
         rooms,
         pendingMatchFailedEvents: nextPending,
@@ -191,16 +214,16 @@ export class MatchmakingStore {
   }
 
   listPendingMatchFailedEvents(): Promise<MatchFailedEventOutboxEntry[]> {
-    return readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] })
+    return this.readRoomsFile()
       .then((file) => file.pendingMatchFailedEvents ?? []);
   }
 
   acknowledgeMatchFailedEvent(eventId: string): Promise<void> {
     return this.enqueueRoomWrite(async () => {
-      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
+      const file = await this.readRoomsFile();
       const pending = file.pendingMatchFailedEvents ?? [];
       if (!pending.some((event) => event.eventId === eventId)) return;
-      await writeJsonFileAtomic(this.roomsPath, {
+      await this.writeRoomsFile({
         ...file,
         pendingMatchFailedEvents: pending.filter((event) => event.eventId !== eventId),
       });
@@ -212,8 +235,8 @@ export class MatchmakingStore {
     eventId: string,
   ): Promise<void> {
     return this.enqueueRoomWrite(async () => {
-      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
-      await writeJsonFileAtomic(this.roomsPath, {
+      const file = await this.readRoomsFile();
+      await this.writeRoomsFile({
         ...file,
         rooms,
         pendingMatchFailedEvents: (file.pendingMatchFailedEvents ?? []).filter((event) => event.eventId !== eventId),
@@ -222,17 +245,58 @@ export class MatchmakingStore {
   }
 
   listPendingBackupCleanupMatchIds(): Promise<string[]> {
-    return readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] }).then((file) => file.pendingBackupCleanupMatchIds ?? []);
+    return this.readRoomsFile().then((file) => file.pendingBackupCleanupMatchIds ?? []);
   }
 
   savePendingBackupCleanupMatchIds(matchIds: string[]): Promise<void> {
     return this.enqueueRoomWrite(async () => {
-      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
-      await writeJsonFileAtomic(this.roomsPath, {
+      const file = await this.readRoomsFile();
+      assertRoomsFile({ ...file, pendingBackupCleanupMatchIds: matchIds });
+      await this.writeRoomsFile({
         ...file,
         pendingBackupCleanupMatchIds: [...new Set(matchIds)],
       });
     });
+  }
+
+  private async writeRoomsFile(file: RoomsFile): Promise<void> {
+    assertRoomsFile(file);
+    await writeJsonFileAtomic(this.roomsPath, file);
+  }
+
+  private async readFile(filePath: string, fallback: unknown): Promise<unknown> {
+    try {
+      return await readJsonFile<unknown>(filePath, fallback);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error("Invalid matchmaking " + path.basename(filePath) + " at <root>");
+      }
+      throw error;
+    }
+  }
+
+  private async readQueueFile(): Promise<QueueFile> {
+    const file = await this.readFile(this.queuePath, { queue: [] });
+    assertQueueFile(file);
+    return file;
+  }
+
+  private async readPartiesFile(): Promise<PartiesFile> {
+    const file = await this.readFile(this.partiesPath, { parties: [] });
+    assertPartiesFile(file);
+    return file;
+  }
+
+  private async readInvitationsFile(): Promise<PartyInvitationsFile> {
+    const file = await this.readFile(this.invitationsPath, { invitations: [] });
+    assertInvitationsFile(file);
+    return file;
+  }
+
+  private async readRoomsFile(): Promise<RoomsFile> {
+    const file = await this.readFile(this.roomsPath, { rooms: [] });
+    assertRoomsFile(file);
+    return file;
   }
 
   private get queuePath(): string {
@@ -269,10 +333,12 @@ export class MatchmakingStore {
   }
 
   private async recoverRuntimeStateOnLoad(): Promise<void> {
-    const queueFile = await readJsonFile<QueueFile>(this.queuePath, { queue: [] });
+    const queueFile = await this.readQueueFile();
     const queue = queueFile.queue.length > 0 ? [] : queueFile.queue;
     if (queue !== queueFile.queue) {
-      await writeJsonFileAtomic(this.queuePath, { queue });
+      const next = { ...queueFile, queue };
+      assertQueueFile(next);
+      await writeJsonFileAtomic(this.queuePath, next);
     }
   }
 

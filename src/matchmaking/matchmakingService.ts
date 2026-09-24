@@ -3255,7 +3255,7 @@ export class MatchmakingService {
         return;
       }
 
-      await this.emit({ type: "match_failed", ...currentEntry });
+      await this.emit({ type: "match_failed", ...currentEntry, error: currentEntry.error });
       await this.acknowledgePendingFailedMatchEvent(currentEntry.eventId, currentEntry.matchId);
     });
   }
