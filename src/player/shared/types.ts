@@ -108,10 +108,11 @@ export type PlayerRealtimeEvent =
   | PlayerRealtimeEventWithSeq<{ type: "server_preparing"; matchId: string }>
   | PlayerRealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; connect: PlayerConnectDto }>
   | PlayerRealtimeEventWithSeq<{ type: "match_live"; matchId: string }>
-  | PlayerRealtimeEventWithSeq<{ type: "match_completed"; matchId: string; result?: MatchSeriesResult }>
+  | PlayerRealtimeEventWithSeq<{ type: "match_completed"; matchId: string; eventId?: string; result?: MatchSeriesResult }>
   | PlayerRealtimeEventWithSeq<{
       type: "match_failed";
       matchId: string;
+      eventId?: string;
       error: string;
       readyDeclinedByDisplayName?: string;
     }>;

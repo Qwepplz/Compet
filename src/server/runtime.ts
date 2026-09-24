@@ -25,6 +25,7 @@ import { openCompetDatabase } from "../storage/competDatabase.js";
 import { ensureServerCertificate } from "../tls/certificateService.js";
 import { writeActivityLog } from "./activityLogger.js";
 import { createServer } from "./createServer.js";
+import { createOfflineCleanupScheduler } from "./offlineCleanup.js";
 
 export interface Runtime {
   app: Awaited<ReturnType<typeof createServer>>;
@@ -126,35 +127,34 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     matchmaking = matchmakingService;
     await matchmakingService.recoverInterruptedMatches();
     await matchmakingService.resumePendingTimeouts();
-    const offlineCleanupGraceMs = resolveOfflineCleanupGraceMs();
-    const offlineCleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
-    let closing = false;
-    const presenceRevisions = new Map<string, object>();
-    const unsubscribePresence = events.subscribe((event) => {
-      if (closing || event.type !== "presence_updated") return;
-      const revision = {};
-      presenceRevisions.set(event.accountId, revision);
-      const existingTimer = offlineCleanupTimers.get(event.accountId);
-      if (existingTimer) {
-        clearTimeout(existingTimer);
-        offlineCleanupTimers.delete(event.accountId);
-      }
-      if (event.online) return;
-
-      void matchmakingService.isMatchmakingParticipant(event.accountId).then((matching) => {
-        if (closing || presenceRevisions.get(event.accountId) !== revision || presence.isOnline(event.accountId)) return;
-        const lastSeen = presence.get(event.accountId).lastSeenAt;
-        const delay = matching ? Math.max(0, 8000 - (lastSeen ? Date.now() - Date.parse(lastSeen) : 0)) : offlineCleanupGraceMs;
-        const timer = setTimeout(() => {
-          offlineCleanupTimers.delete(event.accountId);
-          if (presence.isOnline(event.accountId)) return;
-          void friends.expireDisconnectedRequests(event.accountId).catch(() => undefined);
-          void matchmakingService.handleAccountOffline(event.accountId).catch(() => undefined);
-        }, delay);
-        timer.unref?.();
-        offlineCleanupTimers.set(event.accountId, timer);
-      }).catch(() => undefined);
+    const offlineCleanupScheduler = createOfflineCleanupScheduler({
+      presence,
+      matchmaking: {
+        isMatchmakingParticipant: (accountId) => matchmakingService.isMatchmakingParticipant(accountId),
+        handleAccountOffline: (accountId, shouldContinue) => (
+          matchmakingService.handleAccountOffline(accountId, undefined, shouldContinue)
+        ),
+      },
+      friends,
+      graceMs: resolveOfflineCleanupGraceMs(),
+      onError: (accountId, operation, error) => {
+        process.stderr.write(
+          `Offline cleanup ${operation} failed for ${accountId}: ${error instanceof Error ? error.message : String(error)}\n`,
+        );
+      },
     });
+    const unsubscribePresence = events.subscribe((event) => {
+      if (event.type === "presence_updated") {
+        offlineCleanupScheduler.onPresenceUpdated(event.accountId, event.online);
+      }
+    });
+    let offlineCleanupClosed = false;
+    const closeOfflineCleanup = () => {
+      if (offlineCleanupClosed) return;
+      offlineCleanupClosed = true;
+      unsubscribePresence();
+      offlineCleanupScheduler.close();
+    };
 
     const auth = new AuthService(accounts, sessions, new InMemoryLoginRateLimiter());
     const app = await createServer({
@@ -170,13 +170,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       https: { key: certificate.keyPem, cert: certificate.certPem },
     });
     app.addHook("onClose", async () => {
-      closing = true;
-      unsubscribePresence();
-      presenceRevisions.clear();
-      for (const timer of offlineCleanupTimers.values()) {
-        clearTimeout(timer);
-      }
-      offlineCleanupTimers.clear();
+      closeOfflineCleanup();
       await matchmakingService.stopBackgroundTasks();
       database.close();
     });
@@ -185,6 +179,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     const close = (reason: string): Promise<ServiceShutdownSummary> => {
       void reason;
       closePromise ??= (async () => {
+        closeOfflineCleanup();
         try {
           return await matchmakingService.shutdownForServiceStop();
         } finally {

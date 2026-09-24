@@ -11,11 +11,14 @@ export interface RealtimeReplayResult {
 export type RealtimeEventListener = (event: SequencedRealtimeEvent) => void;
 
 const MAX_REPLAY_EVENTS = 500;
+const MAX_SEEN_IDEMPOTENT_EVENT_IDS = MAX_REPLAY_EVENTS * 2;
 
 export class RealtimeEventBus {
   readonly streamId = randomUUID();
   private readonly listeners = new Set<RealtimeEventListener>();
   private readonly history: SequencedRealtimeEvent[] = [];
+  private readonly seenIdempotentEventIds = new Set<string>();
+  private readonly idempotentEventIdOrder: string[] = [];
   private nextSeq = 1;
 
   latestSeq(): number {
@@ -23,6 +26,16 @@ export class RealtimeEventBus {
   }
 
   publish(event: RealtimeEvent): void {
+    if ((event.type === "match_failed" || event.type === "match_completed") && event.eventId) {
+      if (this.seenIdempotentEventIds.has(event.eventId)) return;
+      this.seenIdempotentEventIds.add(event.eventId);
+      this.idempotentEventIdOrder.push(event.eventId);
+      if (this.idempotentEventIdOrder.length > MAX_SEEN_IDEMPOTENT_EVENT_IDS) {
+        const expiredEventId = this.idempotentEventIdOrder.shift();
+        if (expiredEventId) this.seenIdempotentEventIds.delete(expiredEventId);
+      }
+    }
+
     const sequencedEvent: SequencedRealtimeEvent = {
       ...event,
       streamId: this.streamId,

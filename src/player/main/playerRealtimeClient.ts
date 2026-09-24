@@ -64,6 +64,8 @@ export class PlayerRealtimeClient {
   private readonly clearTimeoutFn: typeof clearTimeout;
   private readonly onCommandTrace?: (trace: PlayerRealtimeCommandTrace) => void;
   private readonly eventListeners = new Set<(event: PlayerRealtimeEvent) => void>();
+  private readonly seenIdempotentEventIds = new Set<string>();
+  private readonly idempotentEventIdOrder: string[] = [];
   private readonly statusListeners = new Set<(status: PlayerRealtimeConnection) => void>();
   private readonly pendingCommands = new Map<string, PendingCommand>();
 
@@ -378,6 +380,16 @@ export class PlayerRealtimeClient {
   }
 
   private emitEvent(event: PlayerRealtimeEvent): void {
+    if ((event.type === "match_failed" || event.type === "match_completed") && event.eventId) {
+      if (this.seenIdempotentEventIds.has(event.eventId)) return;
+      this.seenIdempotentEventIds.add(event.eventId);
+      this.idempotentEventIdOrder.push(event.eventId);
+      if (this.idempotentEventIdOrder.length > 1000) {
+        const expiredEventId = this.idempotentEventIdOrder.shift();
+        if (expiredEventId) this.seenIdempotentEventIds.delete(expiredEventId);
+      }
+    }
+
     for (const listener of this.eventListeners) {
       listener(event);
     }

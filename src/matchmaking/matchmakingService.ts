@@ -23,6 +23,7 @@ import {
   type ReadyPresentationState,
   type MatchRoomReadyState,
   type MatchRoomRecord,
+  type MatchFailedEventOutboxEntry,
   type PartyInvitationRecord,
   type PartyRecord,
   type QueueEntry,
@@ -279,6 +280,18 @@ interface CommittedMatchReconciliation {
 }
 
 type StopMatchTaskOptions = { discardBackup: boolean };
+type FailedMatchCleanupStage = "match_task" | "server_presence" | "artifacts" | "party_unlock" | "event";
+
+interface FailedMatchCleanupProgress {
+  room: MatchRoomRecord;
+  failedAt: string;
+  reason: "match_failed";
+  readyDeclinedByDisplayName?: string;
+  completed: Set<FailedMatchCleanupStage>;
+  serverPresenceChanges?: readonly GamePresenceChange[];
+  publishedServerPresenceAccountIds: Set<string>;
+  running: boolean;
+}
 
 export class MatchmakingService {
   private readonly now: () => string;
@@ -292,11 +305,19 @@ export class MatchmakingService {
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly pendingReadyInvalidations = new Map<string, symbol>();
   private readonly mapRevealTimers = new Map<string, ReadyTimeoutHandle>();
+  private readonly serverFailureCleanupReveals = new Map<string, string>();
   private readonly recoveredOfflineTimers = new Map<string, { matchId: string; timeout: ReadyTimeoutHandle }>();
+  private readonly failedMatchCleanupTimers = new Map<string, ReadyTimeoutHandle>();
+  private pendingFailedEventRetryTimer?: ReadyTimeoutHandle;
+  private readonly staleCompensationRetryTimers = new Map<string, ReadyTimeoutHandle>();
+  private readonly staleCompensationAttempts = new Map<string, { description: string; run: () => Promise<void> }>();
+  private readonly failedMatchCleanups = new Map<string, FailedMatchCleanupProgress>();
+  private readonly preloadCancellationFailureEvents = new Map<string, string>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private readonly matchTasks = new Map<string, { controller: AbortController; backup: Promise<void>; draft?: Promise<void>; prepare?: Promise<void>; cancelled: boolean }>();
   private shutdownPromise?: Promise<ServiceShutdownSummary>;
   private shutdownRequested = false;
+  private backgroundTasksStopping = false;
   private preserveBackupsDuringShutdown = false;
 
   private ensureMatchTask(matchId: string) {
@@ -364,23 +385,65 @@ export class MatchmakingService {
 
   private readonly cleanupTasks = new Set<Promise<void>>();
 
+  private scheduleStaleCompensationRetry(
+    key: string,
+    description: string,
+    run: () => Promise<void>,
+  ): void {
+    if (this.shutdownRequested || this.backgroundTasksStopping) return;
+    this.staleCompensationAttempts.set(key, { description, run });
+    if (this.staleCompensationRetryTimers.has(key)) return;
+    const timeout = this.setTimeoutFn(() => {
+      this.staleCompensationRetryTimers.delete(key);
+      void this.runStaleCompensationRetry(key);
+    }, 1000);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.staleCompensationRetryTimers.set(key, timeout);
+  }
+
+  private async runStaleCompensationRetry(key: string): Promise<void> {
+    if (this.shutdownRequested || this.backgroundTasksStopping) {
+      this.staleCompensationAttempts.delete(key);
+      return;
+    }
+    const attempt = this.staleCompensationAttempts.get(key);
+    if (!attempt) return;
+    try {
+      await attempt.run();
+      this.staleCompensationAttempts.delete(key);
+    } catch (error) {
+      process.stderr.write(attempt.description + " retry failed for " + key + ": " + String(error) + "\n");
+      this.scheduleStaleCompensationRetry(key, attempt.description, attempt.run);
+    }
+  }
+
   private clearPendingTimeouts(): void {
     this.clearRecoveredOfflineTimers();
     for (const entry of this.partyMatchmakingTimeouts.values()) this.clearTimeoutFn(entry.timeout);
     for (const timer of [...this.readyTimeouts.values(), ...this.mapRevealTimers.values(), ...this.partyInviteTimeouts.values()]) this.clearTimeoutFn(timer);
     this.partyMatchmakingTimeouts.clear();
+    for (const roomId of this.failedMatchCleanupTimers.keys()) this.clearFailedMatchCleanupTimer(roomId);
+    if (this.pendingFailedEventRetryTimer) this.clearTimeoutFn(this.pendingFailedEventRetryTimer);
+    this.pendingFailedEventRetryTimer = undefined;
+    for (const timer of this.staleCompensationRetryTimers.values()) this.clearTimeoutFn(timer);
+    this.staleCompensationRetryTimers.clear();
+    this.staleCompensationAttempts.clear();
     this.readyTimeouts.clear();
     this.mapRevealTimers.clear();
     this.partyInviteTimeouts.clear();
   }
 
   async stopBackgroundTasks(): Promise<void> {
+    this.backgroundTasksStopping = true;
     this.clearPendingTimeouts();
     for (const task of this.matchTasks.values()) { task.cancelled = true; task.controller.abort(); }
     await Promise.allSettled([...this.matchTasks.values()].flatMap((task) => [task.backup, ...(task.draft ? [task.draft] : []), ...(task.prepare ? [task.prepare] : [])]));
     await Promise.allSettled([...this.cleanupTasks]);
     await this.mutationQueue;
     this.clearPendingTimeouts();
+    this.failedMatchCleanups.clear();
+    this.serverFailureCleanupReveals.clear();
+    this.preloadCancellationFailureEvents.clear();
   }
 
   async shutdownForServiceStop(): Promise<ServiceShutdownSummary> {
@@ -435,7 +498,7 @@ export class MatchmakingService {
       }
     }
 
-    return this.enqueueMutation(async () => {
+    const summary = await this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const roomIds = new Set(rooms.map((room) => room.id));
       const [partiesBeforeUnlock, currentIndexedCleanupIds] = await Promise.all([
@@ -447,14 +510,31 @@ export class MatchmakingService {
         ...currentIndexedCleanupIds,
         ...this.pendingPartyMatchIdsWithoutRoom(partiesBeforeUnlock, roomIds),
       ].filter((matchId) => !roomIds.has(matchId)));
-      const activeRooms = rooms.filter((room) => !isTerminalMatchPhase(room.phase));
+      const completedMatchIds = new Set<string>();
+      const completionLookupFailedIds = new Set<string>();
+      for (const room of rooms) {
+        if (isTerminalMatchPhase(room.phase)) continue;
+        try {
+          if (await this.deps.records?.readCompletedMatch?.(room.id)) completedMatchIds.add(room.id);
+        } catch (error) {
+          completionLookupFailedIds.add(room.id);
+          process.stderr.write(`Failed to check completed match before service-stop failure ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
+      }
+      const activeRooms = rooms.filter((room) => (
+        !isTerminalMatchPhase(room.phase)
+        && !completedMatchIds.has(room.id)
+        && !completionLookupFailedIds.has(room.id)
+      ));
       const failedAt = this.now();
       const failedRooms = activeRooms.map((room) => ({
         previous: room,
         failed: { ...room, phase: "failed" as const, terminalStateAt: failedAt },
       }));
       if (failedRooms.length > 0) {
-        await this.deps.store.saveRooms(rooms.map((room) => failedRooms.find((entry) => entry.previous.id === room.id)?.failed ?? room));
+        const roomsWithFailures = rooms.map((room) => failedRooms.find((entry) => entry.previous.id === room.id)?.failed ?? room);
+        const failedEvents = failedRooms.map(({ failed }) => this.failedMatchEventOutboxEntry(failed, "match_failed"));
+        await this.deps.store.saveRoomsAndPendingMatchFailedEvents(roomsWithFailures, failedEvents);
       }
 
       const orphanedBackupCleanup = await this.cleanupOrphanedPendingBackups([...orphanedMatchIdsToDiscard], roomIds);
@@ -466,18 +546,6 @@ export class MatchmakingService {
       }
       unlockedPartyIds.push(...await this.unlockOrphanedPendingParties(failedAt, orphanedBackupCleanup.unindexedMatchIds));
 
-      for (const { failed } of failedRooms) {
-        try {
-          await this.emit({
-            type: "match_failed",
-            matchId: failed.id,
-            accountIds: this.roomAudience(failed),
-            error: "match_failed",
-          });
-        } catch (error) {
-          process.stderr.write(`Failed to publish service-stop failure ${failed.id}: ${error instanceof Error ? error.message : String(error)}\n`);
-        }
-      }
       try {
         await this.emitOccupancyUpdated();
       } catch (error) {
@@ -508,6 +576,17 @@ export class MatchmakingService {
         pendingCleanupMatchIds: [...pendingCleanupMatchIds],
       };
     });
+    for (const matchId of summary.failedMatchIds) {
+      try {
+        const pending = await this.deps.store.listPendingMatchFailedEvents();
+        const failedEvent = pending.find((entry) => entry.matchId === matchId);
+        if (!failedEvent) throw new Error("Missing durable match_failed event for " + matchId);
+        await this.deliverFailedMatchEvent(failedEvent);
+      } catch (error) {
+        process.stderr.write(`Failed to publish service-stop failure ${matchId}: ${error instanceof Error ? error.message : String(error)}\\n`);
+      }
+    }
+    return summary;
   }
 
   async recoverInterruptedMatches(): Promise<ServiceShutdownSummary> {
@@ -516,6 +595,11 @@ export class MatchmakingService {
       this.deps.store.listParties(),
       this.deps.store.listPendingBackupCleanupMatchIds(),
     ]);
+    const failedRoomsWaitingForPartyUnlock = roomsAtRecoveryStart.filter((room) => (
+      room.phase === "failed"
+      && room.partyId !== undefined
+      && partiesAtRecoveryStart.some((party) => party.id === room.partyId && party.lockedMatchId === room.id)
+    ));
     const roomIdsAtRecoveryStart = new Set(roomsAtRecoveryStart.map((room) => room.id));
     const orphanedMatchIdsAtRecoveryStart = new Set([
       ...[...this.matchTasks.keys()].filter((matchId) => !roomIdsAtRecoveryStart.has(matchId)),
@@ -558,7 +642,7 @@ export class MatchmakingService {
       }
     }
 
-    return this.enqueueMutation(async () => {
+    const summary = await this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const roomIds = new Set(rooms.map((room) => room.id));
       const [partiesBeforeUnlock, currentIndexedCleanupIds] = await Promise.all([
@@ -571,11 +655,17 @@ export class MatchmakingService {
         ...this.pendingPartyMatchIdsWithoutRoom(partiesBeforeUnlock, roomIds),
       ].filter((matchId) => !roomIds.has(matchId)));
       const completedIds = new Set<string>();
+      const completionLookupFailedIds = new Set<string>();
       for (const room of rooms) {
-        if (await this.deps.records?.readCompletedMatch?.(room.id)) completedIds.add(room.id);
+        try {
+          if (await this.deps.records?.readCompletedMatch?.(room.id)) completedIds.add(room.id);
+        } catch (error) {
+          completionLookupFailedIds.add(room.id);
+          process.stderr.write(`Failed to check completed match during interrupted recovery ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
+        }
       }
       const candidates = rooms.filter((room) => {
-        if (completedIds.has(room.id)) return false;
+        if (completedIds.has(room.id) || completionLookupFailedIds.has(room.id)) return false;
         if (!isTerminalMatchPhase(room.phase)) return true;
         return room.phase === "failed" && backupAvailability.get(room.id) === true;
       });
@@ -599,8 +689,19 @@ export class MatchmakingService {
         previous: room,
         failed: { ...room, phase: "failed" as const, terminalStateAt: failedAt },
       }));
-      if (failedRooms.length > 0) {
-        await this.deps.store.saveRooms(rooms.map((room) => failedRooms.find((entry) => entry.previous.id === room.id)?.failed ?? room));
+      const roomsWithFailures = rooms.map((room) => failedRooms.find((entry) => entry.previous.id === room.id)?.failed ?? room);
+      const recoveredLockedFailedRooms = failedRoomsWaitingForPartyUnlock.filter((room) => (
+        rooms.find((candidate) => candidate.id === room.id)?.phase === "failed"
+        && partiesBeforeUnlock.some((party) => party.id === room.partyId && party.lockedMatchId === room.id)
+      ));
+      const pendingFailedEvents = await this.deps.store.listPendingMatchFailedEvents();
+      const knownFailedEventIds = new Set(pendingFailedEvents.map((entry) => entry.eventId));
+      const recoveredFailureEvents = [
+        ...failedRooms.map(({ failed }) => this.failedMatchEventOutboxEntry(failed, "match_failed")),
+        ...recoveredLockedFailedRooms.map((room) => this.failedMatchEventOutboxEntry(room, "match_failed")),
+      ].filter((entry) => !knownFailedEventIds.has(entry.eventId));
+      if (failedRooms.length > 0 || recoveredFailureEvents.length > 0) {
+        await this.deps.store.saveRoomsAndPendingMatchFailedEvents(roomsWithFailures, recoveredFailureEvents);
       }
 
       const orphanedBackupCleanup = await this.cleanupOrphanedPendingBackups([...orphanedMatchIdsToDiscard], roomIds);
@@ -611,20 +712,11 @@ export class MatchmakingService {
       for (const room of candidates.filter((candidate) => candidate.phase === "failed")) {
         if (await this.unlockPartyForRoom(room, room.terminalStateAt ?? failedAt) && room.partyId) unlockedPartyIds.push(room.partyId);
       }
+      for (const room of recoveredLockedFailedRooms) {
+        if (await this.unlockPartyForRoom(room, room.terminalStateAt ?? failedAt) && room.partyId) unlockedPartyIds.push(room.partyId);
+      }
       unlockedPartyIds.push(...await this.unlockOrphanedPendingParties(failedAt, orphanedBackupCleanup.unindexedMatchIds));
 
-      for (const { failed } of failedRooms) {
-        try {
-          await this.emit({
-            type: "match_failed",
-            matchId: failed.id,
-            accountIds: this.roomAudience(failed),
-            error: "match_failed",
-          });
-        } catch (error) {
-          process.stderr.write(`Failed to publish interrupted match failure ${failed.id}: ${error instanceof Error ? error.message : String(error)}\n`);
-        }
-      }
       try {
         await this.emitOccupancyUpdated();
       } catch (error) {
@@ -654,6 +746,8 @@ export class MatchmakingService {
         pendingCleanupMatchIds: [...pendingCleanupMatchIds],
       };
     });
+    await this.deliverPendingFailedMatchEvents();
+    return summary;
   }
 
   async resumePendingTimeouts(): Promise<void> {
@@ -825,13 +919,20 @@ export class MatchmakingService {
     });
   }
 
-  async handleAccountOffline(accountId: string, expectedMatchId?: string): Promise<void> {
+  async handleAccountOffline(
+    accountId: string,
+    expectedMatchId?: string,
+    shouldContinue: () => boolean = () => true,
+  ): Promise<void> {
     const action = await this.enqueueMutation(async () => {
+      if (!shouldContinue()) return;
       const activeParties = await this.deps.store.listParties();
+      if (!shouldContinue()) return;
       const activeParty = activeParties.find((p) => p.memberAccountIds.includes(accountId) && p.lockedMatchId);
       if (expectedMatchId && activeParty?.lockedMatchId !== expectedMatchId) return;
       if (activeParty) {
         const rooms = await this.deps.store.listRooms();
+        if (!shouldContinue()) return;
         const room = rooms.find((r) => r.id === activeParty.lockedMatchId);
         if (activeParty.matchmakingPendingAt) {
           if (activeParty.memberAccountIds.every((id) => this.isConfirmedOffline(id))) return { cancel: activeParty.id, deadline: activeParty.preload?.deadlineAt };
@@ -840,7 +941,7 @@ export class MatchmakingService {
         }
         if (room && ["ready", "map_randomizing"].includes(room.phase)) {
           if (this.roomAudience(room).every((id) => this.isConfirmedOffline(id))) {
-            await this.failMatchRoom(rooms, room, "match_failed");
+            await this.failMatchRoom(rooms, room, "match_failed", undefined, shouldContinue);
           } else if (room.phase === "ready" && this.isConfirmedOffline(accountId)) {
             if (room.readyDeadlineAt) return { ready: accountId };
             const updated = { ...room, ready: room.ready?.map((entry) => entry.accountId === accountId ? { ...entry, ready: true, respondedAt: this.now() } : entry) };
@@ -850,7 +951,9 @@ export class MatchmakingService {
         return;
       }
       await this.expirePendingInvitationsForAccount(accountId);
+      if (!shouldContinue()) return;
       const parties = await this.deps.store.listParties();
+      if (!shouldContinue()) return;
       const party = parties.find((candidate) => (
         candidate.memberAccountIds.includes(accountId)
         && (candidate.status ?? "open") === "open"
@@ -875,15 +978,46 @@ export class MatchmakingService {
         ? parties.map((candidate) => (candidate.id === party.id ? nextParty : candidate))
         : parties.filter((candidate) => candidate.id !== party.id);
 
+      if (!shouldContinue()) return;
       await this.deps.store.saveParties(updated);
+      if (!shouldContinue()) {
+        const restoreOpenParty = async (): Promise<void> => {
+          if (this.shutdownRequested || this.backgroundTasksStopping) return;
+          const persistedParties = await this.deps.store.listParties();
+          const persistedParty = persistedParties.find((candidate) => candidate.id === party.id);
+          const removalStillCurrent = nextParty
+            ? persistedParty !== undefined && JSON.stringify(persistedParty) === JSON.stringify(nextParty)
+            : persistedParty === undefined;
+          const accountHasAnotherParty = persistedParties.some((candidate) => (
+            candidate.id !== party.id && candidate.memberAccountIds.includes(accountId)
+          ));
+          if (!removalStillCurrent || accountHasAnotherParty) return;
+          const restoredParties = persistedParty
+            ? persistedParties.map((candidate) => (candidate.id === party.id ? party : candidate))
+            : [...persistedParties, party];
+          await this.deps.store.saveParties(restoredParties);
+        };
+        try {
+          await restoreOpenParty();
+        } catch (error) {
+          process.stderr.write("Open-party reconnect compensation failed for " + party.id + ": " + String(error) + "\n");
+          this.scheduleStaleCompensationRetry(
+            "open-party:" + party.id + ":" + accountId + ":" + party.updatedAt,
+            "Open-party reconnect compensation",
+            async () => { await this.enqueueMutation(restoreOpenParty); },
+          );
+        }
+        return;
+      }
       this.clearPartyMatchmakingTimeout(party.id);
       if (ownerLeft) await this.expirePendingInvitationsForParty(party.id);
       await this.emit({ type: "party_updated", accountIds: [accountId, ...remainingMemberIds], party: nextParty ?? null });
       if (party.matchmakingPendingAt) await this.emitOccupancyUpdated();
     });
-    if (action?.cancel) await this.cancelScheduledPartyMatchmaking(action.cancel, action.deadline);
+    if (!shouldContinue()) return;
+    if (action?.cancel) await this.cancelScheduledPartyMatchmaking(action.cancel, action.deadline, undefined, shouldContinue);
     if (action?.start) await this.startPartyMatchmaking(action.start, {}, action.matchId);
-    if (action?.ready) await this.acceptReady(action.ready);
+    if (action?.ready) await this.acceptReady(action.ready, shouldContinue);
   }
 
   private clearRecoveredOfflineTimers(matchId?: string): void {
@@ -894,7 +1028,8 @@ export class MatchmakingService {
     }
   }
 
-  private scheduleRecoveredOfflineCheck(accountId: string, matchId: string): void {
+  private scheduleRecoveredOfflineCheck(accountId: string, matchId: string, retryDelayMs?: number): void {
+    if (this.shutdownRequested) return;
     const existing = this.recoveredOfflineTimers.get(accountId);
     if (existing) {
       this.clearTimeoutFn(existing.timeout);
@@ -902,21 +1037,72 @@ export class MatchmakingService {
     }
     const state = this.deps.presence?.get(accountId);
     if (!state || state.online) return;
-    const remainingMs = state.lastSeenAt ? Date.parse(state.lastSeenAt) + 8000 - Date.parse(this.now()) : 0;
+    const lastSeenAt = state.lastSeenAt;
+    const remainingMs = retryDelayMs ?? (lastSeenAt ? Date.parse(lastSeenAt) + 8000 - Date.parse(this.now()) : 0);
     if (!Number.isFinite(remainingMs)) return;
     const timeout = this.setTimeoutFn(() => {
       if (this.recoveredOfflineTimers.get(accountId)?.timeout !== timeout) return;
       this.recoveredOfflineTimers.delete(accountId);
-      if (!this.isConfirmedOffline(accountId)) {
+      if (this.shutdownRequested) return;
+      const currentState = this.deps.presence?.get(accountId);
+      if (!currentState || currentState.online) return;
+      if (currentState.lastSeenAt !== lastSeenAt || !this.isConfirmedOffline(accountId)) {
         this.scheduleRecoveredOfflineCheck(accountId, matchId);
         return;
       }
-      const task = this.handleAccountOffline(accountId, matchId).catch(() => undefined);
+      const task = this.retryRecoveredOfflineHandling(accountId, matchId, lastSeenAt);
       this.cleanupTasks.add(task);
       void task.finally(() => this.cleanupTasks.delete(task));
     }, Math.max(0, remainingMs));
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.recoveredOfflineTimers.set(accountId, { matchId, timeout });
+  }
+
+  private async retryRecoveredOfflineHandling(
+    accountId: string,
+    matchId: string,
+    expectedLastSeenAt: string | undefined,
+  ): Promise<void> {
+    try {
+      await this.handleAccountOffline(accountId, matchId);
+      return;
+    } catch (error) {
+      process.stderr.write("Recovered offline handling failed for " + accountId + " in " + matchId + ": " + String(error) + "\n");
+    }
+
+    if (this.shutdownRequested) return;
+    let state = this.deps.presence?.get(accountId);
+    if (!state || state.online) return;
+    if (state.lastSeenAt !== expectedLastSeenAt) {
+      this.scheduleRecoveredOfflineCheck(accountId, matchId);
+      return;
+    }
+
+    try {
+      const parties = await this.deps.store.listParties();
+      const party = parties.find((entry) => (
+        entry.lockedMatchId === matchId && entry.memberAccountIds.includes(accountId)
+      ));
+      if (!party) return;
+      if (!party.matchmakingPendingAt) {
+        const rooms = await this.deps.store.listRooms();
+        if (!rooms.some((room) => (
+          room.id === matchId && ["ready", "map_randomizing"].includes(room.phase)
+        ))) return;
+      }
+    } catch (error) {
+      process.stderr.write("Could not verify recovered offline work for " + accountId + " in " + matchId + ": " + String(error) + "\n");
+    }
+
+    if (this.shutdownRequested) return;
+    state = this.deps.presence?.get(accountId);
+    if (!state || state.online) return;
+    if (state.lastSeenAt !== expectedLastSeenAt || !this.isConfirmedOffline(accountId)) {
+      this.scheduleRecoveredOfflineCheck(accountId, matchId);
+      return;
+    }
+    if (this.recoveredOfflineTimers.has(accountId)) return;
+    this.scheduleRecoveredOfflineCheck(accountId, matchId, 1000);
   }
 
   private isConfirmedOffline(accountId: string): boolean {
@@ -1299,13 +1485,20 @@ export class MatchmakingService {
     if (now < Date.parse(room.readyStartsAt) && !this.isConfirmedOffline(accountId)) throw new Error("ready check has not started");
   }
 
-  acceptReady(accountId: string): Promise<PublicMatchRoomRecord> {
+  acceptReady(accountId: string): Promise<PublicMatchRoomRecord>;
+  acceptReady(accountId: string, shouldContinue: () => boolean): Promise<PublicMatchRoomRecord | undefined>;
+  acceptReady(accountId: string, shouldContinue?: () => boolean): Promise<PublicMatchRoomRecord | undefined> {
     return this.enqueueMutation(async () => {
+      const stillCurrent = () => !shouldContinue || shouldContinue();
+      if (!stillCurrent()) return undefined;
       await this.requireAccount(accountId);
+      if (!stillCurrent()) return undefined;
       const rooms = await this.deps.store.listRooms();
+      if (!stillCurrent()) return undefined;
       const room = this.findReadyRoomForAccount(rooms, accountId);
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
       await this.requireReadyResponseWindow(rooms, room, accountId);
+      if (!stillCurrent()) return undefined;
 
       const acceptedAt = this.now();
       const ready = (room.ready ?? []).map((entry) => {
@@ -1315,7 +1508,29 @@ export class MatchmakingService {
       });
       const updatedReadyRoom: MatchRoomRecord = { ...room, ready };
       const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? updatedReadyRoom : candidate));
+      if (!stillCurrent()) return undefined;
       await this.deps.store.saveRooms(updatedRooms);
+      if (!stillCurrent()) {
+        const rollbackReadyAcceptance = async (): Promise<void> => {
+          if (this.shutdownRequested || this.backgroundTasksStopping) return;
+          const persistedRooms = await this.deps.store.listRooms();
+          const persistedRoom = persistedRooms.find((candidate) => candidate.id === room.id);
+          if (persistedRoom && JSON.stringify(persistedRoom) === JSON.stringify(updatedReadyRoom)) {
+            await this.deps.store.saveRooms(persistedRooms.map((candidate) => (candidate.id === room.id ? room : candidate)));
+          }
+        };
+        try {
+          await rollbackReadyAcceptance();
+        } catch (error) {
+          process.stderr.write("Stale ready acceptance compensation failed for " + room.id + ": " + String(error) + "\n");
+          this.scheduleStaleCompensationRetry(
+            "ready-accept:" + room.id + ":" + accountId + ":" + acceptedAt,
+            "Ready acceptance compensation",
+            async () => { await this.enqueueMutation(rollbackReadyAcceptance); },
+          );
+        }
+        return undefined;
+      }
       await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
 
       if (ready.some((entry) => !entry.ready)) {
@@ -1455,11 +1670,22 @@ export class MatchmakingService {
       let recoveryFailed = false;
       if (records?.readCompletedMatch) {
         for (const room of rooms) {
-          const completedRecord = await records.readCompletedMatch(room.id);
+          let completedRecord: CompletedMatchRecord | null | undefined;
+          try {
+            completedRecord = await records.readCompletedMatch(room.id);
+          } catch (error) {
+            recoveryFailed = true;
+            process.stderr.write(`Failed to read completed match ${room.id}: ${error instanceof Error ? error.message : String(error)}\\n`);
+            this.scheduleCommittedMatchRecoveryRetry(room.id);
+            continue;
+          }
           if (!completedRecord) continue;
           const completed = await this.reconcileCommittedMatch(rooms, room, completedRecord);
           rooms = await this.deps.store.listRooms();
-          if (!completed || completed.retryRequired) recoveryFailed = true;
+          if (!completed || completed.retryRequired) {
+            recoveryFailed = true;
+            this.scheduleCommittedMatchRecoveryRetry(room.id);
+          }
         }
       }
       const parties = await this.deps.store.listParties();
@@ -1471,7 +1697,8 @@ export class MatchmakingService {
           await this.unlockPartyForRoom(room, room.terminalStateAt ?? this.now());
         } catch (error) {
           recoveryFailed = true;
-          process.stderr.write(`Failed to recover terminal match party ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
+          process.stderr.write(`Failed to recover terminal match party ${room.id}: ${error instanceof Error ? error.message : String(error)}\\n`);
+          this.scheduleCommittedMatchRecoveryRetry(room.id);
         }
       }
       for (const room of rooms) {
@@ -1482,10 +1709,10 @@ export class MatchmakingService {
           await this.unlockPartyForRoom(room, room.terminalStateAt ?? this.now());
         } catch (error) {
           recoveryFailed = true;
-          process.stderr.write(`Failed to recover failed match artifacts ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
+          process.stderr.write(`Failed to recover failed match artifacts ${room.id}: ${error instanceof Error ? error.message : String(error)}\\n`);
         }
       }
-      if (recoveryFailed) process.stderr.write("Some match state requires another recovery attempt\n");
+      if (recoveryFailed) process.stderr.write("Some match state requires another recovery attempt\\n");
     });
   }
 
@@ -1504,9 +1731,18 @@ export class MatchmakingService {
   private scheduleCommittedMatchRecovery(matchId: string): void {
     void this.enqueueMutation(() => this.recoverCommittedMatch(matchId)).catch((error) => {
       process.stderr.write(
-        `Failed to retry completed match recovery ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`,
+        `Failed to retry completed match recovery ${matchId}: ${error instanceof Error ? error.message : String(error)}\\n`,
       );
+      this.scheduleCommittedMatchRecoveryRetry(matchId);
     });
+  }
+
+  private scheduleCommittedMatchRecoveryRetry(matchId: string): void {
+    this.scheduleStaleCompensationRetry(
+      "committed-match:" + matchId,
+      "Completed match recovery",
+      async () => { await this.enqueueMutation(() => this.recoverCommittedMatch(matchId)); },
+    );
   }
 
   async completeMatchFromServerExit(matchId: string, report: MatchServerExitReport): Promise<PublicMatchRoomRecord | undefined> {
@@ -1846,40 +2082,200 @@ export class MatchmakingService {
     const deadline = party.preload.deadlineAt;
     this.clearPartyMatchmakingTimeout(party.id);
     const timeout = this.setTimeoutFn(() => {
-      void this.startScheduledPartyMatchmaking(party.id, deadline).catch(() => undefined);
+      void this.retryScheduledPartyMatchmakingStart(party.id, deadline);
     }, Math.max(0, Date.parse(deadline) - Date.parse(this.now())));
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.partyMatchmakingTimeouts.set(party.id, { startAt: deadline, timeout });
   }
 
+  private schedulePartyMatchmakingRetry(partyId: string, deadline: string): void {
+    if (this.shutdownRequested) return;
+    this.clearPartyMatchmakingTimeout(partyId);
+    const timeout = this.setTimeoutFn(() => {
+      void this.retryScheduledPartyMatchmakingStart(partyId, deadline);
+    }, 1000);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.partyMatchmakingTimeouts.set(partyId, { startAt: deadline, timeout });
+  }
+
+  private async retryScheduledPartyMatchmakingStart(partyId: string, deadline: string): Promise<void> {
+    try {
+      await this.startScheduledPartyMatchmaking(partyId, deadline);
+      return;
+    } catch (error) {
+      process.stderr.write("Scheduled party matchmaking failed for " + partyId + ": " + String(error) + "\n");
+    }
+    if (this.shutdownRequested) return;
+
+    let party: PartyRecord | undefined;
+    try {
+      party = (await this.deps.store.listParties()).find((entry) => entry.id === partyId);
+    } catch (error) {
+      process.stderr.write("Scheduled party matchmaking state read failed for " + partyId + ": " + String(error) + "\n");
+      this.schedulePartyMatchmakingRetry(partyId, deadline);
+      return;
+    }
+    if (party?.lockedMatchId && party.preload?.deadlineAt === deadline) {
+      this.schedulePartyMatchmakingRetry(partyId, deadline);
+    } else {
+      this.clearPartyMatchmakingTimeout(partyId);
+    }
+  }
+
   private async startScheduledPartyMatchmaking(partyId: string, deadline: string): Promise<void> {
     const party = (await this.deps.store.listParties()).find((entry) => entry.id === partyId);
-    if (party?.preload?.deadlineAt !== deadline) return;
-    if (Date.parse(this.now()) < Date.parse(deadline)) { this.schedulePartyMatchmakingStart(party); return; }
+    if (!party?.lockedMatchId || party.preload?.deadlineAt !== deadline) {
+      this.clearPartyMatchmakingTimeout(partyId);
+      return;
+    }
+    if (Date.parse(this.now()) < Date.parse(deadline)) {
+      this.schedulePartyMatchmakingStart(party);
+      return;
+    }
     await this.cancelScheduledPartyMatchmaking(partyId, deadline, "preload_timeout");
   }
 
-  private async cancelScheduledPartyMatchmaking(partyId: string, deadline?: string, reason?: string): Promise<void> {
-    const matchId = await this.enqueueMutation(async () => {
+  private async cancelScheduledPartyMatchmaking(
+    partyId: string,
+    deadline?: string,
+    reason?: string,
+    shouldContinue: () => boolean = () => true,
+  ): Promise<void> {
+    const isCurrent = () => !this.shutdownRequested && shouldContinue();
+    const restorePartyIfUnchanged = async (
+      expected: PartyRecord,
+      replacement: PartyRecord,
+    ): Promise<boolean> => {
+      if (this.shutdownRequested || this.backgroundTasksStopping) return false;
       const parties = await this.deps.store.listParties();
+      const current = parties.find((entry) => entry.id === partyId);
+      if (!current || current.lockedMatchId !== expected.lockedMatchId) return false;
+      if (JSON.stringify(current) === JSON.stringify(replacement)) return true;
+      if (JSON.stringify(current) !== JSON.stringify(expected)) return false;
+      await this.deps.store.saveParties(parties.map((entry) => (entry.id === partyId ? replacement : entry)));
+      return true;
+    };
+    const restorePartyAndResumePreload = async (
+      expected: PartyRecord,
+      replacement: PartyRecord,
+    ): Promise<boolean> => {
+      const restored = await this.enqueueMutation(() => restorePartyIfUnchanged(expected, replacement));
+      if (!restored || !replacement.matchmakingPendingAt || !replacement.preload || !replacement.lockedMatchId) return restored;
+      const matchId = replacement.lockedMatchId;
+      const task = this.ensureMatchTask(matchId);
+      const previousDraft = task.draft;
+      if (previousDraft) await previousDraft;
+      let parties = await this.deps.store.listParties();
+      let current = parties.find((entry) => entry.id === partyId && entry.lockedMatchId === matchId);
+      if (!current?.draft) {
+        if (task.draft === previousDraft) task.draft = undefined;
+        await this.ensurePendingDraft(partyId, matchId);
+        parties = await this.deps.store.listParties();
+        current = parties.find((entry) => entry.id === partyId && entry.lockedMatchId === matchId);
+      }
+      if (!current?.preload
+        || current.preload.cancelled
+        || current.preload.deadlineAt !== replacement.preload.deadlineAt
+        || !current.draft) {
+        throw new Error(`Preload party ${partyId} could not be resumed with a persisted draft`);
+      }
+      this.schedulePartyMatchmakingStart(current);
+      return true;
+    };
+    const schedulePartyRestoreRetry = (key: string, expected: PartyRecord, replacement: PartyRecord): void => {
+      this.scheduleStaleCompensationRetry(key, "Preload cancellation compensation", async () => {
+        await restorePartyAndResumePreload(expected, replacement);
+      });
+    };
+
+    const cancellation = await this.enqueueMutation(async () => {
+      if (!isCurrent()) return undefined;
+      const parties = await this.deps.store.listParties();
+      if (!isCurrent()) return undefined;
       const party = parties.find((entry) => entry.id === partyId);
       if (!party?.preload || !party.lockedMatchId || (deadline && party.preload.deadlineAt !== deadline)) return undefined;
-      await this.deps.store.saveParties(parties.map((entry) => entry.id === partyId ? { ...entry, preload: { ...party.preload!, cancelled: true } } : entry));
+      const cancelledParty = { ...party, preload: { ...party.preload, cancelled: true } };
+      if (!isCurrent()) return undefined;
+      await this.deps.store.saveParties(parties.map((entry) => (entry.id === partyId ? cancelledParty : entry)));
+      if (!isCurrent()) {
+        return { resumePreload: true, cancelledParty, party };
+      }
       this.clearPartyMatchmakingTimeout(partyId);
-      return party.lockedMatchId;
+      return { matchId: party.lockedMatchId, party, cancelledParty };
     });
-    if (!matchId) return;
-    await this.stopMatchTask(matchId);
-    await this.enqueueMutation(async () => {
+
+    if (!cancellation) {
+      if (isCurrent()) this.preloadCancellationFailureEvents.delete(partyId);
+      return;
+    }
+    if ("resumePreload" in cancellation) {
+      try {
+        await restorePartyAndResumePreload(cancellation.cancelledParty, cancellation.party);
+      } catch (error) {
+        process.stderr.write("Stale preload cancellation compensation failed for " + partyId + ": " + String(error) + "\n");
+        schedulePartyRestoreRetry("preload-cancel:" + partyId + ":" + cancellation.party.lockedMatchId, cancellation.cancelledParty, cancellation.party);
+      }
+      return;
+    }
+    if (!isCurrent()) return;
+
+    await this.stopMatchTask(cancellation.matchId);
+    if (!isCurrent()) {
+      try {
+        await restorePartyAndResumePreload(cancellation.cancelledParty, cancellation.party);
+      } catch (error) {
+        process.stderr.write("Stale preload stop compensation failed for " + partyId + ": " + String(error) + "\n");
+        schedulePartyRestoreRetry("preload-stop:" + partyId + ":" + cancellation.matchId, cancellation.cancelledParty, cancellation.party);
+      }
+      return;
+    }
+
+    const unlockCompensation = await this.enqueueMutation(async () => {
+      if (!isCurrent()) return;
       const parties = await this.deps.store.listParties();
+      if (!isCurrent()) return;
       const party = parties.find((entry) => entry.id === partyId);
-      if (party?.lockedMatchId !== matchId || !party.preload?.cancelled) return;
-      if (reason) await this.emit({ type: "match_failed", matchId, accountIds: party.memberAccountIds, error: reason });
-      const updated = { ...party, lockedMatchId: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined, preload: undefined, draft: undefined, updatedAt: this.now() };
-      await this.deps.store.saveParties(parties.map((entry) => entry.id === partyId ? updated : entry));
-      await this.emitPartyUpdated(await this.toPlayerPublicParty(updated));
+      if (party?.lockedMatchId !== cancellation.matchId || !party.preload?.cancelled) {
+        if (isCurrent() && this.preloadCancellationFailureEvents.get(partyId) === cancellation.matchId) {
+          this.preloadCancellationFailureEvents.delete(partyId);
+        }
+        return;
+      }
+      if (reason && this.preloadCancellationFailureEvents.get(partyId) !== cancellation.matchId) {
+        await this.emit({ type: "match_failed", matchId: cancellation.matchId, accountIds: party.memberAccountIds, error: reason });
+        this.preloadCancellationFailureEvents.set(partyId, cancellation.matchId);
+      }
+      if (!isCurrent()) return;
+      const updated = {
+        ...party,
+        lockedMatchId: undefined,
+        matchmakingPendingAt: undefined,
+        matchmakingDev: undefined,
+        preload: undefined,
+        draft: undefined,
+        updatedAt: this.now(),
+      };
+      await this.deps.store.saveParties(parties.map((entry) => (entry.id === partyId ? updated : entry)));
+      if (!isCurrent()) return updated;
+      this.preloadCancellationFailureEvents.delete(partyId);
+      const publicParty = await this.toPlayerPublicParty(updated);
+      if (!isCurrent()) return;
+      await this.emitPartyUpdated(publicParty);
+      if (!isCurrent()) return;
       await this.emitOccupancyUpdated();
     });
+    if (unlockCompensation) {
+      try {
+        await restorePartyAndResumePreload(unlockCompensation, cancellation.party);
+      } catch (error) {
+        process.stderr.write("Stale preload unlock compensation failed for " + partyId + ": " + String(error) + "\n");
+        schedulePartyRestoreRetry(
+          "preload-unlock:" + partyId + ":" + cancellation.matchId,
+          unlockCompensation,
+          cancellation.party,
+        );
+      }
+    }
   }
 
   private clearPartyMatchmakingTimeout(partyId: string): void {
@@ -1892,9 +2288,10 @@ export class MatchmakingService {
   private schedulePartyInviteTimeout(invitation: PartyInvitationRecord): void {
     if (invitation.status !== "pending") return;
     this.clearPartyInviteTimeout(invitation.id);
+    const deadlineAt = new Date(Date.parse(invitation.createdAt) + PARTY_INVITE_TIMEOUT_MS).toISOString();
     const timeout = this.setTimeoutFn(() => {
-      void this.timeoutPartyInvite(invitation.id).catch(() => undefined);
-    }, PARTY_INVITE_TIMEOUT_MS);
+      void this.retryPartyInviteTimeout(invitation.id, deadlineAt);
+    }, Math.max(0, Date.parse(deadlineAt) - Date.parse(this.now())));
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.partyInviteTimeouts.set(invitation.id, timeout);
   }
@@ -1926,17 +2323,62 @@ export class MatchmakingService {
     this.partyInviteTimeouts.delete(invitationId);
   }
 
-  private timeoutPartyInvite(invitationId: string): Promise<void> {
+  private schedulePartyInviteRetry(invitationId: string, deadlineAt: string): void {
+    if (this.shutdownRequested) return;
+    this.clearPartyInviteTimeout(invitationId);
+    const timeout = this.setTimeoutFn(() => {
+      void this.retryPartyInviteTimeout(invitationId, deadlineAt);
+    }, 1000);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.partyInviteTimeouts.set(invitationId, timeout);
+  }
+
+  private async retryPartyInviteTimeout(invitationId: string, deadlineAt: string): Promise<void> {
+    try {
+      await this.timeoutPartyInvite(invitationId, deadlineAt);
+      return;
+    } catch (error) {
+      process.stderr.write("Party invitation expiry failed for " + invitationId + ": " + String(error) + "\n");
+    }
+    if (this.shutdownRequested) return;
+
+    let invitation: PartyInvitationRecord | undefined;
+    try {
+      invitation = (await this.deps.store.listInvitations()).find((entry) => entry.id === invitationId);
+    } catch (error) {
+      process.stderr.write("Party invitation expiry state read failed for " + invitationId + ": " + String(error) + "\n");
+      this.schedulePartyInviteRetry(invitationId, deadlineAt);
+      return;
+    }
+    const currentDeadlineAt = invitation
+      ? new Date(Date.parse(invitation.createdAt) + PARTY_INVITE_TIMEOUT_MS).toISOString()
+      : undefined;
+    if (invitation?.status === "pending" && currentDeadlineAt === deadlineAt) {
+      this.schedulePartyInviteRetry(invitationId, deadlineAt);
+    } else {
+      this.clearPartyInviteTimeout(invitationId);
+    }
+  }
+
+  private timeoutPartyInvite(invitationId: string, expectedDeadlineAt: string): Promise<void> {
     return this.enqueueMutation(async () => {
       const invitations = await this.deps.store.listInvitations();
       const invitation = invitations.find((candidate) => candidate.id === invitationId);
-      if (!invitation || invitation.status !== "pending") {
+      const deadlineAt = invitation
+        ? new Date(Date.parse(invitation.createdAt) + PARTY_INVITE_TIMEOUT_MS).toISOString()
+        : undefined;
+      if (!invitation || invitation.status !== "pending" || deadlineAt !== expectedDeadlineAt) {
         this.clearPartyInviteTimeout(invitationId);
+        return;
+      }
+      if (Date.parse(this.now()) < Date.parse(expectedDeadlineAt)) {
+        this.schedulePartyInviteTimeout(invitation);
         return;
       }
       const resolvedInvitation: PartyInvitationRecord = { ...invitation, status: "timed_out", resolvedAt: this.now() };
       const resolvedInvitations = invitations.map((candidate) => (candidate.id === invitationId ? resolvedInvitation : candidate));
       await this.deps.store.saveInvitations(resolvedInvitations);
+      this.clearPartyInviteTimeout(invitationId);
       await this.emitResolvedInvitations(invitations, resolvedInvitations);
     });
   }
@@ -1954,22 +2396,25 @@ export class MatchmakingService {
 
 
   private async emit(event: RealtimeEvent, matchId?: string): Promise<void> {
+    const emittedEvent: RealtimeEvent = event.type === "match_completed"
+      ? { ...event, eventId: `match_completed:${event.matchId}` }
+      : event;
     // A persisted completion event is the restart-recovery proof, so publish it first.
-    if (event.type === "match_completed") {
-      this.deps.events?.publish(event);
+    if (emittedEvent.type === "match_completed") {
+      this.deps.events?.publish(emittedEvent);
     }
-    if (matchId && event.type !== "match_failed") {
+    if (matchId && emittedEvent.type !== "match_failed") {
       try {
-        await this.deps.records?.appendEvent(matchId, { ...event, at: this.now() });
+        await this.deps.records?.appendEvent(matchId, { ...emittedEvent, at: this.now() });
       } catch (error) {
         process.stderr.write(
           `Failed to append match event for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`,
         );
-        if (event.type === "match_completed") throw error;
+        if (emittedEvent.type === "match_completed") throw error;
       }
     }
-    if (event.type !== "match_completed") {
-      this.deps.events?.publish(event);
+    if (emittedEvent.type !== "match_completed") {
+      this.deps.events?.publish(emittedEvent);
     }
   }
 
@@ -2290,19 +2735,53 @@ export class MatchmakingService {
   private scheduleReadyTimeout(room: MatchRoomRecord): void {
     if (room.phase !== "ready") return;
 
-    const deadlineMs = Date.parse(room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt ?? "");
+    const expectedDeadline = room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt;
+    if (!expectedDeadline) return;
+    const deadlineMs = Date.parse(expectedDeadline);
     const nowMs = Date.parse(this.now());
     if (!Number.isFinite(deadlineMs) || !Number.isFinite(nowMs)) return;
 
     this.clearReadyTimeout(room.id);
     const timeout = this.setTimeoutFn(() => {
-      void this.expireReady(room.id, room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt).catch(() => undefined);
+      void this.retryReadyExpiration(room.id, expectedDeadline);
     }, Math.max(0, deadlineMs - nowMs));
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.readyTimeouts.set(room.id, timeout);
   }
 
+  private scheduleReadyRetry(roomId: string, expectedDeadline: string): void {
+    if (this.shutdownRequested) return;
+    this.clearReadyTimeout(roomId);
+    const timer = this.setTimeoutFn(() => {
+      void this.retryReadyExpiration(roomId, expectedDeadline);
+    }, 1000);
+    if (this.unrefReadyTimeouts) timer.unref?.();
+    this.readyTimeouts.set(roomId, timer);
+  }
 
+  private async retryReadyExpiration(roomId: string, expectedDeadline: string): Promise<void> {
+    try {
+      await this.expireReady(roomId, expectedDeadline);
+    } catch (error) {
+      process.stderr.write("Ready expiry failed for " + roomId + ": " + String(error) + "\n");
+    }
+    if (this.shutdownRequested) return;
+
+    let rooms: MatchRoomRecord[];
+    try {
+      rooms = await this.deps.store.listRooms();
+    } catch (error) {
+      process.stderr.write("Ready expiry state read failed for " + roomId + ": " + String(error) + "\n");
+      this.scheduleReadyRetry(roomId, expectedDeadline);
+      return;
+    }
+
+    const room = rooms.find((entry) => entry.id === roomId);
+    const currentDeadline = room?.readyDeadlineAt ?? room?.readyPresentation?.deadlineAt;
+    if (room?.phase === "ready" && currentDeadline === expectedDeadline) {
+      this.scheduleReadyRetry(roomId, expectedDeadline);
+    }
+  }
 
   private clearReadyTimeout(roomId: string): void {
     const timeout = this.readyTimeouts.get(roomId);
@@ -2376,10 +2855,47 @@ export class MatchmakingService {
     this.clearMapReveal(room.id);
     const revealAt = room.mapSelection.revealAt;
     const timeout = this.setTimeoutFn(() => {
-      void this.revealMap(room.id, revealAt).catch(() => undefined);
+      void this.retryMapReveal(room.id, revealAt);
     }, Math.max(0, Date.parse(revealAt) - Date.parse(this.now())));
     if (this.unrefReadyTimeouts) timeout.unref?.();
     this.mapRevealTimers.set(room.id, timeout);
+  }
+
+  private scheduleMapRevealRetry(roomId: string, revealAt: string): void {
+    if (this.shutdownRequested) return;
+    this.clearMapReveal(roomId);
+    const timeout = this.setTimeoutFn(() => {
+      void this.retryMapReveal(roomId, revealAt);
+    }, 1000);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.mapRevealTimers.set(roomId, timeout);
+  }
+
+  private async retryMapReveal(roomId: string, revealAt: string): Promise<void> {
+    try {
+      await this.revealMap(roomId, revealAt);
+      return;
+    } catch (error) {
+      process.stderr.write("Map reveal failed for " + roomId + ": " + String(error) + "\n");
+    }
+    if (this.shutdownRequested) return;
+
+    let rooms: MatchRoomRecord[];
+    try {
+      rooms = await this.deps.store.listRooms();
+    } catch (error) {
+      process.stderr.write("Map reveal state read failed for " + roomId + ": " + String(error) + "\n");
+      this.scheduleMapRevealRetry(roomId, revealAt);
+      return;
+    }
+    const room = rooms.find((entry) => entry.id === roomId);
+    if (room
+      && ["map_randomizing", "server_prepare", "connect"].includes(room.phase)
+      && room.mapSelection?.revealAt === revealAt) {
+      this.scheduleMapRevealRetry(roomId, revealAt);
+    } else {
+      this.clearMapReveal(roomId);
+    }
   }
 
   private clearMapReveal(roomId: string): void {
@@ -2389,17 +2905,131 @@ export class MatchmakingService {
     this.mapRevealTimers.delete(roomId);
   }
 
+  private async waitForServerPreparation(matchId: string): Promise<void> {
+    await this.matchTasks.get(matchId)?.prepare?.catch(() => undefined);
+  }
+
+  private async prepareServerManagedRoomFailure(
+    room: MatchRoomRecord,
+    shouldContinue: () => boolean,
+  ): Promise<boolean> {
+    const revealAt = room.mapSelection?.revealAt;
+    const shutdownAlreadyConfirmed = () => revealAt !== undefined && this.serverFailureCleanupReveals.get(room.id) === revealAt;
+    const mayContinueCleanup = () => shutdownAlreadyConfirmed() || shouldContinue();
+    if (!mayContinueCleanup()) return false;
+    await this.stopMatchTask(room.id, { discardBackup: false });
+    if (!mayContinueCleanup()) return false;
+
+    if (!shutdownAlreadyConfirmed()) {
+      const requestShutdown = this.deps.executor?.requestGameServerShutdown;
+      if (!requestShutdown) {
+        throw new Error(`Cannot safely fail server-managed match ${room.id}: game server shutdown is unavailable`);
+      }
+      // After shutdown succeeds, retries must finish the irreversible cleanup even after reconnect.
+      const shutdown = await requestShutdown.call(this.deps.executor, room.id);
+      if (shutdown !== "stopped" && shutdown !== "not_owned") {
+        throw new Error(`Cannot safely fail server-managed match ${room.id}: shutdown result was ${shutdown}`);
+      }
+      this.serverFailureCleanupReveals.set(room.id, revealAt ?? "");
+    }
+
+    await this.deps.executor?.stopGameServerPresence?.(room.id);
+    return true;
+  }
+
   private revealMap(roomId: string, revealAt: string): Promise<void> {
+    let waitForServerPreparation = false;
     return this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId);
-      if (!room || (room.phase !== "map_randomizing" && room.phase !== "server_prepare" && room.phase !== "connect") || room.mapSelection?.revealAt !== revealAt) return;
+      if (!room
+        || (room.phase !== "map_randomizing" && room.phase !== "server_prepare" && room.phase !== "connect")
+        || room.mapSelection?.revealAt !== revealAt) {
+        this.clearMapReveal(roomId);
+        this.serverFailureCleanupReveals.delete(roomId);
+        return;
+      }
       if (Date.parse(this.now()) < Date.parse(revealAt)) { this.scheduleMapReveal(room); return; }
-      if (this.roomAudience(room).every((id) => this.isConfirmedOffline(id))) {
+      const cleanupAlreadyStarted = this.serverFailureCleanupReveals.get(roomId) === revealAt;
+      if (cleanupAlreadyStarted || this.roomAudience(room).every((id) => this.isConfirmedOffline(id))) {
+        if (isServerManagedPhase(room.phase)) {
+          waitForServerPreparation = true;
+          return;
+        }
         await this.failMatchRoom(rooms, room, "match_failed");
         return;
       }
-      if (room.phase === "map_randomizing") await this.saveRoomAfterMapSelected(rooms, room, room.mapSelection.finalMap);
+      if (room.phase === "map_randomizing") {
+        await this.saveRoomAfterMapSelected(rooms, room, room.mapSelection.finalMap);
+      } else {
+        this.clearMapReveal(roomId);
+      }
+    }).then(async () => {
+      if (!waitForServerPreparation) return;
+
+      // Let prepare finish outside mutationQueue; it uses the same queue to persist connect state.
+      await this.waitForServerPreparation(roomId);
+
+      const eligibleRoom = await this.enqueueMutation(async () => {
+        const rooms = await this.deps.store.listRooms();
+        const room = rooms.find((candidate) => candidate.id === roomId);
+        if (!room
+          || !isServerManagedPhase(room.phase)
+          || room.mapSelection?.revealAt !== revealAt) {
+          this.clearMapReveal(roomId);
+          return undefined;
+        }
+        if (await this.reconcileCommittedMatchIfPresent(rooms, room)) {
+          this.serverFailureCleanupReveals.delete(roomId);
+          return undefined;
+        }
+        const cleanupAlreadyStarted = this.serverFailureCleanupReveals.get(roomId) === revealAt;
+        if (!cleanupAlreadyStarted && !this.roomAudience(room).every((id) => this.isConfirmedOffline(id))) {
+          this.clearMapReveal(roomId);
+          return undefined;
+        }
+        return room;
+      });
+      if (!eligibleRoom) return;
+
+      const preparedForFailure = await this.prepareServerManagedRoomFailure(
+        eligibleRoom,
+        () => this.serverFailureCleanupReveals.get(roomId) === revealAt
+          || this.roomAudience(eligibleRoom).every((id) => this.isConfirmedOffline(id)),
+      );
+      if (!preparedForFailure) {
+        this.clearMapReveal(roomId);
+        return;
+      }
+
+      await this.enqueueMutation(async () => {
+        const rooms = await this.deps.store.listRooms();
+        const room = rooms.find((candidate) => candidate.id === roomId);
+        if (!room
+          || !isServerManagedPhase(room.phase)
+          || room.mapSelection?.revealAt !== revealAt) {
+          this.clearMapReveal(roomId);
+          this.serverFailureCleanupReveals.delete(roomId);
+          return;
+        }
+        if (await this.reconcileCommittedMatchIfPresent(rooms, room)) {
+          this.serverFailureCleanupReveals.delete(roomId);
+          return;
+        }
+
+        // Completion commit and rollback/failure transition share this queue, so either wins atomically.
+        if (room.databaseWriteStarted !== false) {
+          const backupExists = await this.databaseBackupExists(room.id);
+          if (!this.deps.databaseBackup || !backupExists) {
+            throw new Error(`Cannot safely fail server-managed match ${room.id}: required mysql backup is unavailable`);
+          }
+          const restoreError = await this.restoreMatchDatabase(room.id, { preserveBackup: true });
+          if (restoreError) throw new Error(`Cannot safely fail server-managed match ${room.id}: ${restoreError}`);
+        }
+
+        await this.failMatchRoom(rooms, room, "match_failed");
+        this.serverFailureCleanupReveals.delete(roomId);
+      });
     });
   }
 
@@ -2548,55 +3178,273 @@ export class MatchmakingService {
     return [...rooms].reverse().find((room) => !isTerminalMatchPhase(room.phase)) ?? rooms.at(-1) ?? null;
   }
 
+  private clearFailedMatchCleanupTimer(roomId: string): void {
+    const timer = this.failedMatchCleanupTimers.get(roomId);
+    if (!timer) return;
+    this.clearTimeoutFn(timer);
+    this.failedMatchCleanupTimers.delete(roomId);
+  }
+
+  private scheduleFailedMatchCleanupRetry(roomId: string): void {
+    if (this.shutdownRequested || this.backgroundTasksStopping) return;
+    const progress = this.failedMatchCleanups.get(roomId);
+    if (!progress || progress.running) return;
+    this.clearFailedMatchCleanupTimer(roomId);
+    const timeout = this.setTimeoutFn(() => {
+      if (this.failedMatchCleanupTimers.get(roomId) !== timeout) return;
+      this.failedMatchCleanupTimers.delete(roomId);
+      this.runFailedMatchCleanup(roomId);
+    }, 1000);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.failedMatchCleanupTimers.set(roomId, timeout);
+  }
+
+  private failedMatchEventOutboxEntry(
+    room: MatchRoomRecord,
+    error: unknown,
+    readyDeclinedByDisplayName?: string,
+  ): MatchFailedEventOutboxEntry {
+    return {
+      eventId: "match_failed:" + room.id,
+      matchId: room.id,
+      accountIds: this.roomAudience(room),
+      error,
+      ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
+    };
+  }
+
+  private async reconcileCommittedMatchIfPresent(
+    rooms: MatchRoomRecord[],
+    room: MatchRoomRecord,
+  ): Promise<CommittedMatchReconciliation | undefined> {
+    const committed = await this.deps.records?.readCompletedMatch?.(room.id);
+    if (!committed) return undefined;
+
+    const reconciliation = await this.reconcileCommittedMatch(rooms, room, committed);
+    this.clearReadyTimeout(room.id);
+    this.clearMapReveal(room.id);
+    if (!reconciliation || reconciliation.retryRequired) this.scheduleCommittedMatchRecovery(room.id);
+    return reconciliation ?? { room, retryRequired: true };
+  }
+
+  private async acknowledgePendingFailedMatchEvent(eventId: string, matchId: string): Promise<void> {
+    try {
+      await this.deps.store.acknowledgeMatchFailedEvent(eventId);
+      this.failedMatchCleanups.get(matchId)?.completed.add("event");
+    } catch (error) {
+      this.schedulePendingFailedEventRetry();
+      throw error;
+    }
+  }
+
+  private async deliverFailedMatchEvent(entry: MatchFailedEventOutboxEntry): Promise<void> {
+    await this.enqueueMutation(async () => {
+      const pendingEvents = await this.deps.store.listPendingMatchFailedEvents();
+      const currentEntry = pendingEvents.find((pending) => pending.eventId === entry.eventId);
+      if (!currentEntry) return;
+
+      const committed = await this.deps.records?.readCompletedMatch?.(currentEntry.matchId);
+      if (committed) {
+        const rooms = await this.deps.store.listRooms();
+        const room = rooms.find((candidate) => candidate.id === currentEntry.matchId);
+        if (room) {
+          const reconciliation = await this.reconcileCommittedMatch(rooms, room, committed);
+          if (!reconciliation || reconciliation.retryRequired) this.scheduleCommittedMatchRecovery(currentEntry.matchId);
+        }
+        await this.acknowledgePendingFailedMatchEvent(currentEntry.eventId, currentEntry.matchId);
+        return;
+      }
+
+      await this.emit({ type: "match_failed", ...currentEntry });
+      await this.acknowledgePendingFailedMatchEvent(currentEntry.eventId, currentEntry.matchId);
+    });
+  }
+
+  private schedulePendingFailedEventRetry(): void {
+    if (this.shutdownRequested || this.backgroundTasksStopping || this.pendingFailedEventRetryTimer) return;
+    const timeout = this.setTimeoutFn(() => {
+      this.pendingFailedEventRetryTimer = undefined;
+      void this.deliverPendingFailedMatchEvents();
+    }, 1000);
+    if (this.unrefReadyTimeouts) timeout.unref?.();
+    this.pendingFailedEventRetryTimer = timeout;
+  }
+
+  private async deliverPendingFailedMatchEvents(): Promise<void> {
+    if (this.shutdownRequested || this.backgroundTasksStopping) return;
+    let pending: MatchFailedEventOutboxEntry[];
+    try {
+      pending = await this.deps.store.listPendingMatchFailedEvents();
+    } catch (error) {
+      process.stderr.write("Failed to read pending match_failed outbox: " + String(error) + "\\n");
+      this.schedulePendingFailedEventRetry();
+      return;
+    }
+
+    let retryRequired = false;
+    for (const entry of pending) {
+      try {
+        // Delivery performs the authoritative completion check and all reconciliation/ack writes
+        // inside the mutation queue; this scan never acknowledges or rewrites state itself.
+        await this.deliverFailedMatchEvent(entry);
+      } catch (error) {
+        retryRequired = true;
+        process.stderr.write("Failed to deliver pending match_failed event " + entry.eventId + ": " + String(error) + "\\n");
+      }
+    }
+    if (retryRequired) this.schedulePendingFailedEventRetry();
+  }
+
+  private runFailedMatchCleanup(roomId: string): void {
+    const progress = this.failedMatchCleanups.get(roomId);
+    if (!progress || progress.running) return;
+    progress.running = true;
+
+    let pending!: Promise<void>;
+    pending = (async () => {
+      try {
+        if (!progress.completed.has("match_task")) {
+          await this.stopMatchTask(progress.room.id);
+          progress.completed.add("match_task");
+        }
+        let failedEventToDeliver: MatchFailedEventOutboxEntry | undefined;
+        await this.enqueueMutation(async () => {
+          const rooms = await this.deps.store.listRooms();
+          const current = rooms.find((entry) => entry.id === roomId);
+          if (current?.phase !== "failed") return;
+
+          const completed = await this.reconcileCommittedMatchIfPresent(rooms, current);
+          if (completed) {
+            const pendingEvents = await this.deps.store.listPendingMatchFailedEvents();
+            for (const entry of pendingEvents) {
+              if (entry.matchId === roomId) await this.acknowledgePendingFailedMatchEvent(entry.eventId, entry.matchId);
+            }
+            return;
+          }
+
+          if (!progress.completed.has("event")) {
+            const pendingEvents = await this.deps.store.listPendingMatchFailedEvents();
+            let failedEvent = pendingEvents.find((entry) => entry.matchId === roomId);
+            if (!failedEvent) {
+              failedEvent = this.failedMatchEventOutboxEntry(current, progress.reason, progress.readyDeclinedByDisplayName);
+              await this.deps.store.saveRoomsAndPendingMatchFailedEvents(rooms, [failedEvent]);
+            }
+            failedEventToDeliver = failedEvent;
+          }
+
+          if (!progress.completed.has("server_presence")) {
+            await this.clearGameServerPresenceForRoom(progress.room, progress);
+            progress.completed.add("server_presence");
+          }
+          if (!progress.completed.has("artifacts")) {
+            await this.deleteFailedMatchArtifacts(roomId);
+            progress.completed.add("artifacts");
+          }
+          if (!progress.completed.has("party_unlock")) {
+            await this.unlockPartyForRoom(current, progress.failedAt);
+            progress.completed.add("party_unlock");
+          }
+        });
+
+        if (failedEventToDeliver && !progress.completed.has("event")) {
+          await this.deliverFailedMatchEvent(failedEventToDeliver);
+          progress.completed.add("event");
+        }
+
+        if (this.failedMatchCleanups.get(roomId) === progress) {
+          this.clearFailedMatchCleanupTimer(roomId);
+          this.failedMatchCleanups.delete(roomId);
+        }
+      } catch (error) {
+        process.stderr.write(`Match cleanup failed for ${roomId}: ${String(error)}\\n`);
+        progress.running = false;
+        this.scheduleFailedMatchCleanupRetry(roomId);
+      } finally {
+        progress.running = false;
+        this.cleanupTasks.delete(pending);
+      }
+    })();
+    this.cleanupTasks.add(pending);
+  }
+
   private async failMatchRoom(
     rooms: MatchRoomRecord[],
     room: MatchRoomRecord,
     reason: "match_failed",
     readyDeclinedByDisplayName?: string,
+    shouldContinue: () => boolean = () => true,
   ): Promise<MatchRoomRecord> {
+    if (this.shutdownRequested || !shouldContinue()) return room;
+
+    const committed = await this.reconcileCommittedMatchIfPresent(rooms, room);
+    if (committed) return committed.room;
+    if (this.shutdownRequested || !shouldContinue()) return room;
+
     const failedAt = this.now();
     const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
+    const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
+    if (this.shutdownRequested || !shouldContinue()) return room;
+    const failedEvent = this.failedMatchEventOutboxEntry(failedRoom, reason, readyDeclinedByDisplayName);
+    await this.deps.store.saveRoomsAndPendingMatchFailedEvents(updatedRooms, [failedEvent]);
+
+    if (this.shutdownRequested || !shouldContinue()) {
+      const restoreFailedRoom = async (): Promise<void> => {
+        if (this.shutdownRequested || this.backgroundTasksStopping) return;
+        const persistedRooms = await this.deps.store.listRooms();
+        const persistedRoom = persistedRooms.find((candidate) => candidate.id === room.id);
+        if (persistedRoom && JSON.stringify(persistedRoom) === JSON.stringify(failedRoom)) {
+          await this.deps.store.saveRoomsAndAcknowledgeMatchFailedEvent(
+            persistedRooms.map((candidate) => (candidate.id === room.id ? room : candidate)),
+            failedEvent.eventId,
+          );
+        }
+      };
+      try {
+        await restoreFailedRoom();
+      } catch (error) {
+        process.stderr.write("Stale failed-room compensation failed for " + room.id + ": " + String(error) + "\n");
+        this.scheduleStaleCompensationRetry(
+          "failed-room:" + room.id + ":" + failedAt,
+          "Failed-room compensation",
+          async () => { await this.enqueueMutation(restoreFailedRoom); },
+        );
+      }
+      return room;
+    }
+
     if (room.partyId) this.clearPartyMatchmakingTimeout(room.partyId);
     this.clearReadyTimeout(room.id);
     this.clearMapReveal(room.id);
-    const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
-    await this.deps.store.saveRooms(updatedRooms);
-    const cleanup = async () => {
-      await this.stopMatchTask(room.id);
-      await this.enqueueMutation(async () => {
-        const current = (await this.deps.store.listRooms()).find((entry) => entry.id === room.id);
-        if (current?.phase !== "failed") return;
-        await this.clearGameServerPresenceForRoom(room);
-        await this.deleteFailedMatchArtifacts(room.id);
-        await this.unlockPartyForRoom(current, failedAt);
-        await this.emit({
-          type: "match_failed",
-          matchId: room.id,
-          accountIds: this.roomAudience(current),
-          error: reason,
-          ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
-        });
+    if (!this.failedMatchCleanups.has(room.id)) {
+      this.failedMatchCleanups.set(room.id, {
+        room,
+        failedAt,
+        reason,
+        ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
+        completed: new Set(),
+        publishedServerPresenceAccountIds: new Set(),
+        running: false,
       });
-    };
-    const pending = cleanup().catch((error: unknown) => { process.stderr.write(`Match cleanup failed for ${room.id}: ${String(error)}\n`); });
-    this.cleanupTasks.add(pending);
-    void pending.finally(() => this.cleanupTasks.delete(pending));
+    }
+    this.runFailedMatchCleanup(room.id);
     return failedRoom;
   }
 
-  private async clearGameServerPresenceForRoom(room: MatchRoomRecord): Promise<void> {
+  private async clearGameServerPresenceForRoom(
+    room: MatchRoomRecord,
+    progress: FailedMatchCleanupProgress,
+  ): Promise<void> {
     if (!isServerManagedPhase(room.phase)) return;
-    try {
+    if (!progress.serverPresenceChanges) {
       const presence = this.deps.presence;
-      if (presence) await this.publishGamePresenceChanges(presence.replaceInGameAccounts([]));
-    } catch (error) {
-      process.stderr.write(
-        `Failed to clear game server presence for ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`,
-      );
+      progress.serverPresenceChanges = presence ? [...presence.replaceInGameAccounts([])] : [];
     }
-    void Promise.resolve()
-      .then(() => this.deps.executor?.stopGameServerPresence?.(room.id))
-      .catch(() => undefined);
+    for (const change of progress.serverPresenceChanges) {
+      if (progress.publishedServerPresenceAccountIds.has(change.accountId)) continue;
+      await this.publishGamePresenceChanges([change]);
+      progress.publishedServerPresenceAccountIds.add(change.accountId);
+    }
+    await this.deps.executor?.stopGameServerPresence?.(room.id);
   }
 
   private async publishGamePresenceChanges(changes: readonly GamePresenceChange[]): Promise<void> {

@@ -48,10 +48,11 @@ export type RealtimeEvent =
   | RealtimeEventWithSeq<{ type: "server_preparing"; matchId: string; accountIds?: string[] }>
   | RealtimeEventWithSeq<{ type: "connect_ready"; matchId: string; accountIds?: string[]; connect: MatchConnectInfo }>
   | RealtimeEventWithSeq<{ type: "match_live"; matchId: string; accountIds?: string[] }>
-  | RealtimeEventWithSeq<{ type: "match_completed"; matchId: string; accountIds?: string[]; result?: unknown }>
+  | RealtimeEventWithSeq<{ type: "match_completed"; matchId: string; eventId?: string; accountIds?: string[]; result?: unknown }>
   | RealtimeEventWithSeq<{
       type: "match_failed";
       matchId: string;
+      eventId?: string;
       accountIds?: string[];
       error: unknown;
       readyDeclinedByDisplayName?: string;

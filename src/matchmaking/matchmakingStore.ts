@@ -98,9 +98,18 @@ interface PartyInvitationsFile {
   invitations: PartyInvitationRecord[];
 }
 
+export interface MatchFailedEventOutboxEntry {
+  eventId: string;
+  matchId: string;
+  accountIds: string[];
+  error: unknown;
+  readyDeclinedByDisplayName?: string;
+}
+
 interface RoomsFile {
   rooms: MatchRoomRecord[];
   pendingBackupCleanupMatchIds?: string[];
+  pendingMatchFailedEvents?: MatchFailedEventOutboxEntry[];
 }
 
 export class MatchmakingStore {
@@ -156,6 +165,59 @@ export class MatchmakingStore {
     return this.enqueueRoomWrite(async () => {
       const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
       await writeJsonFileAtomic(this.roomsPath, { ...file, rooms });
+    });
+  }
+
+  saveRoomsAndPendingMatchFailedEvents(
+    rooms: MatchRoomRecord[],
+    events: MatchFailedEventOutboxEntry[],
+  ): Promise<void> {
+    return this.enqueueRoomWrite(async () => {
+      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
+      const pending = file.pendingMatchFailedEvents ?? [];
+      const seenEventIds = new Set(pending.map((event) => event.eventId));
+      const nextPending = [...pending];
+      for (const event of events) {
+        if (seenEventIds.has(event.eventId)) continue;
+        seenEventIds.add(event.eventId);
+        nextPending.push(event);
+      }
+      await writeJsonFileAtomic(this.roomsPath, {
+        ...file,
+        rooms,
+        pendingMatchFailedEvents: nextPending,
+      });
+    });
+  }
+
+  listPendingMatchFailedEvents(): Promise<MatchFailedEventOutboxEntry[]> {
+    return readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] })
+      .then((file) => file.pendingMatchFailedEvents ?? []);
+  }
+
+  acknowledgeMatchFailedEvent(eventId: string): Promise<void> {
+    return this.enqueueRoomWrite(async () => {
+      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
+      const pending = file.pendingMatchFailedEvents ?? [];
+      if (!pending.some((event) => event.eventId === eventId)) return;
+      await writeJsonFileAtomic(this.roomsPath, {
+        ...file,
+        pendingMatchFailedEvents: pending.filter((event) => event.eventId !== eventId),
+      });
+    });
+  }
+
+  saveRoomsAndAcknowledgeMatchFailedEvent(
+    rooms: MatchRoomRecord[],
+    eventId: string,
+  ): Promise<void> {
+    return this.enqueueRoomWrite(async () => {
+      const file = await readJsonFile<RoomsFile>(this.roomsPath, { rooms: [] });
+      await writeJsonFileAtomic(this.roomsPath, {
+        ...file,
+        rooms,
+        pendingMatchFailedEvents: (file.pendingMatchFailedEvents ?? []).filter((event) => event.eventId !== eventId),
+      });
     });
   }
 
