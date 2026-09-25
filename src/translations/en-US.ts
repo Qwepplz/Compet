@@ -56,7 +56,7 @@ export const enUS = {
   "common.labels.adr": "ADR",
   "common.labels.hsPercent": "HS%",
   "common.labels.bo1": "BO1",
-  "common.labels.devMode": "Developer mode (fixed roster)",
+  "common.labels.devMode": "Developer mode",
   "common.time.justNow": "Just now",
   "common.time.minutesAgo": "{count} minutes ago",
   "common.time.hoursAgo": "{count} hours ago",

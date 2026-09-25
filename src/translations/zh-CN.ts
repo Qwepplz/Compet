@@ -60,7 +60,7 @@ export const zhCN = {
   "common.labels.adr": "ADR",
   "common.labels.hsPercent": "HS%",
   "common.labels.bo1": "BO1",
-  "common.labels.devMode": "开发模式（固定阵容）",
+  "common.labels.devMode": "开发模式",
   "common.time.justNow": "刚刚",
   "common.time.minutesAgo": "{count} 分钟前",
   "common.time.hoursAgo": "{count} 小时前",
