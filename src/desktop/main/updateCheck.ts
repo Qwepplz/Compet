@@ -4,7 +4,7 @@ import { access, copyFile, mkdir, readFile, realpath, rm, stat, writeFile } from
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { app } from "electron";
-import { getInstallRoot } from "./installLayout.js";
+import { getInstallRoot, isInstalledClientLayout } from "./installLayout.js";
 import type { IntegrityProgress, IntegrityReport, UpdateCheckResult, UpdateInstallResult } from "../updateTypes.js";
 
 export type { UpdateCheckResult, UpdateInstallResult };
@@ -348,10 +348,43 @@ async function performIntegrityCheck(): Promise<IntegrityReport> {
   const timer = setTimeout(() => controller.abort(), 30000);
   try {
     if (installing) throw updateError("update_busy", "Update is running");
-    if (!app.isPackaged || !isSemver(version)) throw updateError("integrity_unavailable", "Integrity verification requires an installed release");
+    if (!isSemver(version) || !isInstalledClientLayout(app.getAppPath(), app.getPath("exe"))) {
+      throw updateError("integrity_unavailable", "Integrity verification requires a supported client installation");
+    }
+    const readInstalledPackage = async (): Promise<{ name?: unknown; version?: unknown }> => {
+      try {
+        const value: unknown = JSON.parse(await awaitIntegrityOperation(
+          () => readFile(path.join(app.getAppPath(), "package.json"), "utf8"),
+          controller.signal,
+        ));
+        if (!value || typeof value !== "object" || Array.isArray(value)) {
+          throw new Error("Invalid installed package");
+        }
+        return value as { name?: unknown; version?: unknown };
+      } catch {
+        controller.signal.throwIfAborted();
+        throw updateError("integrity_installation_invalid", "Unable to read the installed client package");
+      }
+    };
+    const installedBefore = await readInstalledPackage();
+    if (installedBefore.name !== "compet-player-client" || installedBefore.version !== version) {
+      throw updateError("integrity_installation_invalid", "Installed package identity does not match the running client");
+    }
     const manifestUrl = new URL("releases/" + encodeURIComponent(version) + "/manifest.json", latestUrls["compet-player-client"]).toString();
     ensureSameOrigin(latestUrls["compet-player-client"]!, manifestUrl);
-    const manifest = await fetchJson<ManifestPayload>(manifestUrl, controller.signal);
+    let manifest: ManifestPayload;
+    try {
+      manifest = await fetchJson<ManifestPayload>(manifestUrl, controller.signal);
+    } catch (error) {
+      controller.signal.throwIfAborted();
+      if (error instanceof SyntaxError) {
+        throw updateError("integrity_manifest_invalid", "Integrity manifest is not valid JSON");
+      }
+      throw updateError("integrity_manifest_unavailable", "Unable to retrieve the current-version integrity manifest");
+    }
+    if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
+      throw updateError("integrity_manifest_invalid", "Invalid integrity manifest");
+    }
     if (manifest.appId !== "compet-player-client" || manifest.version !== version || manifest.platform !== "win32-x64") throw updateError("integrity_manifest_mismatch", "Manifest does not match this installation");
 
     if (!Array.isArray(manifest.files) || manifest.files.length === 0) throw updateError("integrity_manifest_invalid", "Manifest has no managed files");
@@ -398,8 +431,13 @@ async function performIntegrityCheck(): Promise<IntegrityReport> {
       report.checkedFiles++;
       publish();
     }
-    const installed = JSON.parse(await awaitIntegrityOperation(() => readFile(path.join(app.getAppPath(), "package.json"), "utf8"), controller.signal)) as { version?: unknown };
-    if (app.getVersion() !== version || installed.version !== version) throw updateError("integrity_version_changed", "Installation version changed during verification");
+    const installed = await readInstalledPackage();
+    if (app.getVersion() !== version || installed.version !== version) {
+      throw updateError("integrity_version_changed", "Installation version changed during verification");
+    }
+    if (installed.name !== "compet-player-client") {
+      throw updateError("integrity_installation_invalid", "Installed client identity changed during verification");
+    }
     controller.signal.throwIfAborted();
     report.status = report.issues.some((issue) => issue.kind === "read_failed") ? "unavailable" : report.issues.length ? "issues" : "passed";
   } catch (error) {

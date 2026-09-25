@@ -18,6 +18,19 @@ const errorKeys = {
   resource_not_found: "errors.resourceNotFound",
   service_unavailable: "errors.serviceUnavailable",
   match_failed: "errors.matchFailed",
+  integrity_unavailable: "player.integrity.environmentUnsupported",
+  integrity_installation_invalid: "player.integrity.installationInvalid",
+  integrity_manifest_unavailable: "player.integrity.manifestUnavailable",
+  integrity_manifest_mismatch: "player.integrity.versionMismatch",
+  integrity_version_changed: "player.integrity.versionMismatch",
+  integrity_manifest_invalid: "player.integrity.manifestInvalid",
+  update_manifest_file_invalid: "player.integrity.manifestInvalid",
+  update_manifest_path_or_hash_invalid: "player.integrity.manifestInvalid",
+  update_file_url_invalid: "player.integrity.manifestInvalid",
+  update_manifest_origin_invalid: "player.integrity.manifestInvalid",
+  integrity_timeout: "player.integrity.timeout",
+  integrity_path_outside: "player.integrity.pathOutside",
+  update_busy: "player.integrity.busy",
 } satisfies Record<string, TranslationKey>;
 
 function errorCode(error: unknown): string | undefined {

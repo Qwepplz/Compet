@@ -447,7 +447,7 @@ export function App() {
     try {
       setIntegrityReport(await window.playerApi.verifyIntegrity());
     } catch {
-      setIntegrityReport({ version: currentVersion, checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [] });
+      setIntegrityReport({ version: currentVersion, checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [], error: "integrity_failed" });
     } finally {
       unsubscribe();
       integrityRunning.current = false;
@@ -1956,7 +1956,9 @@ export function App() {
                         {integrityReport ? (
                           <div role="status" className="player-integrity-result">
                             <div>{t(`player.integrity.${integrityReport.status}`)}</div>
-                            {integrityReport.error ? <div>{t("player.integrity.retry")}</div> : null}
+                            {integrityReport.error ? (
+                              <div>{displayError({ code: integrityReport.error }, t, "player.integrity.retry")}</div>
+                            ) : null}
                             {integrityReport.issues.length ? (
                               <ul>{integrityReport.issues.map((issue) => <li key={issue.path}>{issue.path}: {t(`player.integrity.${issue.kind}`)}</li>)}</ul>
                             ) : null}
