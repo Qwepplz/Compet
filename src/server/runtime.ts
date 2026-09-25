@@ -60,6 +60,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       config.tokenTtlMinutes,
     );
 
+    await sessions.revokePlayerSessions();
     await bootstrapAdmin(accounts, path.join(config.dataDir, "bootstrap-admin.json"));
 
     const records = new MatchRecordStore(recordsDir, database);
@@ -171,8 +172,15 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     });
     app.addHook("onClose", async () => {
       closeOfflineCleanup();
-      await matchmakingService.stopBackgroundTasks();
-      database.close();
+      const errors: unknown[] = [];
+      try { await matchmakingService.stopBackgroundTasks(); }
+      catch (error) { errors.push(error); }
+      try { await sessions.revokePlayerSessions(); }
+      catch (error) { errors.push(error); }
+      try { database.close(); }
+      catch (error) { errors.push(error); }
+      if (errors.length === 1) throw errors[0];
+      if (errors.length > 1) throw new AggregateError(errors, "Service close failed");
     });
 
     let closePromise: Promise<ServiceShutdownSummary> | undefined;

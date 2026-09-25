@@ -121,6 +121,15 @@ export class SessionRepository {
     return result.changes > 0;
   }
 
+  async revokePlayerSessions(revokedAt: string): Promise<number> {
+    const result = this.database.prepare(
+      "UPDATE sessions SET revoked_at = ? " +
+      "WHERE revoked_at IS NULL " +
+      "AND account_id IN (SELECT id FROM accounts WHERE role = 'player')",
+    ).run(revokedAt);
+    return Number(result.changes);
+  }
+
   async revokeForAccount(accountId: string, revokedAt: string): Promise<number> {
     const result = this.database.prepare(
       "UPDATE sessions SET revoked_at = ? WHERE account_id = ? AND revoked_at IS NULL",

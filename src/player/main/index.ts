@@ -12,12 +12,13 @@ import type {
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
 import type { AccountView } from "../../manager/shared/types.js";
-import { registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
+import { createPlayerApiClient, registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
+import type { AuthRetryController } from "./authRetry.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
 import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
 import { getRealtimeStatusAfterPollFailure, shouldApplyRealtimePollFailure } from "./realtimeStatus.js";
-import { revokePlayerSessionForExit } from "./sessionShutdown.js";
+import { revokePlayerSession } from "./sessionShutdown.js";
 import { translate } from "../../language/translate.js";
 
 const bootLogFile = "compet-player-client-boot.log";
@@ -49,6 +50,8 @@ const REALTIME_EVENT_POLL_TIMEOUT_MS = 25_000;
 const REALTIME_EVENT_POLL_RETRY_MS = 1_000;
 
 let apiClient: PlayerApiClient | undefined;
+let authRetryController: AuthRetryController | undefined;
+let sessionCleanupTask: Promise<void> | undefined;
 let mainWindow: BrowserWindow | undefined;
 let realtimeSessionVersion = 0;
 let connectedInCurrentSession = false;
@@ -221,7 +224,8 @@ async function performRealtimeSnapshotRefresh(): Promise<void> {
   const sessionVersion = realtimeSessionVersion;
   pauseRealtimeEvents = true;
   try {
-    const snapshot = await currentApiClient().fetchRealtimeSnapshot();
+    if (!authRetryController) return;
+    const snapshot = await authRetryController.run((client) => client.fetchRealtimeSnapshot());
     if (sessionVersion !== realtimeSessionVersion) {
       return;
     }
@@ -328,7 +332,10 @@ async function pollRealtimeEvents(sessionVersion: number, pollGeneration: number
   ) {
     const pollStartedStatusRevision = realtimeStatusRevision;
     try {
-      const result = await currentApiClient().fetchRealtimeEvents(lastDeliveredRealtimeSeq, REALTIME_EVENT_POLL_TIMEOUT_MS);
+      if (!authRetryController) return;
+      const result = await authRetryController.run(
+        (client) => client.fetchRealtimeEvents(lastDeliveredRealtimeSeq, REALTIME_EVENT_POLL_TIMEOUT_MS),
+      );
       if (
         sessionVersion !== realtimeSessionVersion
         || pollGeneration !== realtimePollGeneration
@@ -472,7 +479,7 @@ if (!gotSingleInstanceLock) {
 
   app.whenReady().then(async () => {
     registerWindowIpc();
-    registerPlayerIpc({
+    authRetryController = registerPlayerIpc({
       clearSession,
       connectRealtime,
       disconnectRealtime,
@@ -505,16 +512,22 @@ if (!gotSingleInstanceLock) {
 }
 
 app.on("before-quit", (event) => {
-  if (quitAfterSessionCleanup || !apiClient) return;
+  if (quitAfterSessionCleanup || (!authRetryController && !apiClient)) return;
   event.preventDefault();
-  void revokePlayerSessionForExit({
-    clearSession,
-    disconnectRealtime,
-    getApiClient: () => apiClient,
-    setApiClient: (client) => {
-      apiClient = client;
-    },
-  }).finally(() => {
+  if (sessionCleanupTask) return;
+  sessionCleanupTask = (async () => {
+    await authRetryController?.suspend();
+    await revokePlayerSession({
+      loadSession,
+      createApiClient: (baseUrl, token) => createPlayerApiClient(baseUrl, token, { sendRealtimeCommand }),
+      clearSession,
+      disconnectRealtime,
+      getApiClient: () => apiClient,
+      setApiClient: (client) => {
+        apiClient = client;
+      },
+    }).catch(() => undefined);
+  })().finally(() => {
     quitAfterSessionCleanup = true;
     app.quit();
   });

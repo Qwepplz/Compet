@@ -1,8 +1,9 @@
 import { clipboard, ipcMain, shell } from "electron";
-import type { PlayerFriendSearchResultDto, PlayerMatchmakingStateDto } from "../shared/types.js";
-import { isSessionInvalidError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
+import type { PlayerFriendSearchResultDto, PlayerLoginIpcResult, PlayerMatchmakingStateDto } from "../shared/types.js";
+import { isSessionInvalidError, PlayerApiError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { RemoteProfileService } from "./remoteProfileService.js";
-import { withAuthRetry } from "./authRetry.js";
+import { createAuthRetry, type AuthRetryController } from "./authRetry.js";
+import { revokePlayerSession } from "./sessionShutdown.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
 import { checkForUpdates, getCurrentVersion, installUpdate, verifyClientIntegrity } from "../../desktop/main/updateCheck.js";
 import type { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
@@ -100,8 +101,24 @@ export function setProfilesUpdatedHandler(handler: () => void): void {
   profilesUpdatedHandler = handler;
 }
 
-function createPlayerApiClient(baseUrl: string, token: string | undefined, deps: IpcDeps): PlayerApiClient {
+export function createPlayerApiClient(baseUrl: string, token: string | undefined, deps: Pick<IpcDeps, "sendRealtimeCommand">): PlayerApiClient {
   return new PlayerApiClient(baseUrl, token, sharedProfileService, deps.sendRealtimeCommand);
+}
+
+async function withSavedSession<T>(
+  deps: IpcDeps,
+  assertCurrent: () => void,
+  operation: (persisted: PersistedSession | null) => Promise<T>,
+): Promise<T> {
+  const persisted = await deps.loadSession();
+  try { assertCurrent(); }
+  catch (error) {
+    if (persisted?.token) {
+      await createPlayerApiClient(persisted.baseUrl, persisted.token, deps).logout().catch(() => undefined);
+    }
+    throw error;
+  }
+  return operation(persisted);
 }
 
 async function restorePersistedPlayerSession(
@@ -109,12 +126,22 @@ async function restorePersistedPlayerSession(
   persisted: PersistedSession & { token: string },
   timeoutMs?: number,
   assertWithinDeadline: () => void = () => undefined,
+  assertCurrent: () => void = () => undefined,
 ): Promise<PlayerAuthenticatedSession> {
   const client = createPlayerApiClient(persisted.baseUrl, persisted.token, deps);
   if (persisted.username && persisted.password) {
     client.setLoginCredentials(persisted.username, persisted.password);
   }
-  const restored = await client.restoreSession(timeoutMs);
+  let restored: RestoredPlayerSession;
+  try {
+    restored = await client.restoreSession(timeoutMs);
+  } finally {
+    try { assertCurrent(); }
+    catch (error) {
+      await client.logout().catch(() => undefined);
+      throw error;
+    }
+  }
   assertWithinDeadline();
   deps.setApiClient(client);
   deps.connectRealtime(persisted.baseUrl, persisted.token);
@@ -128,9 +155,11 @@ async function authenticateAndRestorePlayer(
   password: string,
   remainingTimeout: () => number | undefined = () => undefined,
   assertWithinDeadline: () => void = () => undefined,
+  preserveRuntimeOnFailure = false,
 ): Promise<PlayerAuthenticatedSession> {
   const client = createPlayerApiClient(baseUrl, undefined, deps);
   try {
+    assertWithinDeadline();
     const loginResult = await client.login(username, password, remainingTimeout());
     assertWithinDeadline();
     const restored = loginResult.account.mustChangePassword
@@ -156,53 +185,111 @@ async function authenticateAndRestorePlayer(
         await deps.saveSession({ baseUrl, token: rollbackToken, username, password }).catch(() => undefined);
       }
     }
-    clearPlayerRuntime(deps);
+    if (!preserveRuntimeOnFailure) clearPlayerRuntime(deps);
     throw error;
   }
 }
 
-function withSavedAuth<T>(deps: IpcDeps, operation: (client: PlayerApiClient) => Promise<T>): Promise<T> {
-  return withAuthRetry({
-    ...deps,
-    createPlayerApiClient: (baseUrl, token) => createPlayerApiClient(baseUrl, token, deps),
-  }, operation);
-}
-
-export function registerPlayerIpc(deps: IpcDeps): void {
+export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
+  const controller = createAuthRetry({
+    getApiClient: deps.getApiClient,
+    recover: async (assertCurrent) => {
+      const current = deps.getApiClient();
+      const persisted = await deps.loadSession();
+      assertCurrent();
+      const credentials = current.getLoginCredentials();
+      const baseUrl = current.getBaseUrl() || persisted?.baseUrl;
+      const username = credentials?.username || persisted?.username;
+      const password = credentials?.password || persisted?.password;
+      if (!baseUrl) return false;
+      const token = persisted?.baseUrl === baseUrl ? persisted.token : current.getToken();
+      if (token) {
+        try {
+          await restorePersistedPlayerSession(deps, { baseUrl, token, username, password }, undefined, assertCurrent);
+          return true;
+        } catch (error) {
+          assertCurrent();
+          if (!isSessionInvalidError(error)) throw error;
+        }
+      }
+      if (!username || !password) return false;
+      try {
+        await authenticateAndRestorePlayer(deps, baseUrl, username, password, () => undefined, assertCurrent, true);
+        return true;
+      } catch (error) {
+        assertCurrent();
+        if (error instanceof PlayerApiError && (error.statusCode === 401 || error.statusCode === 409)) return false;
+        throw error;
+      }
+    },
+  });
+  const withSavedAuth = <T>(operation: (client: PlayerApiClient) => Promise<T>): Promise<T> => controller.run(operation);
   ipcMain.handle("language:load", () => deps.languageStore.load());
   ipcMain.handle("language:save", (_event, language: unknown) => {
     if (!isSupportedLanguage(language)) throw playerOperationError("language_unsupported", "Unsupported language", TypeError);
     return deps.languageStore.save(language);
   });
 
-  ipcMain.handle("auth:login", async (_event, baseUrl: string, username: string, password: string) => {
-    const persisted = await deps.loadSession();
-    const persistedToken = persisted?.token;
-    if (
-      persistedToken
-      && persisted.baseUrl === baseUrl
-      && persisted.username === username
-      && persisted.password === password
-    ) {
-      try {
-        return await restorePersistedPlayerSession(deps, { ...persisted, token: persistedToken });
-      } catch (error) {
-        if (!isSessionInvalidError(error)) throw error;
-        clearPlayerRuntime(deps);
-        await deps.clearSession();
-      }
+  ipcMain.handle("auth:login", async (_event, baseUrl: string, username: string, password: string): Promise<PlayerLoginIpcResult<PlayerAuthenticatedSession>> => {
+    try {
+      return await controller.authenticate(async (assertCurrent, previous) => {
+        await previous;
+        return withSavedSession(deps, assertCurrent, async (persisted) => {
+          const persistedToken = persisted?.token;
+          if (
+            persistedToken
+            && persisted.baseUrl === baseUrl
+            && persisted.username === username
+            && persisted.password === password
+          ) {
+            try {
+              const restored = await restorePersistedPlayerSession(deps, { ...persisted, token: persistedToken }, undefined, assertCurrent, assertCurrent);
+              controller.resume();
+              return { ok: true, value: restored };
+            } catch (error) {
+              if (!isSessionInvalidError(error)) throw error;
+              clearPlayerRuntime(deps);
+              await deps.clearSession();
+            }
+          }
+          const restored = await authenticateAndRestorePlayer(deps, baseUrl, username, password, () => undefined, assertCurrent);
+          controller.resume();
+          return { ok: true, value: restored };
+        });
+      });
+    } catch (error) {
+      const details = error && typeof error === "object" ? error as { code?: unknown; statusCode?: unknown } : {};
+      const statusCode = typeof details.statusCode === "number" && Number.isFinite(details.statusCode)
+        ? details.statusCode : undefined;
+      const rawCode = typeof details.code === "string" ? details.code : "";
+      const knownCode = [
+        "account_already_logged_in", "account_disabled", "manager_login_required",
+        "player_login_required", "login_rate_limited", "invalid_credentials", "service_unavailable",
+      ].includes(rawCode);
+      const unavailable = statusCode === 503 || [
+        "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH",
+      ].includes(rawCode);
+      return {
+        ok: false,
+        error: {
+          code: knownCode ? rawCode : unavailable ? "service_unavailable" : "login_failed",
+          message: "Login failed",
+          ...(statusCode === undefined ? {} : { statusCode }),
+        },
+      };
     }
-    return authenticateAndRestorePlayer(deps, baseUrl, username, password);
   });
 
   ipcMain.handle("auth:logout", async () => {
-    try {
-      await deps.getApiClient().logout();
-    } finally {
-      deps.disconnectRealtime();
-      deps.setApiClient(undefined);
-      await deps.clearSession();
-    }
+    await controller.suspend();
+    await revokePlayerSession({
+      ...deps,
+      getApiClient: () => {
+        try { return deps.getApiClient(); }
+        catch { return undefined; }
+      },
+      createApiClient: (baseUrl, token) => createPlayerApiClient(baseUrl, token, deps),
+    });
   });
 
   ipcMain.handle("auth:changePassword", async (_event, currentPassword: string, newPassword: string) => {
@@ -213,35 +300,35 @@ export function registerPlayerIpc(deps: IpcDeps): void {
     }
   });
 
-  ipcMain.handle("friends:search", (_event, query: string) => withSavedAuth(deps, (client) => client.searchFriends(query)));
-  ipcMain.handle("friends:reenrich", (_event, results: PlayerFriendSearchResultDto[]) => withSavedAuth(deps, (client) => client.reenrichFriendSearchResults(results)));
-  ipcMain.handle("friends:list", () => withSavedAuth(deps, (client) => client.listFriends()));
-  ipcMain.handle("rankme:standing", () => withSavedAuth(deps, (client) => client.getRankmeStanding()));
-  ipcMain.handle("matches:history", (_event, accountId?: string, page?: number) => withSavedAuth(deps, (client) => client.listMatchHistory(accountId, page)));
-  ipcMain.handle("matches:result", (_event, matchId: string, accountId?: string) => withSavedAuth(deps, (client) => client.getMatchHistoryResult(matchId, accountId)));
-  ipcMain.handle("friends:request", (_event, accountId: string) => withSavedAuth(deps, (client) => client.sendFriendRequest(accountId)));
-  ipcMain.handle("friends:acceptRequest", (_event, requestId: string) => withSavedAuth(deps, (client) => client.acceptFriendRequest(requestId)));
-  ipcMain.handle("friends:declineRequest", (_event, requestId: string) => withSavedAuth(deps, (client) => client.declineFriendRequest(requestId)));
-  ipcMain.handle("friends:remove", (_event, friendshipId: string) => withSavedAuth(deps, (client) => client.removeFriend(friendshipId)));
+  ipcMain.handle("friends:search", (_event, query: string) => withSavedAuth((client) => client.searchFriends(query)));
+  ipcMain.handle("friends:reenrich", (_event, results: PlayerFriendSearchResultDto[]) => withSavedAuth((client) => client.reenrichFriendSearchResults(results)));
+  ipcMain.handle("friends:list", () => withSavedAuth((client) => client.listFriends()));
+  ipcMain.handle("rankme:standing", () => withSavedAuth((client) => client.getRankmeStanding()));
+  ipcMain.handle("matches:history", (_event, accountId?: string, page?: number) => withSavedAuth((client) => client.listMatchHistory(accountId, page)));
+  ipcMain.handle("matches:result", (_event, matchId: string, accountId?: string) => withSavedAuth((client) => client.getMatchHistoryResult(matchId, accountId)));
+  ipcMain.handle("friends:request", (_event, accountId: string) => withSavedAuth((client) => client.sendFriendRequest(accountId)));
+  ipcMain.handle("friends:acceptRequest", (_event, requestId: string) => withSavedAuth((client) => client.acceptFriendRequest(requestId)));
+  ipcMain.handle("friends:declineRequest", (_event, requestId: string) => withSavedAuth((client) => client.declineFriendRequest(requestId)));
+  ipcMain.handle("friends:remove", (_event, friendshipId: string) => withSavedAuth((client) => client.removeFriend(friendshipId)));
 
-  ipcMain.handle("party:get", () => withSavedAuth(deps, (client) => client.getParty()));
-  ipcMain.handle("party:create", () => withSavedAuth(deps, (client) => client.createParty()));
-  ipcMain.handle("party:invite", (_event, accountId: string) => withSavedAuth(deps, (client) => client.inviteToParty(accountId)));
-  ipcMain.handle("party:acceptInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.acceptPartyInvite(invitationId)));
-  ipcMain.handle("party:declineInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.declinePartyInvite(invitationId)));
-  ipcMain.handle("party:ignoreInvite", (_event, invitationId: string) => withSavedAuth(deps, (client) => client.ignorePartyInvite(invitationId)));
-  ipcMain.handle("party:leave", () => withSavedAuth(deps, (client) => client.leaveParty()));
-  ipcMain.handle("party:preloadReady", (_event, matchId: string, resourceVersion: string) => withSavedAuth(deps, (client) => client.acknowledgePreload(matchId, resourceVersion)));
-  ipcMain.handle("match:readyViewReady", (_event, matchId: string, token: string) => withSavedAuth(deps, (client) => client.acknowledgeReadyView(matchId, token)));
-  ipcMain.handle("party:beginMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth(deps, (client) => client.beginPartyMatchmaking(options ?? {})));
-  ipcMain.handle("party:cancelMatchmaking", () => withSavedAuth(deps, (client) => client.cancelPartyMatchmaking()));
-  ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth(deps, (client) => client.startPartyMatchmaking(options ?? {})));
+  ipcMain.handle("party:get", () => withSavedAuth((client) => client.getParty()));
+  ipcMain.handle("party:create", () => withSavedAuth((client) => client.createParty()));
+  ipcMain.handle("party:invite", (_event, accountId: string) => withSavedAuth((client) => client.inviteToParty(accountId)));
+  ipcMain.handle("party:acceptInvite", (_event, invitationId: string) => withSavedAuth((client) => client.acceptPartyInvite(invitationId)));
+  ipcMain.handle("party:declineInvite", (_event, invitationId: string) => withSavedAuth((client) => client.declinePartyInvite(invitationId)));
+  ipcMain.handle("party:ignoreInvite", (_event, invitationId: string) => withSavedAuth((client) => client.ignorePartyInvite(invitationId)));
+  ipcMain.handle("party:leave", () => withSavedAuth((client) => client.leaveParty()));
+  ipcMain.handle("party:preloadReady", (_event, matchId: string, resourceVersion: string) => withSavedAuth((client) => client.acknowledgePreload(matchId, resourceVersion)));
+  ipcMain.handle("match:readyViewReady", (_event, matchId: string, token: string) => withSavedAuth((client) => client.acknowledgeReadyView(matchId, token)));
+  ipcMain.handle("party:beginMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth((client) => client.beginPartyMatchmaking(options ?? {})));
+  ipcMain.handle("party:cancelMatchmaking", () => withSavedAuth((client) => client.cancelPartyMatchmaking()));
+  ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth((client) => client.startPartyMatchmaking(options ?? {})));
 
-  ipcMain.handle("matchmaking:getState", () => withSavedAuth(deps, (client) => client.getMatchmakingState()));
-  ipcMain.handle("matchmaking:acceptReady", () => withSavedAuth(deps, (client) => client.acceptReady()));
-  ipcMain.handle("matchmaking:declineReady", () => withSavedAuth(deps, (client) => client.declineReady()));
+  ipcMain.handle("matchmaking:getState", () => withSavedAuth((client) => client.getMatchmakingState()));
+  ipcMain.handle("matchmaking:acceptReady", () => withSavedAuth((client) => client.acceptReady()));
+  ipcMain.handle("matchmaking:declineReady", () => withSavedAuth((client) => client.declineReady()));
   ipcMain.handle("matchmaking:refreshSnapshot", () =>
-    withSavedAuth(deps, () => deps.refreshRealtimeSnapshot()));
+    withSavedAuth(() => deps.refreshRealtimeSnapshot()));
 
   ipcMain.handle("player:copyText", (_event, text: string) => {
     clipboard.writeText(text);
@@ -260,56 +347,79 @@ export function registerPlayerIpc(deps: IpcDeps): void {
       if (remaining <= 0) throw new PlayerStartupTimeoutError();
       return remaining;
     };
-    const assertWithinDeadline = (): void => {
-      if (deadline !== undefined && deadline - performance.now() <= 0) throw new PlayerStartupTimeoutError();
-    };
+    return controller.authenticate(async (assertCurrent, suspended) => {
+      const assertWithinDeadline = (): void => {
+        assertCurrent();
+        if (deadline !== undefined && deadline - performance.now() <= 0) throw new PlayerStartupTimeoutError();
+      };
 
-    const persisted = await deps.loadSession();
-    if (!persisted?.baseUrl) return null;
-
-    if (persisted.token) {
+      let suspendTimer: ReturnType<typeof setTimeout> | undefined;
       try {
-        return await restorePersistedPlayerSession(
-          deps,
-          { ...persisted, token: persisted.token },
-          remainingTimeout(),
-          assertWithinDeadline,
-        );
-      } catch (error) {
-        if (!isSessionInvalidError(error)) {
+        const remaining = remainingTimeout();
+        if (remaining === undefined) await suspended;
+        else await Promise.race([
+          suspended,
+          new Promise<never>((_resolve, reject) => {
+            suspendTimer = setTimeout(() => reject(new PlayerStartupTimeoutError()), remaining);
+          }),
+        ]);
+      } finally {
+        if (suspendTimer) clearTimeout(suspendTimer);
+      }
+      return withSavedSession(deps, assertCurrent, async (persisted) => {
+        assertWithinDeadline();
+        if (!persisted?.baseUrl) return null;
+
+        if (persisted.token) {
+          try {
+            const restored = await restorePersistedPlayerSession(
+              deps,
+              { ...persisted, token: persisted.token },
+              remainingTimeout(),
+              assertWithinDeadline,
+              assertCurrent,
+            );
+            controller.resume();
+            return restored;
+          } catch (error) {
+            if (!isSessionInvalidError(error)) {
+              clearPlayerRuntime(deps);
+              if (deadline !== undefined && isTimeoutError(error)) throw new PlayerStartupTimeoutError();
+              throw error;
+            }
+            clearPlayerRuntime(deps);
+            await deps.clearSession();
+          }
+        }
+
+        if (!persisted.username || !persisted.password) {
           clearPlayerRuntime(deps);
+          await deps.clearSession();
+          return null;
+        }
+
+        try {
+          const restored = await authenticateAndRestorePlayer(
+            deps,
+            persisted.baseUrl,
+            persisted.username,
+            persisted.password,
+            remainingTimeout,
+            assertWithinDeadline,
+          );
+          controller.resume();
+          return restored;
+        } catch (error) {
+          clearPlayerRuntime(deps);
+          if (isSessionInvalidError(error)) {
+            await deps.clearSession();
+            return null;
+          }
           if (deadline !== undefined && isTimeoutError(error)) throw new PlayerStartupTimeoutError();
           throw error;
         }
-        clearPlayerRuntime(deps);
-        await deps.clearSession();
-      }
-    }
-
-    if (!persisted.username || !persisted.password) {
-      clearPlayerRuntime(deps);
-      await deps.clearSession();
-      return null;
-    }
-
-    try {
-      return await authenticateAndRestorePlayer(
-        deps,
-        persisted.baseUrl,
-        persisted.username,
-        persisted.password,
-        remainingTimeout,
-        assertWithinDeadline,
-      );
-    } catch (error) {
-      clearPlayerRuntime(deps);
-      if (isSessionInvalidError(error)) {
-        await deps.clearSession();
-        return null;
-      }
-      if (deadline !== undefined && isTimeoutError(error)) throw new PlayerStartupTimeoutError();
-      throw error;
-    }
+      });
+    });
   });
 
   ipcMain.handle("session:credentials", async (): Promise<SavedPlayerLogin | null> => {
@@ -329,4 +439,5 @@ export function registerPlayerIpc(deps: IpcDeps): void {
   ipcMain.handle("updates:check", (_event, timeoutMs?: number) =>
     checkForUpdates("compet-player-client", normalizeStartupTimeout(timeoutMs)));
   ipcMain.handle("updates:install", () => installUpdate("compet-player-client", "Compet Player Client.exe"));
+  return controller;
 }

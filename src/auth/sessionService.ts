@@ -56,6 +56,10 @@ export class SessionService {
     await this.repository.revokeById(sessionId, revokedAt);
   }
 
+  async revokePlayerSessions(): Promise<number> {
+    return this.repository.revokePlayerSessions(new Date().toISOString());
+  }
+
   async revokeSessionsForAccount(accountId: string): Promise<number> {
     return this.repository.revokeForAccount(accountId, new Date().toISOString());
   }

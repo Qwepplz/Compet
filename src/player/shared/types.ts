@@ -12,6 +12,10 @@ import type { MatchParticipant, MatchPlayerResult, MatchSeriesResult, MatchTeam 
 import type { MatchHistoryEntry } from "../../records/matchHistory.js";
 import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 
+export type PlayerLoginIpcResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; error: { code: string; message: string; statusCode?: number } };
+
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
 
 export type PlayerFriendSearchResultDto = FriendSearchResult;

@@ -35,7 +35,7 @@ export class SavedLoginStore {
       return hasAnyValue(record) ? record : null;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      return null;
+      throw error;
     }
   }
 

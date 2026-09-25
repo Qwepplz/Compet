@@ -6,6 +6,7 @@ import { createPreviewPlayerApi } from "./previewPlayerApi.js";
 import type { SupportedLanguage } from "../../language/types.js";
 import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 import type {
+  PlayerLoginIpcResult,
   PlayerFriendListDto,
   PlayerFriendRequestDto,
   PlayerFriendSearchResultDto,
@@ -34,8 +35,12 @@ const subscribe = <T>(channel: string, listener: (payload: T) => void): (() => v
 export const playerApi = {
   loadLanguage: (): Promise<SupportedLanguage> => invoke("language:load"),
   saveLanguage: (language: SupportedLanguage): Promise<void> => invoke("language:save", language),
-  login: (baseUrl: string, username: string, password: string): Promise<PlayerAuthenticatedSession> =>
-    invoke("auth:login", baseUrl, username, password),
+  login: async (baseUrl: string, username: string, password: string): Promise<PlayerAuthenticatedSession> => {
+    const result = await invoke<PlayerLoginIpcResult<PlayerAuthenticatedSession>>("auth:login", baseUrl, username, password);
+    if (result.ok) return result.value;
+    // contextBridge drops custom Error properties; reject cloneable data instead.
+    throw result.error;
+  },
   logout: (): Promise<void> => invoke("auth:logout"),
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
     invoke("auth:changePassword", currentPassword, newPassword),
