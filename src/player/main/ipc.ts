@@ -574,8 +574,7 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
     maintenanceAbort?.abort();
     cancelClientMaintenance();
   });
-  ipcMain.handle("updates:maintenanceResult", (_event, acknowledge?: boolean) =>
-    getMaintenanceResult(acknowledge === true));
+  ipcMain.handle("updates:maintenanceResult", () => getMaintenanceResult());
   ipcMain.handle("updates:version", () => getCurrentVersion());
   ipcMain.handle("updates:check", (_event, timeoutMs?: number) =>
     checkForUpdates("compet-player-client", normalizeStartupTimeout(timeoutMs)));

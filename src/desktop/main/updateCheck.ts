@@ -974,6 +974,7 @@ async function finishVerifiedMaintenance(directory: string, report: IntegrityRep
     await cleanupMaintenancePayload(directory);
     await writeMaintenanceReceipt(path.dirname(directory), completed);
     await clearMaintenanceTransaction(directory);
+    await clearMaintenanceReceipt(path.dirname(directory));
     lastMaintenanceResult = completed;
     return completed;
   } catch {
@@ -985,37 +986,8 @@ async function finishVerifiedMaintenance(directory: string, report: IntegrityRep
   }
 }
 
-export async function getMaintenanceResult(acknowledge = false): Promise<IntegrityReport | null> {
-  const directory = path.join(getInstallRoot(), ".compet-maintenance");
-  let report = lastMaintenanceResult;
-  if (!report) {
-    try { report = await readMaintenanceSummary(directory) ?? await readMaintenanceReceipt(getInstallRoot()); }
-    catch (error) { report = maintenanceFailure(maintenanceErrorCode(error)); }
-  }
-  if (!report) return null;
-  if (acknowledge) {
-    let transaction: MaintenanceTransaction | null;
-    try { transaction = await readMaintenanceTransaction(directory); }
-    catch { return report; }
-    if (!transaction || transaction.state === "verified" || transaction.state === "rolled_back") {
-      try {
-        if (transaction) await clearMaintenanceTransaction(directory);
-        await clearRetiredMaintenance(getInstallRoot());
-        await clearMaintenanceReceipt(getInstallRoot());
-        lastMaintenanceResult = null;
-      } catch {
-        if (report.status === "passed") {
-          report = { ...report, error: "maintenance_cleanup_pending" };
-          lastMaintenanceResult = report;
-          if (transaction) {
-            try { await writeMaintenanceSummary(directory, report); } catch { /* Preserve evidence. */ }
-          }
-          try { await writeMaintenanceReceipt(getInstallRoot(), report); } catch { /* Preserve evidence. */ }
-        }
-      }
-    }
-  }
-  return report;
+export async function getMaintenanceResult(): Promise<IntegrityReport | null> {
+  return lastMaintenanceResult;
 }
 
 export async function finalizeClientMaintenance(): Promise<IntegrityReport | null | "exit_requested"> {
@@ -1028,24 +1000,36 @@ export async function finalizeClientMaintenance(): Promise<IntegrityReport | nul
     return report;
   }
   if (!transaction) {
-    let cleanupPending = false;
-    try { await clearRetiredMaintenance(getInstallRoot()); }
-    catch { cleanupPending = true; }
-    try {
-      const receipt = await readMaintenanceReceipt(getInstallRoot());
-      if (!receipt) {
-        lastMaintenanceResult = cleanupPending ? maintenanceFailure("maintenance_cleanup_pending") : null;
-      } else if (cleanupPending && receipt.error !== "maintenance_cleanup_pending") {
-        lastMaintenanceResult = { ...receipt, error: "maintenance_cleanup_pending" };
-        await writeMaintenanceReceipt(getInstallRoot(), lastMaintenanceResult);
-      } else if (!cleanupPending && receipt.error === "maintenance_cleanup_pending") {
-        lastMaintenanceResult = { ...receipt };
-        delete lastMaintenanceResult.error;
-        await writeMaintenanceReceipt(getInstallRoot(), lastMaintenanceResult);
-      } else {
-        lastMaintenanceResult = receipt;
+    const root = getInstallRoot();
+    let receipt: IntegrityReport | null;
+    try { receipt = await readMaintenanceReceipt(root); }
+    catch (error) {
+      lastMaintenanceResult = maintenanceFailure(maintenanceErrorCode(error));
+      return lastMaintenanceResult;
+    }
+    if (receipt && receipt.error !== undefined) {
+      if (typeof receipt.error !== "string" || receipt.error.length === 0) {
+        lastMaintenanceResult = maintenanceFailure("maintenance_summary_invalid");
+        return lastMaintenanceResult;
       }
-    } catch (error) { lastMaintenanceResult = maintenanceFailure(maintenanceErrorCode(error)); }
+      if (receipt.error !== "maintenance_cleanup_pending") {
+        lastMaintenanceResult = receipt;
+        return receipt;
+      }
+    }
+    try {
+      await clearRetiredMaintenance(root);
+      if (receipt) await clearMaintenanceReceipt(root);
+      lastMaintenanceResult = null;
+    } catch {
+      lastMaintenanceResult = receipt
+        ? { ...receipt, error: "maintenance_cleanup_pending" }
+        : maintenanceFailure("maintenance_cleanup_pending");
+      if (receipt) {
+        try { await writeMaintenanceReceipt(root, lastMaintenanceResult); }
+        catch { /* Keep the original receipt for the next startup retry. */ }
+      }
+    }
     return lastMaintenanceResult;
   }
   if (transaction.state === "verified") {
@@ -1060,17 +1044,20 @@ export async function finalizeClientMaintenance(): Promise<IntegrityReport | nul
     }
   }
   if (transaction.state !== "applied") {
+    let saved: IntegrityReport | null = null;
     try {
-      const saved = await readMaintenanceSummary(directory);
-      if (saved?.version === transaction.targetVersion && saved.status === "unavailable") {
-        lastMaintenanceResult = saved;
-        return saved;
-      }
+      const summary = await readMaintenanceSummary(directory);
+      if (summary?.version === transaction.targetVersion && summary.status === "unavailable") saved = summary;
     } catch { /* Use the transaction state when the summary is damaged. */ }
-    const report = maintenanceFailure(transaction.error ??
+    const report = saved ?? maintenanceFailure(transaction.error ??
       (transaction.state === "recovery_failed" ? "maintenance_recovery_failed" :
         transaction.state === "rolled_back" ? "maintenance_rolled_back" : "maintenance_incomplete"), transaction);
-    await writeFailureSummary(directory, report, transaction);
+    if (saved) lastMaintenanceResult = saved;
+    else await writeFailureSummary(directory, report, transaction);
+    if (transaction.state === "rolled_back") {
+      try { await clearMaintenanceTransaction(directory); }
+      catch (error) { console.error("Rolled-back maintenance cleanup failed", error); }
+    }
     return report;
   }
   let plan: MaintenancePlan;

@@ -511,17 +511,6 @@ export function App() {
     }
   }
 
-  async function handleMaintenanceAcknowledgement() {
-    try {
-      await api.getMaintenanceResult(true);
-      const remaining = await api.getMaintenanceResult();
-      setRecoveryReport(remaining);
-      if (remaining) void message.warning(t("player.integrity.resultRetained"));
-    } catch {
-      void message.error(t("player.integrity.cleanupPending"));
-    }
-  }
-
   async function handleLanguageChange(nextLanguage: typeof language) {
     if (nextLanguage === language || languageSaving) return;
     setLanguageSaving(true);
@@ -1385,12 +1374,20 @@ export function App() {
     let previousMaintenance: IntegrityReport | null = null;
     try { previousMaintenance = await api.getMaintenanceResult(); }
     catch { /* Main startup gate retains the transaction for a later attempt. */ }
-    if (previousMaintenance) {
-      setRecoveryReport(previousMaintenance);
-      if (previousMaintenance.status === "passed") void message.success(t("player.integrity.restartPassed"));
-      else void message.error(t("player.integrity.restartFailed"));
-    }
     const maintenanceComplete = previousMaintenance?.status === "passed" && !previousMaintenance.error;
+    if (maintenanceComplete) {
+      void message.success(t("player.integrity.restartPassed"));
+    } else if (previousMaintenance) {
+      setRecoveryReport(previousMaintenance);
+      if (previousMaintenance.status === "passed" && previousMaintenance.error === "maintenance_cleanup_pending") {
+        void message.warning(t("player.integrity.repairCleanupPending"));
+      } else if (previousMaintenance.error === "maintenance_cleanup_pending" ||
+                 previousMaintenance.status === "passed") {
+        void message.error(t("player.integrity.cleanupPending"));
+      } else {
+        void message.error(t("player.integrity.restartFailed"));
+      }
+    }
     const installing = previousMaintenance && !maintenanceComplete ? false : await checkStartupUpdate(startupDeadline);
     if (installing) return;
     let restoreOutcome = await restoreSession(startupDeadline, true);
@@ -2032,10 +2029,15 @@ export function App() {
                       <div className="player-settings-update">
                         {recoveryReport ? (
                           <div role="status" className="player-integrity-result">
-                            <div>{t(recoveryReport.status === "passed" ? "player.integrity.restartPassed" : "player.integrity.restartFailed")}</div>
+                            <div>{t(
+                              recoveryReport.status === "passed" && recoveryReport.error === "maintenance_cleanup_pending"
+                                ? "player.integrity.repairCleanupPending"
+                                : recoveryReport.error === "maintenance_cleanup_pending" || recoveryReport.status === "passed"
+                                  ? "player.integrity.cleanupPending"
+                                  : "player.integrity.restartFailed",
+                            )}</div>
                             <div>{t(`player.integrity.stage.${recoveryReport.stage}`)}</div>
                             {recoveryReport.error ? <div>{displayError({ code: recoveryReport.error }, t, "player.integrity.retry")}</div> : null}
-                            <Button onClick={() => void handleMaintenanceAcknowledgement()}>{t("player.integrity.acknowledge")}</Button>
                           </div>
                         ) : null}
                         <Button loading={integrityPending} disabled={integrityPending || maintenanceFeedback?.status === "installing"}

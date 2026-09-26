@@ -404,7 +404,7 @@ export function createPreviewPlayerApi() {
     }),
     repairIntegrity: async (): Promise<MaintenanceStartResult> => ({ status: "failed", error: "integrity_unavailable" }),
     cancelIntegrity: async (): Promise<void> => undefined,
-    getMaintenanceResult: async (_acknowledge?: boolean): Promise<IntegrityReport | null> => null,
+    getMaintenanceResult: async (): Promise<IntegrityReport | null> => null,
     onIntegrityProgress: (_callback: (progress: IntegrityProgress) => void): (() => void) => () => {},
     getVersion: async (): Promise<string> => "preview",
     checkUpdate: async (_timeoutMs?: number): Promise<UpdateCheckResult> => ({

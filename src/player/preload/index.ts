@@ -89,8 +89,8 @@ export const playerApi = {
   verifyIntegrity: (): Promise<IntegrityReport> => invoke("updates:integrity"),
   repairIntegrity: (): Promise<MaintenanceStartResult> => invoke("updates:repair"),
   cancelIntegrity: (): Promise<void> => invoke("updates:cancelIntegrity"),
-  getMaintenanceResult: (acknowledge?: boolean): Promise<IntegrityReport | null> =>
-    invoke("updates:maintenanceResult", acknowledge),
+  getMaintenanceResult: (): Promise<IntegrityReport | null> =>
+    invoke("updates:maintenanceResult"),
   onIntegrityProgress: (listener: (progress: IntegrityProgress) => void): (() => void) =>
     subscribe("updates:integrityProgress", listener),
   getVersion: (): Promise<string> => invoke("updates:version"),
