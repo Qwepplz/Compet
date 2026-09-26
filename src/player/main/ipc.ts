@@ -1,11 +1,13 @@
 import { clipboard, ipcMain, shell } from "electron";
-import type { PlayerFriendSearchResultDto, PlayerLoginIpcResult, PlayerMatchmakingStateDto } from "../shared/types.js";
+import type { PlayerFriendSearchResultDto, PlayerLoginIpcResult, PlayerMatchmakingStateDto, PlayerRealtimeEvent, PlayerPartyDto, PlayerLiveMatchStateDto } from "../shared/types.js";
 import { isSessionInvalidError, PlayerApiError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { RemoteProfileService } from "./remoteProfileService.js";
 import { createAuthRetry, type AuthRetryController } from "./authRetry.js";
 import { revokePlayerSession } from "./sessionShutdown.js";
 import { appendBootLog } from "../../desktop/main/bootLog.js";
-import { checkForUpdates, getCurrentVersion, installUpdate, verifyClientIntegrity } from "../../desktop/main/updateCheck.js";
+import { cancelClientMaintenance, checkForUpdates, getCurrentVersion, getMaintenanceResult,
+  installUpdate, isClientMaintenanceActive, repairClientIntegrity, verifyClientIntegrity } from "../../desktop/main/updateCheck.js";
+import type { MaintenanceStartResult } from "../../desktop/updateTypes.js";
 import type { LanguagePreferenceStore } from "../../desktop/main/languagePreferenceStore.js";
 import { isSupportedLanguage } from "../../language/translate.js";
 import { DEFAULT_PROFILE_BASE_URL } from "../../profiles/humanProfileIndex.js";
@@ -190,6 +192,69 @@ async function authenticateAndRestorePlayer(
   }
 }
 
+let maintenanceAdmission = false;
+let maintenanceAccountId: string | undefined;
+let maintenanceAbort: AbortController | undefined;
+
+function roomHasAccount(room: PlayerLiveMatchStateDto, accountId: string): boolean {
+  return room.humanAccountIds?.includes(accountId) === true ||
+    room.ready?.some(entry => entry.accountId === accountId) === true ||
+    [...(room.teamA?.participants ?? []), ...(room.teamB?.participants ?? [])].some(entry => entry.accountId === accountId);
+}
+
+function isActiveRoom(room: PlayerLiveMatchStateDto): boolean {
+  return room.phase !== "completed" && room.phase !== "failed";
+}
+
+function ownPartyActive(party: PlayerPartyDto | null, accountId: string): boolean {
+  return party?.memberAccountIds.includes(accountId) === true &&
+    (party.status === "matchmaking" || party.status === "in_match" ||
+      Boolean(party.matchmakingPendingAt || party.preload || party.lockedMatchId));
+}
+
+function ownMatchActive(state: PlayerMatchmakingStateDto, accountId: string): boolean {
+  return state.queue.some(entry => entry.accountId === accountId) ||
+    ownPartyActive(state.party, accountId) ||
+    (state.room !== null && isActiveRoom(state.room)) ||
+    state.rooms.some(room => isActiveRoom(room) &&
+      (roomHasAccount(room, accountId) || Boolean(state.party && room.partyId === state.party.id)));
+}
+
+function ownIdleMultiParty(state: PlayerMatchmakingStateDto, accountId: string): boolean {
+  return state.party?.memberAccountIds.includes(accountId) === true &&
+    state.party.memberAccountIds.length > 1;
+}
+
+function cancelForOwnMatch(): void {
+  if (!maintenanceAdmission && !isClientMaintenanceActive()) return;
+  maintenanceAbort?.abort();
+  cancelClientMaintenance();
+}
+
+export function observeMaintenanceMatchmakingState(state: PlayerMatchmakingStateDto): void {
+  if (maintenanceAccountId &&
+      (ownMatchActive(state, maintenanceAccountId) ||
+        ownIdleMultiParty(state, maintenanceAccountId))) cancelForOwnMatch();
+}
+
+export function observeMaintenanceRealtimeEvent(event: PlayerRealtimeEvent): void {
+  const accountId = maintenanceAccountId;
+  if (!accountId) return;
+  if (event.type === "party_updated" &&
+      (ownPartyActive(event.party, accountId) ||
+        (event.party?.memberAccountIds.includes(accountId) && event.party.memberAccountIds.length > 1))) {
+    cancelForOwnMatch();
+  } else if (event.type === "queue_updated" && event.queue.some(entry => entry.accountId === accountId)) {
+    cancelForOwnMatch();
+  } else if ((event.type === "match_room_created" || event.type === "match_room_updated") &&
+      isActiveRoom(event.room) && roomHasAccount(event.room, accountId)) {
+    cancelForOwnMatch();
+  } else if ((event.type === "ready_check_started" || event.type === "ready_check_updated") &&
+      event.humanParticipants.some(entry => entry.accountId === accountId)) {
+    cancelForOwnMatch();
+  }
+}
+
 export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
   const controller = createAuthRetry({
     getApiClient: deps.getApiClient,
@@ -223,7 +288,42 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
       }
     },
   });
+  maintenanceAdmission = false;
+  maintenanceAccountId = undefined;
+  maintenanceAbort = undefined;
   const withSavedAuth = <T>(operation: (client: PlayerApiClient) => Promise<T>): Promise<T> => controller.run(operation);
+  const maintenanceBusy = () => maintenanceAdmission || isClientMaintenanceActive();
+  const withMaintenanceGuardedAuth = <T>(operation: (client: PlayerApiClient) => Promise<T>): Promise<T> => {
+    if (maintenanceBusy()) return Promise.reject(playerOperationError("update_busy", "Client maintenance is active"));
+    return withSavedAuth((client) => {
+      if (maintenanceBusy()) throw playerOperationError("update_busy", "Client maintenance is active");
+      return operation(client);
+    });
+  };
+  const maintenanceBlock = async (): Promise<string | null> => {
+    let client: PlayerApiClient | undefined;
+    try { client = deps.getApiClient(); } catch { /* No active authenticated client. */ }
+    if (!client) {
+      try {
+        if ((await deps.loadSession())?.token) return "integrity_match_state_unavailable";
+      } catch { return "integrity_match_state_unavailable"; }
+      maintenanceAccountId = undefined;
+      return null;
+    }
+    try {
+      const { account, state } = await controller.run(async (current) => {
+        const [account, state] = await Promise.all([current.me(), current.getMatchmakingState()]);
+        return { account, state };
+      });
+      if (!account?.id || !state || !Array.isArray(state.queue) || !Array.isArray(state.rooms)) {
+        return "integrity_match_state_unavailable";
+      }
+      maintenanceAccountId = account.id;
+      if (ownMatchActive(state, account.id)) return "integrity_match_active";
+      if (ownIdleMultiParty(state, account.id)) return "integrity_party_leave_required";
+      return null;
+    } catch { return "integrity_match_state_unavailable"; }
+  };
   ipcMain.handle("language:load", () => deps.languageStore.load());
   ipcMain.handle("language:save", (_event, language: unknown) => {
     if (!isSupportedLanguage(language)) throw playerOperationError("language_unsupported", "Unsupported language", TypeError);
@@ -313,19 +413,19 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
 
   ipcMain.handle("party:get", () => withSavedAuth((client) => client.getParty()));
   ipcMain.handle("party:create", () => withSavedAuth((client) => client.createParty()));
-  ipcMain.handle("party:invite", (_event, accountId: string) => withSavedAuth((client) => client.inviteToParty(accountId)));
-  ipcMain.handle("party:acceptInvite", (_event, invitationId: string) => withSavedAuth((client) => client.acceptPartyInvite(invitationId)));
+  ipcMain.handle("party:invite", (_event, accountId: string) => withMaintenanceGuardedAuth((client) => client.inviteToParty(accountId)));
+  ipcMain.handle("party:acceptInvite", (_event, invitationId: string) => withMaintenanceGuardedAuth((client) => client.acceptPartyInvite(invitationId)));
   ipcMain.handle("party:declineInvite", (_event, invitationId: string) => withSavedAuth((client) => client.declinePartyInvite(invitationId)));
   ipcMain.handle("party:ignoreInvite", (_event, invitationId: string) => withSavedAuth((client) => client.ignorePartyInvite(invitationId)));
   ipcMain.handle("party:leave", () => withSavedAuth((client) => client.leaveParty()));
-  ipcMain.handle("party:preloadReady", (_event, matchId: string, resourceVersion: string) => withSavedAuth((client) => client.acknowledgePreload(matchId, resourceVersion)));
-  ipcMain.handle("match:readyViewReady", (_event, matchId: string, token: string) => withSavedAuth((client) => client.acknowledgeReadyView(matchId, token)));
-  ipcMain.handle("party:beginMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth((client) => client.beginPartyMatchmaking(options ?? {})));
+  ipcMain.handle("party:preloadReady", (_event, matchId: string, resourceVersion: string) => withMaintenanceGuardedAuth((client) => client.acknowledgePreload(matchId, resourceVersion)));
+  ipcMain.handle("match:readyViewReady", (_event, matchId: string, token: string) => withMaintenanceGuardedAuth((client) => client.acknowledgeReadyView(matchId, token)));
+  ipcMain.handle("party:beginMatchmaking", (_event, options?: { dev?: boolean }) => withMaintenanceGuardedAuth((client) => client.beginPartyMatchmaking(options ?? {})));
   ipcMain.handle("party:cancelMatchmaking", () => withSavedAuth((client) => client.cancelPartyMatchmaking()));
-  ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withSavedAuth((client) => client.startPartyMatchmaking(options ?? {})));
+  ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withMaintenanceGuardedAuth((client) => client.startPartyMatchmaking(options ?? {})));
 
   ipcMain.handle("matchmaking:getState", () => withSavedAuth((client) => client.getMatchmakingState()));
-  ipcMain.handle("matchmaking:acceptReady", () => withSavedAuth((client) => client.acceptReady()));
+  ipcMain.handle("matchmaking:acceptReady", () => withMaintenanceGuardedAuth((client) => client.acceptReady()));
   ipcMain.handle("matchmaking:declineReady", () => withSavedAuth((client) => client.declineReady()));
   ipcMain.handle("matchmaking:refreshSnapshot", () =>
     withSavedAuth(() => deps.refreshRealtimeSnapshot()));
@@ -435,6 +535,47 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
   ipcMain.handle("updates:integrity", (event) => verifyClientIntegrity((progress) => {
     if (!event.sender.isDestroyed()) event.sender.send("updates:integrityProgress", progress);
   }));
+  ipcMain.handle("updates:repair", async (event): Promise<MaintenanceStartResult> => {
+    if (maintenanceBusy()) return { status: "failed", error: "update_busy" };
+    maintenanceAdmission = true;
+    const admission = new AbortController();
+    maintenanceAbort = admission;
+    let handedOff = false;
+    try {
+      const block = await maintenanceBlock();
+      if (admission.signal.aborted) return { status: "cancelled", error: "update_cancelled" };
+      if (block) return { status: "failed", error: block };
+      const admittedAccountId = maintenanceAccountId;
+      const result = await repairClientIntegrity((progress) => {
+        if (!event.sender.isDestroyed()) event.sender.send("updates:integrityProgress", progress);
+      }, async () => {
+        if (admission.signal.aborted) throw playerOperationError("update_cancelled", "Maintenance cancelled");
+        const finalBlock = await maintenanceBlock();
+        if (admission.signal.aborted) throw playerOperationError("update_cancelled", "Maintenance cancelled");
+        if (finalBlock || (admittedAccountId && maintenanceAccountId !== admittedAccountId)) {
+          throw playerOperationError(finalBlock ?? "integrity_match_state_unavailable", "Match state changed");
+        }
+      });
+      handedOff = result.status === "installing";
+      return result;
+    } catch (error) {
+      const code = (error as { code?: unknown })?.code;
+      return { status: "failed", error: typeof code === "string" &&
+        /^(integrity|update|maintenance)_[a-z0-9_]+$/.test(code) ? code : "integrity_failed" };
+    } finally {
+      if (!handedOff) {
+        maintenanceAdmission = false;
+        maintenanceAccountId = undefined;
+        if (maintenanceAbort === admission) maintenanceAbort = undefined;
+      }
+    }
+  });
+  ipcMain.handle("updates:cancelIntegrity", () => {
+    maintenanceAbort?.abort();
+    cancelClientMaintenance();
+  });
+  ipcMain.handle("updates:maintenanceResult", (_event, acknowledge?: boolean) =>
+    getMaintenanceResult(acknowledge === true));
   ipcMain.handle("updates:version", () => getCurrentVersion());
   ipcMain.handle("updates:check", (_event, timeoutMs?: number) =>
     checkForUpdates("compet-player-client", normalizeStartupTimeout(timeoutMs)));

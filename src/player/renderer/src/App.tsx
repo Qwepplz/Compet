@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message } from "antd";
 import { ArrowLeftOutlined, CloseOutlined, MinusOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
-import type { IntegrityProgress, IntegrityReport, UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
+import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult, UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
 import type { RankmeDisplay } from "../../../rankme/rankmeStandings.js";
 import type {
   PlayerFriendDto,
@@ -383,7 +383,11 @@ export function App() {
   const [integrityPending, setIntegrityPending] = useState(false);
   const [integrityProgress, setIntegrityProgress] = useState<IntegrityProgress | null>(null);
   const [integrityReport, setIntegrityReport] = useState<IntegrityReport | null>(null);
+  const [recoveryReport, setRecoveryReport] = useState<IntegrityReport | null>(null);
+  const [maintenanceFeedback, setMaintenanceFeedback] = useState<MaintenanceStartResult | null>(null);
   const integrityRunning = useRef(false);
+  const integrityGeneration = useRef(0);
+  const integrityUnsubscribe = useRef<(() => void) | null>(null);
   const [languageSaving, setLanguageSaving] = useState(false);
   const [friendsExpanded, setFriendsExpanded] = useState(false);
   const [busyPartyInvitationId, setBusyPartyInvitationId] = useState<string | null>(null);
@@ -440,18 +444,81 @@ export function App() {
   async function handleIntegrityCheck() {
     if (integrityRunning.current) return;
     integrityRunning.current = true;
+    const generation = ++integrityGeneration.current;
     setIntegrityPending(true);
     setIntegrityReport(null);
+    setMaintenanceFeedback(null);
     setIntegrityProgress(null);
-    const unsubscribe = window.playerApi.onIntegrityProgress(setIntegrityProgress);
+    const unsubscribe = api.onIntegrityProgress((progress) => {
+      if (integrityGeneration.current === generation) setIntegrityProgress(progress);
+    });
+    integrityUnsubscribe.current = unsubscribe;
     try {
-      setIntegrityReport(await window.playerApi.verifyIntegrity());
+      const report = await api.verifyIntegrity();
+      if (integrityGeneration.current === generation) setIntegrityReport(report);
     } catch {
-      setIntegrityReport({ version: currentVersion, checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [], error: "integrity_failed" });
+      if (integrityGeneration.current === generation) setIntegrityReport({
+        version: currentVersion, currentVersion, checkedFiles: 0, totalFiles: 0,
+        stage: "checking", downloadedBytes: 0, totalDownloadBytes: 0,
+        action: "none", changedFiles: 0, changedBytes: 0,
+        status: "unavailable", issues: [], error: "integrity_failed",
+      });
     } finally {
       unsubscribe();
-      integrityRunning.current = false;
-      setIntegrityPending(false);
+      if (integrityUnsubscribe.current === unsubscribe) integrityUnsubscribe.current = null;
+      if (integrityGeneration.current === generation) {
+        integrityGeneration.current += 1;
+        integrityRunning.current = false;
+        setIntegrityPending(false);
+      }
+    }
+  }
+
+  async function handleRepairIntegrity() {
+    if (integrityRunning.current) return;
+    integrityRunning.current = true;
+    const generation = ++integrityGeneration.current;
+    setIntegrityPending(true);
+    setIntegrityProgress(null);
+    setMaintenanceFeedback(null);
+    const unsubscribe = api.onIntegrityProgress((progress) => {
+      if (integrityGeneration.current === generation) setIntegrityProgress(progress);
+    });
+    integrityUnsubscribe.current = unsubscribe;
+    let handedOff = false;
+    try {
+      const result = await api.repairIntegrity();
+      if (integrityGeneration.current !== generation) return;
+      setMaintenanceFeedback(result);
+      if (result.status === "refresh_required" || result.status === "no_changes") {
+        setIntegrityReport(result.report);
+      }
+      handedOff = result.status === "installing";
+    } catch {
+      if (integrityGeneration.current === generation) {
+        setMaintenanceFeedback({ status: "failed", error: "integrity_failed" });
+      }
+    } finally {
+      unsubscribe();
+      if (integrityUnsubscribe.current === unsubscribe) integrityUnsubscribe.current = null;
+      if (integrityGeneration.current === generation) {
+        integrityGeneration.current += 1;
+        if (!handedOff) {
+          integrityRunning.current = false;
+          setIntegrityPending(false);
+        }
+      }
+    }
+  }
+
+  async function handleMaintenanceAcknowledgement() {
+    try {
+      await api.getMaintenanceResult(true);
+      const remaining = await api.getMaintenanceResult();
+      setRecoveryReport(remaining);
+      if (remaining) void message.warning(t("player.integrity.resultRetained"));
+    } catch {
+      void message.error(t("player.integrity.cleanupPending"));
     }
   }
 
@@ -490,6 +557,11 @@ export function App() {
     void preloadMapImages().catch(() => undefined);
     void window.playerApi.getVersion().then(setCurrentVersion);
     void initializeStartup();
+    return () => {
+      integrityGeneration.current += 1;
+      integrityUnsubscribe.current?.();
+      integrityUnsubscribe.current = null;
+    };
   }, []);
 
   useEffect(() => {
@@ -1310,7 +1382,16 @@ export function App() {
     if (startupInitializationStarted) return;
     startupInitializationStarted = true;
     const startupDeadline = performance.now() + STARTUP_CONNECTION_BUDGET_MS;
-    const installing = await checkStartupUpdate(startupDeadline);
+    let previousMaintenance: IntegrityReport | null = null;
+    try { previousMaintenance = await api.getMaintenanceResult(); }
+    catch { /* Main startup gate retains the transaction for a later attempt. */ }
+    if (previousMaintenance) {
+      setRecoveryReport(previousMaintenance);
+      if (previousMaintenance.status === "passed") void message.success(t("player.integrity.restartPassed"));
+      else void message.error(t("player.integrity.restartFailed"));
+    }
+    const maintenanceComplete = previousMaintenance?.status === "passed" && !previousMaintenance.error;
+    const installing = previousMaintenance && !maintenanceComplete ? false : await checkStartupUpdate(startupDeadline);
     if (installing) return;
     let restoreOutcome = await restoreSession(startupDeadline, true);
     while (restoreOutcome === "retry" && remainingStartupMs(startupDeadline) > 0) {
@@ -1949,18 +2030,67 @@ export function App() {
                   children: (
                     <div className="player-settings-pane">
                       <div className="player-settings-update">
-                        <Button loading={integrityPending} disabled={integrityPending} onClick={() => void handleIntegrityCheck()}>
+                        {recoveryReport ? (
+                          <div role="status" className="player-integrity-result">
+                            <div>{t(recoveryReport.status === "passed" ? "player.integrity.restartPassed" : "player.integrity.restartFailed")}</div>
+                            <div>{t(`player.integrity.stage.${recoveryReport.stage}`)}</div>
+                            {recoveryReport.error ? <div>{displayError({ code: recoveryReport.error }, t, "player.integrity.retry")}</div> : null}
+                            <Button onClick={() => void handleMaintenanceAcknowledgement()}>{t("player.integrity.acknowledge")}</Button>
+                          </div>
+                        ) : null}
+                        <Button loading={integrityPending} disabled={integrityPending || maintenanceFeedback?.status === "installing"}
+                          onClick={() => void handleIntegrityCheck()}>
                           {t("player.integrity.verify")}
                         </Button>
-                        {integrityPending ? <div role="status">{t("player.integrity.progress", { checked: integrityProgress?.checkedFiles ?? 0, total: integrityProgress?.totalFiles ?? 0 })}</div> : null}
+                        {integrityPending && maintenanceFeedback?.status !== "installing" && integrityProgress?.stage !== "verifying" ? (
+                          <Button onClick={() => void api.cancelIntegrity()}>{t("player.integrity.cancel")}</Button>
+                        ) : null}
+                        {integrityPending ? (
+                          <div role="status">
+                            <div>{t(`player.integrity.stage.${integrityProgress?.stage ?? "checking"}`)}</div>
+                            <div>{t("player.integrity.progress", { checked: integrityProgress?.checkedFiles ?? 0,
+                              total: integrityProgress?.totalFiles ?? 0 })}</div>
+                            {integrityProgress?.stage === "downloading" ? (
+                              <div>{t("player.integrity.bytes", {
+                                downloaded: integrityProgress.downloadedBytes.toLocaleString(),
+                                total: integrityProgress.totalDownloadBytes.toLocaleString(),
+                              })}</div>
+                            ) : null}
+                          </div>
+                        ) : null}
+                        {maintenanceFeedback ? (
+                          <div role="status" className="player-integrity-result">
+                            <div>{t(`player.integrity.result.${maintenanceFeedback.status}`)}</div>
+                            {maintenanceFeedback.status === "failed" || maintenanceFeedback.status === "cancelled" ? (
+                              maintenanceFeedback.error ? (
+                                <div>{displayError({ code: maintenanceFeedback.error }, t, "player.integrity.retry")}</div>
+                              ) : null
+                            ) : null}
+                          </div>
+                        ) : null}
                         {integrityReport ? (
                           <div role="status" className="player-integrity-result">
-                            <div>{t(`player.integrity.${integrityReport.status}`)}</div>
+                            <div>{integrityReport.status === "issues" && integrityReport.action === "update"
+                              ? t("player.integrity.updateAvailable", { version: integrityReport.version,
+                                files: integrityReport.changedFiles, bytes: integrityReport.changedBytes.toLocaleString() })
+                              : integrityReport.status === "issues" && integrityReport.action === "repair"
+                                ? t("player.integrity.repairAvailable", { files: integrityReport.changedFiles,
+                                  bytes: integrityReport.changedBytes.toLocaleString() })
+                                : t(`player.integrity.${integrityReport.status}`)}</div>
                             {integrityReport.error ? (
                               <div>{displayError({ code: integrityReport.error }, t, "player.integrity.retry")}</div>
                             ) : null}
+                            {integrityReport.status === "issues" && integrityReport.action !== "none" ? (
+                              <Button disabled={integrityPending || maintenanceFeedback?.status === "installing"}
+                                onClick={() => void handleRepairIntegrity()}>
+                                {t(integrityReport.action === "update" ? "player.integrity.updateAndRepair" : "player.integrity.repair")}
+                              </Button>
+                            ) : null}
                             {integrityReport.issues.length ? (
-                              <ul>{integrityReport.issues.map((issue) => <li key={issue.path}>{issue.path}: {t(`player.integrity.${issue.kind}`)}</li>)}</ul>
+                              <ul>{integrityReport.issues.map((issue) => <li key={issue.path}>{issue.path}: {
+                                integrityReport.action === "update" ? t("player.integrity.targetDifference")
+                                  : t(`player.integrity.${issue.kind}`)
+                              }</li>)}</ul>
                             ) : null}
                           </div>
                         ) : null}

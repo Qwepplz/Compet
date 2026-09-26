@@ -1,6 +1,6 @@
 import { PRELOAD_RESOURCE_VERSION } from "../../realtime/realtimeTypes.js";
 import type { AccountView } from "../../manager/shared/types.js";
-import type { IntegrityProgress, IntegrityReport, UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
+import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult, UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
 import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../language/translate.js";
 import type { SupportedLanguage } from "../../language/types.js";
 import type { PlayerAuthenticatedSession, RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
@@ -396,7 +396,15 @@ export function createPreviewPlayerApi() {
     },
     copyText: async (): Promise<void> => undefined,
     openConnectUrl: async (): Promise<void> => undefined,
-    verifyIntegrity: async (): Promise<IntegrityReport> => ({ version: "preview", checkedFiles: 0, totalFiles: 0, status: "unavailable", issues: [], error: "integrity_unavailable" }),
+    verifyIntegrity: async (): Promise<IntegrityReport> => ({
+      version: "preview", currentVersion: "preview", checkedFiles: 0, totalFiles: 0,
+      stage: "checking", downloadedBytes: 0, totalDownloadBytes: 0,
+      action: "none", changedFiles: 0, changedBytes: 0,
+      status: "unavailable", issues: [], error: "integrity_unavailable",
+    }),
+    repairIntegrity: async (): Promise<MaintenanceStartResult> => ({ status: "failed", error: "integrity_unavailable" }),
+    cancelIntegrity: async (): Promise<void> => undefined,
+    getMaintenanceResult: async (_acknowledge?: boolean): Promise<IntegrityReport | null> => null,
     onIntegrityProgress: (_callback: (progress: IntegrityProgress) => void): (() => void) => () => {},
     getVersion: async (): Promise<string> => "preview",
     checkUpdate: async (_timeoutMs?: number): Promise<UpdateCheckResult> => ({

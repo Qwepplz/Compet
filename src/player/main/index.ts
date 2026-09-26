@@ -12,7 +12,8 @@ import type {
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
 import type { AccountView } from "../../manager/shared/types.js";
-import { createPlayerApiClient, registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
+import { createPlayerApiClient, observeMaintenanceMatchmakingState, observeMaintenanceRealtimeEvent,
+  registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
 import type { AuthRetryController } from "./authRetry.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
@@ -20,6 +21,7 @@ import { deliverRealtimeEvent } from "./realtimeEventDelivery.js";
 import { getRealtimeStatusAfterPollFailure, shouldApplyRealtimePollFailure } from "./realtimeStatus.js";
 import { revokePlayerSession } from "./sessionShutdown.js";
 import { translate } from "../../language/translate.js";
+import { finalizeClientMaintenance } from "../../desktop/main/updateCheck.js";
 
 const bootLogFile = "compet-player-client-boot.log";
 appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`);
@@ -168,6 +170,7 @@ function publishRealtimeStatus(next: PlayerRealtimeStatusDto): void {
 }
 
 function publishRealtimeEvent(event: PlayerRealtimeEvent): void {
+  observeMaintenanceRealtimeEvent(event);
   broadcast(realtimeEventChannel, event);
 }
 
@@ -181,6 +184,7 @@ function publishRealtimeEventNowOrQueue(event: PlayerRealtimeEvent, sessionVersi
 }
 
 function publishRealtimeSnapshot(snapshot: PlayerRealtimeSnapshotDto): void {
+  observeMaintenanceMatchmakingState(snapshot.matchmaking);
   broadcast(realtimeSnapshotChannel, snapshot);
 }
 
@@ -478,6 +482,9 @@ if (!gotSingleInstanceLock) {
   app.on("second-instance", focusMainWindow);
 
   app.whenReady().then(async () => {
+    const maintenanceReport = await finalizeClientMaintenance();
+    if (maintenanceReport === "exit_requested") return;
+    if (maintenanceReport?.error) appendBootLog(bootLogFile, `maintenance verification: ${maintenanceReport.error}`);
     registerWindowIpc();
     authRetryController = registerPlayerIpc({
       clearSession,

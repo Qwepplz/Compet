@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { IntegrityProgress, IntegrityReport } from "../../desktop/updateTypes.js";
+import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult } from "../../desktop/updateTypes.js";
 import type { PlayerAuthenticatedSession, RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
 import type { AccountView } from "../../manager/shared/types.js";
 import { createPreviewPlayerApi } from "./previewPlayerApi.js";
@@ -87,6 +87,10 @@ export const playerApi = {
   minimizeWindow: (): Promise<void> => invoke("player:window:minimize"),
   closeWindow: (): Promise<void> => invoke("player:window:close"),
   verifyIntegrity: (): Promise<IntegrityReport> => invoke("updates:integrity"),
+  repairIntegrity: (): Promise<MaintenanceStartResult> => invoke("updates:repair"),
+  cancelIntegrity: (): Promise<void> => invoke("updates:cancelIntegrity"),
+  getMaintenanceResult: (acknowledge?: boolean): Promise<IntegrityReport | null> =>
+    invoke("updates:maintenanceResult", acknowledge),
   onIntegrityProgress: (listener: (progress: IntegrityProgress) => void): (() => void) =>
     subscribe("updates:integrityProgress", listener),
   getVersion: (): Promise<string> => invoke("updates:version"),
