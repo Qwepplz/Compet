@@ -15,6 +15,7 @@ export interface MatchHistoryEntry {
   score: { team1: number; team2: number };
   selfTeam: "teamA" | "teamB";
   selfWon: boolean;
+  partySize?: number;
   self: Pick<MatchPlayerResult, "kills" | "deaths" | "assists" | "damage" | "headshots" | "rating2" | "rankmeScore" | "rankmeScoreDelta">;
 }
 
@@ -22,6 +23,15 @@ function accountTeam(plan: MatchPlan, steam64: string): "teamA" | "teamB" | null
   if (plan.teamA.participants.some((participant) => participant.kind === "human" && participant.steam64?.trim() === steam64)) return "teamA";
   if (plan.teamB.participants.some((participant) => participant.kind === "human" && participant.steam64?.trim() === steam64)) return "teamB";
   return null;
+}
+
+function matchPartySize(plan: MatchPlan): number | undefined {
+  let count = 0;
+  for (const participant of [...plan.teamA.participants, ...plan.teamB.participants]) {
+    if (participant.kind === "human") count += 1;
+    else if (participant.kind !== "bot") return undefined;
+  }
+  return count >= 1 && count <= 5 ? count : undefined;
 }
 
 function resultPlayer(record: CompletedMatchRecord, steam64: string): MatchPlayerResult | null {
@@ -46,6 +56,7 @@ export function toMatchHistoryEntry(record: CompletedMatchRecord, account: Accou
   if (!selfTeam) return null;
   const self = resultPlayer(record, steam64);
   if (!self) return null;
+  const partySize = matchPartySize(record.plan);
   return {
     matchId: record.matchId,
     completedAt: record.result.completedAt,
@@ -54,6 +65,7 @@ export function toMatchHistoryEntry(record: CompletedMatchRecord, account: Accou
     score: { team1: record.result.team1Score, team2: record.result.team2Score },
     selfTeam,
     selfWon: record.result.winner === selfTeam,
+    ...(partySize === undefined ? {} : { partySize }),
     self: {
       kills: self.kills,
       deaths: self.deaths,

@@ -119,6 +119,9 @@ function MatchHistoryRow({
   const ratingProgress = rating2Progress(match.self.rating2);
   const selfScore = match.selfTeam === "teamA" ? match.score.team1 : match.score.team2;
   const opponentScore = match.selfTeam === "teamA" ? match.score.team2 : match.score.team1;
+  const partySize = typeof match.partySize === "number" && Number.isInteger(match.partySize) && match.partySize >= 2 && match.partySize <= 5
+    ? match.partySize
+    : 0;
   return (
     <tr className={`match-history-row match-history-row--${match.selfWon ? "win" : "loss"}`} tabIndex={0} onClick={() => onOpenMatch(match.matchId)} onKeyDown={(event) => {
       if (event.key === "Enter" || event.key === " ") onOpenMatch(match.matchId);
@@ -128,6 +131,9 @@ function MatchHistoryRow({
       </td>
       <td>
         <div className="match-history-score">
+          <span className="match-history-party-size">
+            {Array.from({ length: partySize }, (_, index) => <span key={index} className="match-history-party-size-bar" />)}
+          </span>
           <strong className={`match-history-result-pill match-history-result-pill--${match.selfWon ? "win" : "loss"}`}>{match.selfWon ? t("player.history.win") : t("player.history.loss")}</strong>
           <span>{selfScore}</span>
           <span>:</span>
