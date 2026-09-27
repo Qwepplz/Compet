@@ -1,5 +1,5 @@
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Input, Select, Tooltip, message } from "antd";
+import { Alert, Button, Input, Select, message } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { LogEntry, LogLevel, LogSource } from "../../../shared/types.js";
 import { logApi } from "../api/managerApi.js";
@@ -105,9 +105,7 @@ export function LogsPage() {
             className="logs-search"
             onChange={(event) => setQuery(event.target.value)}
           />
-          <Tooltip title={t("manager.logs.refresh")}>
-            <Button aria-label={t("manager.logs.refresh")} icon={<ReloadOutlined />} loading={loading} onClick={() => void load()} />
-          </Tooltip>
+          <Button icon={<ReloadOutlined />} loading={loading} onClick={() => void load()} />
         </div>
       </div>
       {error && <Alert type="error" showIcon message={error} className="logs-error" />}

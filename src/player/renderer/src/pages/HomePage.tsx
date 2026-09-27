@@ -144,12 +144,10 @@ export function HomePage({
 
   return (
     <div className="faceit-play">
-      <h2 className="player-sr-only">{t("player.home.title")}</h2>
       {account?.dev ? (
         <label className="faceit-home-dev">
           <span>{t("common.labels.devMode")}</span>
           <Switch
-            aria-label={t("common.labels.devMode")}
             checked={devModeEnabled}
             onChange={onDevModeChange}
             checkedChildren={t("player.settings.toggleOn")}
@@ -170,14 +168,14 @@ export function HomePage({
           const isCaptain = Boolean(memberId && party?.ownerAccountId === memberId);
           return member && label ? (
             <div className={`faceit-party-slot ${isSelf ? "faceit-party-slot--self" : ""}`} key={index}>
-              <SteamAvatar avatarUrl={member?.avatarUrl} label={label} />
+              <SteamAvatar avatarUrl={member?.avatarUrl} />
               <div className="faceit-party-slot-name">
                 <strong>{label}</strong>
-                <VerificationBadge variant="gold" title={t("common.labels.player")} />
+                <VerificationBadge variant="gold" />
                 <RankmeBadges standing={member.rankmeStanding} showRank={false} />
                 {isCaptain ? (
-                  <span className="faceit-captain-badge" aria-label={t("player.home.captain")} title={t("player.home.captain")}>
-                    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <span className="faceit-captain-badge">
+                    <svg viewBox="0 0 24 24">
                       <path
                         fillRule="evenodd"
                         clipRule="evenodd"
@@ -193,7 +191,6 @@ export function HomePage({
             <button
               type="button"
               className="faceit-party-slot"
-              aria-label={t("player.home.inviteFriend")}
               onClick={() => setInviteOpen(true)}
               disabled={!onInviteFriend}
               key={index}
@@ -220,13 +217,12 @@ export function HomePage({
               const inviteEnabled = Boolean(onInviteFriend && canInviteFriend(friend, party, account));
               return (
                 <div className="faceit-invite-row" key={friend.friendshipId}>
-                  <SteamAvatar avatarUrl={friend.steamAvatarUrl} label={label} />
+                  <SteamAvatar avatarUrl={friend.steamAvatarUrl} />
                   <div className="faceit-invite-main">
                     <strong>{label}</strong>
                     <span>{friendStatusLabel(status.label, t)}</span>
                   </div>
                   <Button
-                    aria-label={`${t("player.home.invite")} ${label}`}
                     type="primary"
                     onClick={() => void inviteFriend(friend.accountId)}
                     loading={busyInviteId === friend.accountId}
@@ -255,7 +251,7 @@ export function HomePage({
             <span className="faceit-matchmaking-content">
               <span>{isMatchmakingPending ? t("player.home.matchmaking") : t("player.home.startMatchmaking")}</span>
               {isMatchmakingPending ? (
-                <span className="faceit-matchmaking-indicator" aria-live="polite">
+                <span className="faceit-matchmaking-indicator">
                   <Spin size="small" />
                   {matchingElapsedMs !== null ? <span>{formatMatchmakingElapsed(matchingElapsedMs)}</span> : null}
                 </span>
@@ -264,8 +260,6 @@ export function HomePage({
           </Button>
           <div
             className={`faceit-occupancy-indicator faceit-occupancy-indicator--${isMatchmakingOccupied ? "busy" : "available"}`}
-            aria-label={t("player.home.occupancy", { count: occupancyActiveCount })}
-            title={t("player.home.occupancy", { count: occupancyActiveCount })}
           >
             <span className="faceit-occupancy-dot" />
             <span className="faceit-occupancy-count">{occupancyActiveCount}</span>
@@ -273,13 +267,11 @@ export function HomePage({
           {party ? (
             <Button
               className="faceit-secondary-cta"
-              aria-label={t("player.home.leaveParty")}
-              title={t("player.home.leaveParty")}
               onClick={() => void leaveParty()}
               disabled={!onLeaveParty || leavingParty}
               loading={leavingParty}
             >
-              <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <svg viewBox="0 0 24 24">
                 <path
                   fillRule="evenodd"
                   clipRule="evenodd"

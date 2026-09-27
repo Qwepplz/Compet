@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useLanguage } from "../../../../language/react.js";
 
 // Steam-style gray "?" placeholder, inlined so misses never hit the network.
 const PLACEHOLDER_AVATAR =
@@ -14,13 +13,11 @@ const PLACEHOLDER_AVATAR =
 
 interface SteamAvatarProps {
   avatarUrl?: string;
-  label?: string;
   className?: string;
 }
 
-export function SteamAvatar({ avatarUrl, label, className = "faceit-avatar" }: SteamAvatarProps) {
+export function SteamAvatar({ avatarUrl, className = "faceit-avatar" }: SteamAvatarProps) {
   const [failed, setFailed] = useState(false);
-  const { t } = useLanguage();
 
   useEffect(() => {
     setFailed(false);
@@ -31,7 +28,7 @@ export function SteamAvatar({ avatarUrl, label, className = "faceit-avatar" }: S
   const imageClassName = rootClassName.split(/\s+/)[0] ?? "faceit-avatar";
   return (
     <div className={`${rootClassName} ${imageClassName}--image`}>
-      <img alt={label ? `${label} · ${t("player.friends.avatar")}` : t("player.friends.avatar")} src={src} onError={() => setFailed(true)} />
+      <img src={src} draggable={false} onError={() => setFailed(true)} />
     </div>
   );
 }

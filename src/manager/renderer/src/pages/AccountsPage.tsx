@@ -30,34 +30,16 @@ function showAccountError(error: unknown, t: Translator, fallback: TranslationKe
   message.error(displayError(error, t, fallback));
 }
 
-interface AccountStatusLabels {
-  unavailable: string;
-  inGameOnline: string;
-  inGameOffline: string;
-  online: string;
-  offline: string;
-}
-
-export function AccountStatus({
-  online,
-  inGame,
-  labels,
-}: Pick<AccountView, "online" | "inGame"> & { labels: AccountStatusLabels }) {
+export function AccountStatus({ online, inGame }: Pick<AccountView, "online" | "inGame">) {
   if (typeof online !== "boolean" || typeof inGame !== "boolean") {
-    return <span title={labels.unavailable} aria-label={labels.unavailable}>—</span>;
+    return <span>—</span>;
   }
 
   const color = inGame
     ? (online ? "#fa8c16" : "#ff4d4f")
     : (online ? "#52c41a" : "#8c8c8c");
-  const label = inGame
-    ? (online ? labels.inGameOnline : labels.inGameOffline)
-    : (online ? labels.online : labels.offline);
-
   return (
     <span
-      role="img"
-      aria-label={label}
       style={{ display: "inline-block", width: 8, height: 8, borderRadius: "50%", backgroundColor: color }}
     />
   );
@@ -183,13 +165,6 @@ export function AccountsPage() {
         <AccountStatus
           online={row.online}
           inGame={row.inGame}
-          labels={{
-            unavailable: t("manager.accounts.unavailable"),
-            inGameOnline: t("manager.accounts.status.inGameOnline"),
-            inGameOffline: t("manager.accounts.status.inGameOffline"),
-            online: t("manager.accounts.status.online"),
-            offline: t("manager.accounts.status.offline"),
-          }}
         />
       ),
     },

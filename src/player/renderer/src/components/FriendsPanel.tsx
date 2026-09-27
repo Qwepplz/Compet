@@ -179,7 +179,7 @@ export function FriendsPanel({
       {modalContextHolder}
       <div className="player-social-header">
         <Badge className="player-social-rail" count={open ? 0 : pendingCount} size="small">
-          <span className="player-social-rail-icon" aria-label={t("common.navigation.friends")}>
+          <span className="player-social-rail-icon">
             <TeamOutlined />
           </span>
         </Badge>
@@ -189,7 +189,6 @@ export function FriendsPanel({
         </div>
         <Button
           className="player-social-add"
-          aria-label={t("player.friends.add")}
           type="text"
           icon={<UserAddOutlined />}
           onClick={() => setAddOpen(true)}
@@ -208,7 +207,6 @@ export function FriendsPanel({
                   <SteamAvatar
                     className={`faceit-avatar player-social-avatar--${status.tone}`}
                     avatarUrl={request.steamAvatarUrl}
-                    label={request.displayName}
                   />
                   <div className="player-social-row-main">
                     <strong>{request.displayName}</strong>
@@ -220,7 +218,6 @@ export function FriendsPanel({
                   </div>
                   <div className="player-social-row-actions">
                     <Button
-                      aria-label={t("player.friends.accept")}
                       size="small"
                       type="primary"
                       onClick={() => void handleAcceptRequest(request.id)}
@@ -229,7 +226,6 @@ export function FriendsPanel({
                       {t("player.friends.accept")}
                     </Button>
                     <Button
-                      aria-label={t("player.friends.decline")}
                       size="small"
                       onClick={() => void handleDeclineRequest(request.id)}
                       loading={pendingRequestId === request.id}
@@ -277,7 +273,6 @@ export function FriendsPanel({
                     <SteamAvatar
                       className={`faceit-avatar player-social-avatar--${status.tone}`}
                       avatarUrl={friend.steamAvatarUrl}
-                      label={friend.displayName}
                     />
                     <div className="player-social-row-main">
                       <div className="player-social-name-line">
@@ -322,7 +317,7 @@ export function FriendsPanel({
               onPressEnter={() => void handleSearch()}
               disabled={!onSearchFriends}
             />
-            <Button aria-label={t("common.actions.search")} type="primary" onClick={() => void handleSearch()} loading={searching} disabled={!onSearchFriends}>
+            <Button type="primary" onClick={() => void handleSearch()} loading={searching} disabled={!onSearchFriends}>
               {t("common.actions.search")}
             </Button>
           </div>
@@ -339,7 +334,6 @@ export function FriendsPanel({
                     <SteamAvatar
                       className={`faceit-avatar player-social-avatar--${status.tone}`}
                       avatarUrl={result.steamAvatarUrl}
-                      label={result.displayName}
                     />
                     <div className="player-social-row-main">
                       <strong>{result.displayName}</strong>
@@ -349,7 +343,6 @@ export function FriendsPanel({
                       {status.tone === "offline" && result.lastSeenAt ? <span className="player-social-meta">{formatLastSeen(result.lastSeenAt, t)}</span> : null}
                     </div>
                     <Button
-                      aria-label={t("player.friends.sendRequest")}
                       size="small"
                       onClick={() => void handleSendRequest(result.accountId)}
                       disabled={isFriend || hasPending || !onSendFriendRequest}

@@ -28,7 +28,7 @@ function formatRankmeChange(delta: number): string {
 function RankmeTrendIcon({ delta }: { delta: number }) {
   const isGain = Math.round(delta) >= 0;
   return (
-    <svg className="match-history-rankme-trend-icon" viewBox="0 0 12 14" aria-hidden="true" focusable="false">
+    <svg className="match-history-rankme-trend-icon" viewBox="0 0 12 14">
       <path
         d={isGain ? "M0 6l1.414 1.414L5 3.828V14h2V3.828l3.586 3.586L12 6 6 0 0 6z" : "M0 8l1.414-1.414L5 10.172V0h2v10.172l3.586-3.586L12 8l-6 6-6-6z"}
         fill="currentColor"
@@ -125,9 +125,7 @@ function MatchHistoryRow({
     ? match.partySize
     : 0;
   return (
-    <tr className={`match-history-row match-history-row--${match.selfWon ? "win" : "loss"}`} tabIndex={0} onClick={() => onOpenMatch(match.matchId)} onKeyDown={(event) => {
-      if (event.key === "Enter" || event.key === " ") onOpenMatch(match.matchId);
-    }}>
+    <tr className={`match-history-row match-history-row--${match.selfWon ? "win" : "loss"}`} onClick={() => onOpenMatch(match.matchId)}>
       <td>
         <span>{date}</span>
       </td>
@@ -163,7 +161,7 @@ function MatchHistoryRow({
       <td className="match-history-map">
         <div className="match-history-map-content">
           <span className="match-history-map-badge">
-            {badgeUrl ? <img key={badgeUrl} src={badgeUrl} width={32} height={32} alt="" onError={(event) => {
+            {badgeUrl ? <img key={badgeUrl} src={badgeUrl} width={32} height={32} draggable={false} onError={(event) => {
               event.currentTarget.style.visibility = "hidden";
             }} /> : null}
           </span>
@@ -196,8 +194,8 @@ export function MatchHistoryPage({ history, loading, scrollTopRef, onBackHome, o
 
   return (
     <div className="match-history-page">
-      <Button className="match-history-back-button" aria-label={t("common.navigation.backToHome")} icon={<ArrowLeftOutlined />} type="text" onClick={onBackHome} />
-      <section className="match-history-panel" aria-label={t("common.navigation.history")}>
+      <Button className="match-history-back-button" icon={<ArrowLeftOutlined />} type="text" onClick={onBackHome} />
+      <section className="match-history-panel">
         <header className="match-history-header">
           <h1>{t("player.history.title")}</h1>
         </header>

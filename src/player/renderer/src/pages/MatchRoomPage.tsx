@@ -60,9 +60,9 @@ function participantName(participant: PlayerMatchParticipantDto, fallback: strin
   return participantDisplayName(participant, fallback);
 }
 
-function participantBadge(participant: PlayerMatchParticipantDto, t: LanguageContextValue["t"]): { variant: "gold" | "white"; title: string } | null {
-  if (participant.kind === "human") return { variant: "gold", title: t("common.labels.player") };
-  if (participant.botCategory === "pro") return { variant: "white", title: t("common.labels.proBot") };
+function participantBadge(participant: PlayerMatchParticipantDto): { variant: "gold" | "white" } | null {
+  if (participant.kind === "human") return { variant: "gold" };
+  if (participant.botCategory === "pro") return { variant: "white" };
   return null;
 }
 
@@ -87,7 +87,7 @@ function renderTeam(
       <div className="faceit-team-title">
         <span>{t("common.labels.players")}</span>
         <div className="faceit-team-identity">
-          {team.logoImage ? <img className="faceit-team-logo" src={team.logoImage} alt="" /> : null}
+          {team.logoImage ? <img className="faceit-team-logo" src={team.logoImage} draggable={false} /> : null}
           <strong>{team.name}</strong>
         </div>
       </div>
@@ -96,19 +96,18 @@ function renderTeam(
           const isSelf = Boolean(accountId && participant.accountId === accountId);
           const anonymous = isReadyAnonymous(phase, participant, accountId);
           const displayName = anonymous ? t("player.match.anonymousPlayer") : participantName(participant, t("common.player.unknown"));
-          const avatarLabel = anonymous ? undefined : participantName(participant, t("common.player.unknown"));
           const avatarUrl = anonymous ? undefined : participant.steamAvatarUrl;
-          const badge = anonymous ? null : participantBadge(participant, t);
+          const badge = anonymous ? null : participantBadge(participant);
           return (
             <div className={`faceit-player-card${isSelf ? " faceit-player-card--self" : ""}`} key={participant.id}>
-              <SteamAvatar className="faceit-player-avatar" avatarUrl={avatarUrl} label={avatarLabel} />
+              <SteamAvatar className="faceit-player-avatar" avatarUrl={avatarUrl} />
               <div className="faceit-player-main">
                 <div className="faceit-player-name-line">
                   <strong>{displayName}</strong>
-                  {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
+                  {badge ? <VerificationBadge variant={badge.variant} /> : null}
                   {!anonymous && participant.isCaptain ? (
-                    <span className="faceit-captain-badge" aria-label={t("common.labels.captain")} title={t("common.labels.captain")}>
-                      <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <span className="faceit-captain-badge">
+                      <svg viewBox="0 0 24 24">
                         <path
                           fillRule="evenodd"
                           clipRule="evenodd"
@@ -221,7 +220,6 @@ export function MatchRoomPage({
   };
   const panelProps = (name: string, visible: boolean) => ({
     "data-flow-panel": name,
-    "aria-hidden": !active || !visible,
     inert: !active || !visible,
     className: `match-flow-panel${active && visible ? " is-active" : ""}`,
   });
@@ -281,19 +279,18 @@ export function MatchRoomPage({
             <div className="faceit-progress-line" />
 
             <div {...panelProps("final", Boolean(selectedMap))}>
-              <section className="faceit-final-map-preview" aria-label={t("player.match.finalMap")}>
+              <section className="faceit-final-map-preview">
                 <span>{t("player.match.finalMap")}</span>
                 <strong>{selection ? formatMapName(selection.finalMap) : null}</strong>
                 <span
                   className="faceit-final-map-thumb"
                   style={selection && mapImageUrl(selection.finalMap) ? { backgroundImage: `url("${mapImageUrl(selection.finalMap)}")` } : undefined}
-                  aria-hidden="true"
                 />
               </section>
             </div>
 
             {room.phase === "queue" ? (
-              <section className="faceit-connect-panel" aria-live="polite">
+              <section className="faceit-connect-panel">
                 <span>{t("common.state.matching")}</span>
                 <strong className="faceit-countdown"><Spin /></strong>
                 <small>{t("player.match.waitingForResult")}</small>
@@ -315,7 +312,6 @@ export function MatchRoomPage({
                 {canUseReadyActions ? (
                   <div className="faceit-action-row">
                     <Button
-                      aria-label={t("player.match.ready")}
                       type="primary"
                       onClick={() => void handleAcceptReady()}
                       disabled={!onAcceptReady || !readyCountdownStarted || selfReady || Boolean(readyActionPending)}
@@ -324,7 +320,6 @@ export function MatchRoomPage({
                       {t("player.match.ready")}
                     </Button>
                     <Button
-                      aria-label={t("player.match.decline")}
                       onClick={() => void handleDeclineReady()}
                       disabled={!onDeclineReady || !readyCountdownStarted || selfReady || Boolean(readyActionPending)}
                       loading={readyActionPending === "decline"}
@@ -340,7 +335,7 @@ export function MatchRoomPage({
               {room.mapSelection
                 ? <RandomMapReel mapSelection={room.mapSelection} nowMs={presentationNowMs} active={active && presentationPhase === "map_randomizing"} onRevealBoundary={markRevealBoundary} />
                 : (
-                    <section className="faceit-connect-panel" aria-live="polite">
+                    <section className="faceit-connect-panel">
                       <span>{t("player.match.mapStage")}</span>
                       <strong>{t("player.match.waitingPlayers")}</strong>
                       <small>{t("player.match.mapStageWaiting")}</small>
@@ -360,7 +355,6 @@ export function MatchRoomPage({
             <div {...panelProps("connect", presentationPhase === "connect" || presentationPhase === "live")}>
               <section className="faceit-connect-panel">
                   <Button
-                    aria-label={t("player.match.copyConnectCommand")}
                     type="primary"
                     className="faceit-connect-button"
                     onClick={() => { if (active && connect && (presentationPhase === "connect" || presentationPhase === "live")) void onCopyText?.(connect.connectCommand); }}

@@ -119,7 +119,7 @@ function realtimeConnectionLabel(connection: PlayerRealtimeStatusDto["connection
 
 function HistoryChartIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" height="24" width="24" aria-hidden="true" focusable="false">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" height="24" width="24">
       <path d="M3 3h2v16h16v2H3V3z" fill="currentColor" />
       <path d="M16 13.414l5.707-5.707-1.414-1.414L16 10.586l-4-4-5.707 5.707 1.414 1.414L12 9.414l4 4z" fill="currentColor" />
     </svg>
@@ -128,7 +128,7 @@ function HistoryChartIcon() {
 
 function SettingsToolIcon() {
   return (
-    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" height="24" width="24" aria-hidden="true" focusable="false">
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" height="24" width="24">
       <path
         d="M4 6h9v2H4V6zm11-2h5v6h-5V4zM4 14h5v6H4v-6zm7 2h9v2h-9v-2z"
         fill="currentColor"
@@ -322,7 +322,7 @@ function PartyInviteToasts({
   if (invitations.length === 0) return null;
 
   return (
-    <div className="player-party-invite-toasts" aria-live="polite">
+    <div className="player-party-invite-toasts">
       {invitations.map((invitation) => {
         const inviterLabel = invitation.fromDisplayName;
         const inviterAvatarUrl = partyInviteAvatarUrl(invitation.fromAccountId, account, friends);
@@ -334,7 +334,7 @@ function PartyInviteToasts({
           <div className="player-party-invite-toast" key={invitation.id}>
             <div className="player-party-invite-progress" style={progressStyle} />
             <div className="player-party-invite-body">
-              <SteamAvatar className="player-party-invite-avatar" avatarUrl={inviterAvatarUrl} label={inviterLabel} />
+              <SteamAvatar className="player-party-invite-avatar" avatarUrl={inviterAvatarUrl} />
               <div className="player-party-invite-copy">
                 <strong>{inviterLabel}</strong>
                 <span>{t("player.invite.joinParty")}</span>
@@ -1684,11 +1684,10 @@ export function App() {
             <section className="match-result-content match-result-loading-content">
               <Button
                 className="match-result-back-button"
-                aria-label={t("common.navigation.backToHome")}
                 icon={<ArrowLeftOutlined />}
                 onClick={backFromMatchResult}
               />
-              <div className="match-result-loading-state" role="status" aria-live="polite">
+              <div className="match-result-loading-state">
                 <Spin size="large" />
                 <span>{t("player.match.loadingDetails")}</span>
               </div>
@@ -1736,16 +1735,14 @@ export function App() {
   }
 
   const windowControls = (
-    <div className="player-window-controls" aria-label={t("common.navigation.windowControls")}>
+    <div className="player-window-controls">
       <Button
-        aria-label={t("common.navigation.minimize")}
         className="player-window-control"
         icon={<MinusOutlined />}
         type="text"
         onClick={() => void api.minimizeWindow()}
       />
       <Button
-        aria-label={t("common.navigation.close")}
         className="player-window-control player-window-control--close"
         icon={<CloseOutlined />}
         type="text"
@@ -1846,7 +1843,7 @@ export function App() {
         <div className="player-window-drag-region" />
         <div className="player-app-profile">
           <div className="player-app-brand">
-            <SteamAvatar className="player-app-avatar" avatarUrl={headerAccount?.steamAvatarUrl} label={accountLabel} />
+            <SteamAvatar className="player-app-avatar" avatarUrl={headerAccount?.steamAvatarUrl} />
             <div className="player-app-brand-copy">
               <div className="player-kicker">{t("player.window.title")}</div>
               <div className="player-app-name-line">
@@ -1860,21 +1857,19 @@ export function App() {
 
         <div className="player-app-chrome">
           <div className="player-app-meta">
-            <span aria-label={t("common.labels.serverAddress")} className="player-status-pill player-status-pill--server">
+            <span className="player-status-pill player-status-pill--server">
               {baseUrl}
             </span>
             <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>
               {realtimeConnectionLabel(realtimeStatus.connection, t)}
             </span>
             <Button
-              aria-label={t("common.navigation.history")}
               className={`player-app-settings-button player-app-history-button${viewingMatchHistory ? " player-app-history-button--active" : ""}`}
               icon={<HistoryChartIcon />}
               type="text"
               onClick={() => void openMatchHistory()}
             />
             <Button
-              aria-label={t("common.navigation.settings")}
               className="player-app-settings-button"
               icon={<SettingsToolIcon />}
               type="text"
@@ -1888,7 +1883,7 @@ export function App() {
           <main className="player-app-main" style={{ position: "relative" }}>
             {renderAuthenticatedView()}
             {matchFlowRoom ? (
-              <div className={`player-match-flow-host${activeView === "match-room" ? " is-active" : ""}`} inert={activeView !== "match-room"} aria-hidden={activeView !== "match-room"}>
+              <div className={`player-match-flow-host${activeView === "match-room" ? " is-active" : ""}`} inert={activeView !== "match-room"}>
                 <MatchRoomPage key={matchFlowRoom.id} account={account} room={matchFlowRoom} nowMs={syncedNowMs}
                   active={activeView === "match-room"} connection={realtimeStatus.connection}
                   preloadVersion={party?.matchmakingPendingAt ? party.preload?.resourceVersion : undefined}
@@ -1997,7 +1992,6 @@ export function App() {
                       <label className="player-settings-row">
                         <span>{t("player.settings.matchSound")}</span>
                         <Switch
-                          aria-label={t("player.settings.matchSound")}
                           checked={matchSoundEnabled}
                           checkedChildren={t("player.settings.toggleOn")}
                           unCheckedChildren={t("player.settings.toggleOff")}
@@ -2028,7 +2022,7 @@ export function App() {
                     <div className="player-settings-pane">
                       <div className="player-settings-update">
                         {recoveryReport ? (
-                          <div role="status" className="player-integrity-result">
+                          <div className="player-integrity-result">
                             <div>{t(
                               recoveryReport.status === "passed" && recoveryReport.error === "maintenance_cleanup_pending"
                                 ? "player.integrity.repairCleanupPending"
@@ -2048,7 +2042,7 @@ export function App() {
                           <Button onClick={() => void api.cancelIntegrity()}>{t("player.integrity.cancel")}</Button>
                         ) : null}
                         {integrityPending ? (
-                          <div role="status">
+                          <div>
                             <div>{t(`player.integrity.stage.${integrityProgress?.stage ?? "checking"}`)}</div>
                             <div>{t("player.integrity.progress", { checked: integrityProgress?.checkedFiles ?? 0,
                               total: integrityProgress?.totalFiles ?? 0 })}</div>
@@ -2061,7 +2055,7 @@ export function App() {
                           </div>
                         ) : null}
                         {maintenanceFeedback ? (
-                          <div role="status" className="player-integrity-result">
+                          <div className="player-integrity-result">
                             <div>{t(`player.integrity.result.${maintenanceFeedback.status}`)}</div>
                             {maintenanceFeedback.status === "failed" || maintenanceFeedback.status === "cancelled" ? (
                               maintenanceFeedback.error ? (
@@ -2071,7 +2065,7 @@ export function App() {
                           </div>
                         ) : null}
                         {integrityReport ? (
-                          <div role="status" className="player-integrity-result">
+                          <div className="player-integrity-result">
                             <div>{integrityReport.status === "issues" && integrityReport.action === "update"
                               ? t("player.integrity.updateAvailable", { version: integrityReport.version,
                                 files: integrityReport.changedFiles, bytes: integrityReport.changedBytes.toLocaleString() })

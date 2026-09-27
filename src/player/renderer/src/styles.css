@@ -42,6 +42,22 @@ body {
   background: #050505;
 }
 
+body,
+body * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+body input,
+body textarea {
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+img {
+  -webkit-user-drag: none;
+}
+
 button,
 input {
   font-family: inherit;
@@ -154,16 +170,6 @@ input {
 
 .player-copy--small {
   font-size: 14px;
-}
-
-.player-sr-only {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0 0 0 0);
-  white-space: nowrap;
 }
 
 .player-app-profile {
@@ -341,15 +347,12 @@ input {
   -webkit-app-region: no-drag;
 }
 
-.player-app-settings-button:not(:disabled):hover,
-.player-app-settings-button:not(:disabled):focus-visible {
+.player-app-settings-button:not(:disabled):hover {
   background: rgba(255, 85, 0, 0.12);
   color: #ff6a1f;
 }
 
-.player-app-settings-button.ant-btn:not(:disabled):hover,
-.player-app-settings-button.ant-btn:not(:disabled):focus,
-.player-app-settings-button.ant-btn:not(:disabled):focus-visible {
+.player-app-settings-button.ant-btn:not(:disabled):hover {
   border: 0 !important;
   border-color: transparent !important;
   box-shadow: none !important;
@@ -394,8 +397,7 @@ input {
   box-shadow: none;
 }
 
-.player-window-control.ant-btn:not(:disabled):hover,
-.player-window-control.ant-btn:not(:disabled):focus-visible {
+.player-window-control.ant-btn:not(:disabled):hover {
   border: 0;
   background: rgba(255, 255, 255, 0.08);
   color: #fff;
@@ -403,8 +405,7 @@ input {
   outline: 0;
 }
 
-.player-window-control--close.ant-btn:not(:disabled):hover,
-.player-window-control--close.ant-btn:not(:disabled):focus-visible {
+.player-window-control--close.ant-btn:not(:disabled):hover {
   background: #c42b1c;
   color: #fff;
 }
@@ -516,14 +517,12 @@ input {
   color: #fff;
 }
 
-.player-settings .ant-btn:not(:disabled):hover,
-.player-settings .ant-btn:not(:disabled):focus-visible {
+.player-settings .ant-btn:not(:disabled):hover {
   border-color: #ff5500;
   color: #fff;
 }
 
-.player-settings .ant-btn-primary:not(:disabled):hover,
-.player-settings .ant-btn-primary:not(:disabled):focus-visible {
+.player-settings .ant-btn-primary:not(:disabled):hover {
   background: #ff6a1f;
   border-color: #ff6a1f;
 }
@@ -623,8 +622,7 @@ button.faceit-party-slot:disabled {
   opacity: 0.55;
 }
 
-button.faceit-party-slot:not(:disabled):hover,
-button.faceit-party-slot:not(:disabled):focus-visible {
+button.faceit-party-slot:not(:disabled):hover {
   border-color: #ff5500;
   background: #17100c;
   outline: none;
@@ -947,8 +945,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #d8d8d8;
 }
 
-.match-history-back-button.ant-btn:not(:disabled):hover,
-.match-history-back-button.ant-btn:not(:disabled):focus {
+.match-history-back-button.ant-btn:not(:disabled):hover {
   border-color: #3a3a3a;
   background: #202020;
   color: #fff;
@@ -1060,8 +1057,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   border-bottom: 1px solid #1e1e1e;
 }
 
-.match-history-row:hover,
-.match-history-row:focus-visible {
+.match-history-row:hover {
   background: #151515;
   outline: 0;
 }
@@ -1305,8 +1301,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   color: #d8d8d8;
 }
 
-.match-result-back-button.ant-btn:not(:disabled):hover,
-.match-result-back-button.ant-btn:not(:disabled):focus {
+.match-result-back-button.ant-btn:not(:disabled):hover {
   border-color: #3a3a3a;
   background: #202020;
   color: #fff;
@@ -2312,8 +2307,7 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   box-shadow: none;
 }
 
-.ant-btn-primary:not(:disabled):hover,
-.ant-btn-primary:not(:disabled):focus {
+.ant-btn-primary:not(:disabled):hover {
   color: #fff;
   background: #ff6c20;
   border-color: #ff6c20;

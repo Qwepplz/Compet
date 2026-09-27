@@ -4,7 +4,7 @@ import type { CSSProperties } from "react";
 import type { PlayerMatchPlayerResultDto, PlayerMatchResultDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
-import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
+import { useLanguage } from "../../../../language/react.js";
 
 interface MatchResultPageProps {
   result: PlayerMatchResultDto;
@@ -47,9 +47,9 @@ function formatRating2(rating2: number | undefined): string {
   return displayed === null ? "-" : displayed.toFixed(2);
 }
 
-function playerBadge(player: PlayerMatchPlayerResultDto, t: LanguageContextValue["t"]): { variant: "gold" | "white"; title: string } | null {
-  if (player.kind === "human") return { variant: "gold", title: t("common.labels.player") };
-  if (player.botCategory === "pro") return { variant: "white", title: t("common.labels.proBot") };
+function playerBadge(player: PlayerMatchPlayerResultDto): { variant: "gold" | "white" } | null {
+  if (player.kind === "human") return { variant: "gold" };
+  if (player.botCategory === "pro") return { variant: "white" };
   return null;
 }
 
@@ -103,20 +103,20 @@ export function MatchResultPage({ result, selfSteam64, onBackHome }: MatchResult
 
   return (
     <div className="match-result-page">
-      <section className="match-result-meta" aria-label={t("player.match.result")}>
+      <section className="match-result-meta">
         <span>{t("common.labels.bo1")}</span>
         <span>{formatDateTime(result.completedAt)}</span>
         <span>{formatResultMapName(result.mapName)}</span>
       </section>
 
       <section className="match-result-content">
-        <Button className="match-result-back-button" aria-label={t("common.navigation.backToHome")} icon={<ArrowLeftOutlined />} onClick={onBackHome} />
-        <section className="match-result-team-panels" aria-label={t("player.match.stats")}>
+        <Button className="match-result-back-button" icon={<ArrowLeftOutlined />} onClick={onBackHome} />
+        <section className="match-result-team-panels">
           {teamSections.map((section) => (
             <section className="match-result-team-section" key={section.team}>
               <header className="match-result-team-header">
                 <div className="match-result-team-identity">
-                  {section.logoImage ? <img className="match-result-team-logo" src={section.logoImage} alt="" /> : null}
+                  {section.logoImage ? <img className="match-result-team-logo" src={section.logoImage} draggable={false} /> : null}
                   <strong>{section.name}</strong>
                 </div>
                 {section.firstHalfScore !== undefined || section.secondHalfScore !== undefined ? (
@@ -156,17 +156,17 @@ export function MatchResultPage({ result, selfSteam64, onBackHome }: MatchResult
                       {section.players.map((player) => {
                         const name = playerName(player, t("common.player.unknown"));
                         const isSelf = Boolean(selfSteam64) && player.steam64 === selfSteam64;
-                        const badge = playerBadge(player, t);
+                        const badge = playerBadge(player);
                         const ratingTone = rating2Tone(player.rating2);
                         const ratingProgress = rating2Progress(player.rating2);
                         return (
                           <tr key={player.steam64 || `${player.team}-${player.name}`}>
                             <td>
                               <div className="match-result-player">
-                                <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} label={name} />
+                                <SteamAvatar className="match-result-player-avatar" avatarUrl={player.avatarUrl} />
                                 <div className="match-result-player-name-line">
                                   <strong className={isSelf ? "match-result-player-name--self" : undefined}>{name}</strong>
-                                  {badge ? <VerificationBadge variant={badge.variant} title={badge.title} /> : null}
+                                  {badge ? <VerificationBadge variant={badge.variant} /> : null}
                                 </div>
                               </div>
                             </td>

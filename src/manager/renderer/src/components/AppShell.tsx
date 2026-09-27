@@ -34,7 +34,7 @@ export function AppShell({ page, status, matchmakingOccupancy, children, onPageC
             <Typography.Text strong>{t("manager.serviceAdministration")}</Typography.Text>
           </Space>
           <div className="manager-status">
-            <span className={`manager-occupancy manager-occupancy--${occupancyBusy ? "busy" : "available"}`} title={t("manager.occupancy", { count: matchmakingOccupancy.activeCount })}>
+            <span className={`manager-occupancy manager-occupancy--${occupancyBusy ? "busy" : "available"}`}>
               <span className="manager-occupancy-dot" />
               <span>{matchmakingOccupancy.activeCount}</span>
             </span>

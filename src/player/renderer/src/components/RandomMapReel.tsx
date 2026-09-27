@@ -58,12 +58,9 @@ export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoun
   }, [active, animationKey, winnerIndex]);
 
   return (
-    <section className="faceit-connect-panel faceit-reel-panel" aria-live="polite">
+    <section className="faceit-connect-panel faceit-reel-panel">
       <span>{settled ? t("player.reel.completed") : t("player.reel.randomizing")}</span>
-      <div
-        className="faceit-reel-viewport"
-        aria-label={settled ? t("player.reel.finalMapAria", { map: formatMapName(finalMap) }) : t("player.reel.animationAria")}
-      >
+      <div className="faceit-reel-viewport">
         <div className="faceit-reel-strip" ref={stripRef}>
           {tiles.map((map, index) => {
             const url = mapImageUrl(map);
@@ -72,14 +69,13 @@ export function RandomMapReel({ mapSelection, nowMs, active = true, onRevealBoun
                 key={`${map}-${index}`}
                 className={`faceit-reel-tile${settled && index === winnerIndex ? " is-winner" : ""}`}
                 style={url ? { backgroundImage: `url("${url}")` } : undefined}
-                aria-hidden="true"
               >
                 <span className="faceit-reel-tile-label">{formatMapName(map)}</span>
               </div>
             );
           })}
         </div>
-        <div className="faceit-reel-marker" aria-hidden="true" />
+        <div className="faceit-reel-marker" />
       </div>
       <strong className="faceit-reel-final-name">{formatMapName(finalMap)}</strong>
       <small>{settled ? t("player.reel.revealedNote") : t("player.reel.randomizingNote")}</small>
