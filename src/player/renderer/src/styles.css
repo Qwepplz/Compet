@@ -1029,6 +1029,11 @@ button.faceit-party-slot:not(:disabled):focus-visible {
   width: 140px;
 }
 
+.match-history-table th:last-child {
+  width: 160px;
+  box-sizing: border-box;
+}
+
 .match-history-table th,
 .match-history-table td {
   overflow: hidden;
@@ -1191,6 +1196,33 @@ button.faceit-party-slot:not(:disabled):focus-visible {
 
 .match-history-map {
   text-transform: capitalize;
+}
+
+.match-history-map-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.match-history-map-badge {
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+}
+
+.match-history-map-badge img {
+  display: block;
+  width: 32px;
+  height: 32px;
+  object-fit: contain;
+}
+
+.match-history-map-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .match-history-empty {

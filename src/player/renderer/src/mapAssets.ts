@@ -11,12 +11,30 @@ const MAP_IMAGE_URLS: Record<string, string> = {
   de_anubis: new URL("./assets/maps/de_anubis.jpg", import.meta.url).href,
 };
 
+const MAP_BADGE_URLS: Record<string, string> = {
+  de_ancient: new URL("./assets/map-badges/ancient.png", import.meta.url).href,
+  de_anubis: new URL("./assets/map-badges/anubis.png", import.meta.url).href,
+  de_cache: new URL("./assets/map-badges/cache.png", import.meta.url).href,
+  de_dust2: new URL("./assets/map-badges/dust2.png", import.meta.url).href,
+  de_inferno: new URL("./assets/map-badges/inferno.png", import.meta.url).href,
+  de_mirage: new URL("./assets/map-badges/mirage.png", import.meta.url).href,
+  de_nuke: new URL("./assets/map-badges/nuke.png", import.meta.url).href,
+  de_overpass: new URL("./assets/map-badges/overpass.png", import.meta.url).href,
+  de_train: new URL("./assets/map-badges/train.png", import.meta.url).href,
+  de_vertigo: new URL("./assets/map-badges/vertigo.png", import.meta.url).href,
+};
+
 export function formatMapName(map: string): string {
   return map.replace(/^de_/, "").replace(/_/g, " ").toUpperCase();
 }
 
 export function mapImageUrl(map: string): string | undefined {
   return MAP_IMAGE_URLS[map.toLowerCase()];
+}
+
+export function mapBadgeUrl(map: string): string | undefined {
+  const normalized = map.toLowerCase();
+  return MAP_BADGE_URLS[normalized.startsWith("de_") ? normalized : `de_${normalized}`];
 }
 
 const preloadByUrl = new Map<string, Promise<void>>();

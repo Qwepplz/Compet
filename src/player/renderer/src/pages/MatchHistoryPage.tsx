@@ -3,6 +3,7 @@ import { Button, Pagination, Spin } from "antd";
 import { useLayoutEffect, useRef, type CSSProperties, type RefObject } from "react";
 import type { PlayerMatchHistoryDto, PlayerMatchHistoryEntryDto } from "../../../shared/types.js";
 import { useLanguage } from "../../../../language/react.js";
+import { mapBadgeUrl } from "../mapAssets.js";
 
 interface MatchHistoryPageProps {
   history: PlayerMatchHistoryDto | null;
@@ -119,6 +120,7 @@ function MatchHistoryRow({
   const ratingProgress = rating2Progress(match.self.rating2);
   const selfScore = match.selfTeam === "teamA" ? match.score.team1 : match.score.team2;
   const opponentScore = match.selfTeam === "teamA" ? match.score.team2 : match.score.team1;
+  const badgeUrl = mapBadgeUrl(match.mapName);
   const partySize = typeof match.partySize === "number" && Number.isInteger(match.partySize) && match.partySize >= 2 && match.partySize <= 5
     ? match.partySize
     : 0;
@@ -158,7 +160,16 @@ function MatchHistoryRow({
       <td>{match.self.kills} / {match.self.deaths} / {match.self.assists}</td>
       <td>{formatKillDeath(match.self.kills, match.self.deaths)}</td>
       <td>{formatAdr(match.self.damage, match.score.team1, match.score.team2)}</td>
-      <td className="match-history-map">{formatMapName(match.mapName)}</td>
+      <td className="match-history-map">
+        <div className="match-history-map-content">
+          <span className="match-history-map-badge">
+            {badgeUrl ? <img key={badgeUrl} src={badgeUrl} width={32} height={32} alt="" onError={(event) => {
+              event.currentTarget.style.visibility = "hidden";
+            }} /> : null}
+          </span>
+          <span className="match-history-map-name">{formatMapName(match.mapName)}</span>
+        </div>
+      </td>
     </tr>
   );
 }
