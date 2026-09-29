@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import fsPromises from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { z } from "zod";
-import type { ManagerConfig } from "../shared/types.js";
+import type { ManagerConfig, ServerRootValidationErrorCode } from "../shared/types.js";
 import { defaultPublicConnectHost } from "../../shared/network.js";
 
 const detectedPublicConnectHost = defaultPublicConnectHost();
@@ -21,6 +22,52 @@ const schema = z.object({
   steamAccountToken: z.string().default(""),
 });
 
+class ServerRootValidationError extends Error {
+  constructor(readonly code: ServerRootValidationErrorCode) {
+    super(code);
+    this.name = "ServerRootValidationError";
+  }
+}
+
+function isMissingPathError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null || !("code" in error)) return false;
+  const code = (error as NodeJS.ErrnoException).code;
+  return code === "ENOENT" || code === "ENOTDIR";
+}
+
+function pathValidationError(): ServerRootValidationError {
+  return new ServerRootValidationError("server_root_invalid");
+}
+
+function pathCheckError(): ServerRootValidationError {
+  return new ServerRootValidationError("server_root_check_failed");
+}
+
+export async function validateServerRoot(serverRoot: string): Promise<string> {
+  const normalized = serverRoot.trim();
+  if (!normalized || !path.isAbsolute(normalized)) throw pathValidationError();
+
+  let rootStats;
+  try {
+    rootStats = await fsPromises.stat(normalized);
+  } catch (error) {
+    if (isMissingPathError(error)) throw pathValidationError();
+    throw pathCheckError();
+  }
+  if (!rootStats.isDirectory()) throw pathValidationError();
+
+  let executableStats;
+  try {
+    executableStats = await fsPromises.stat(path.join(normalized, "srcds.exe"));
+  } catch (error) {
+    if (isMissingPathError(error)) throw pathValidationError();
+    throw pathCheckError();
+  }
+  if (!executableStats.isFile()) throw pathValidationError();
+
+  return normalized;
+}
+
 export class FileConfigStore {
   constructor(private readonly filePath: string, private readonly appRoot: string) {}
 
@@ -36,10 +83,11 @@ export class FileConfigStore {
 
   async save(config: ManagerConfig): Promise<void> {
     const parsed = schema.parse(config);
+    parsed.serverRoot = await validateServerRoot(parsed.serverRoot);
     await mkdir(path.dirname(this.filePath), { recursive: true });
     const temp = `${this.filePath}.tmp`;
     await writeFile(temp, JSON.stringify(parsed, null, 2), "utf8");
-    await rename(temp, this.filePath);
+    await fsPromises.rename(temp, this.filePath);
   }
 
   private defaultConfig(): ManagerConfig {

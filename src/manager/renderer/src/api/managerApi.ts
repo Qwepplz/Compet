@@ -1,4 +1,4 @@
-import type { AccountMatchDetail, AccountMatchHistory, AccountView, BootstrapAdminInput, CreateAccountInput, LogEntry, LoginResult, ManagerConfig, MatchmakingOccupancy, SavedLoginCredentials, UpdateAccountInput } from "../../../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, BootstrapAdminInput, CreateAccountInput, LogEntry, LoginResult, ManagerConfig, ManagerConfigSaveResult, MatchmakingOccupancy, SavedLoginCredentials, ServerRootRecoveryResult, UpdateAccountInput } from "../../../shared/types.js";
 import type { UpdateCheckResult } from "../../../../desktop/updateTypes.js";
 
 export type { UpdateCheckResult };
@@ -11,8 +11,9 @@ export function isManagerAuthRequired(): boolean {
 
 export const managerApi = {
   loadConfig: () => window.managerApi.loadConfig() as Promise<ManagerConfig>,
-  saveConfig: (config: ManagerConfig) => window.managerApi.saveConfig(config) as Promise<void>,
+  saveConfig: (config: ManagerConfig) => window.managerApi.saveConfig(config) as Promise<ManagerConfigSaveResult>,
   selectServerRoot: () => window.managerApi.selectServerRoot() as Promise<string | null>,
+  selectAndSaveServerRoot: () => window.managerApi.selectAndSaveServerRoot() as Promise<ServerRootRecoveryResult>,
   serviceStatus: () => window.managerApi.serviceStatus(),
   startService: () => window.managerApi.startService(),
   stopService: () => window.managerApi.stopService(),

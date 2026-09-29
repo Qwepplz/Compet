@@ -1,6 +1,6 @@
 import { Alert, Button, Form, Input, InputNumber, Space, Spin, message } from "antd";
 import { useEffect, useState } from "react";
-import type { ManagerConfig } from "../../../shared/types.js";
+import type { ManagerConfig, ServerRootValidationErrorCode } from "../../../shared/types.js";
 import { managerApi, type UpdateCheckResult } from "../api/managerApi.js";
 import { displayError } from "../../../../language/displayError.js";
 import { LanguageSelector } from "../../../../language/LanguageSelector.js";
@@ -16,6 +16,11 @@ interface SettingsFormValues {
   gamePortStart: number;
   steamAccountToken: string;
 }
+
+const serverRootSaveErrorMessages = {
+  server_root_invalid: "errors.serverRootInvalid",
+  server_root_check_failed: "errors.serverRootCheckFailed",
+} as const satisfies Record<ServerRootValidationErrorCode, string>;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -98,7 +103,13 @@ export function SettingsPage() {
         gamePortEnd: values.gamePortStart,
         steamAccountToken: values.steamAccountToken.trim(),
       };
-      await managerApi.saveConfig(nextConfig);
+      const saveResult = await managerApi.saveConfig(nextConfig);
+      if (saveResult.status === "error") {
+        const messageText = t(serverRootSaveErrorMessages[saveResult.code]);
+        setError(messageText);
+        message.error(messageText);
+        return;
+      }
       setLoadedConfig(nextConfig);
       message.success(t("manager.settings.saved"));
     } catch (caught) {

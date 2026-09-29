@@ -28,6 +28,24 @@ export interface ServiceStatus {
   lastError?: string;
 }
 
+export type ServerRootValidationErrorCode = "server_root_invalid" | "server_root_check_failed";
+
+export type ManagerConfigSaveResult =
+  | { status: "saved" }
+  | { status: "error"; code: ServerRootValidationErrorCode };
+
+export type ServerRootRecoveryErrorCode =
+  | "server_root_invalid"
+  | "server_root_check_failed"
+  | "server_root_recovery_busy"
+  | "server_root_save_failed"
+  | "server_root_selection_failed";
+
+export type ServerRootRecoveryResult =
+  | { status: "saved"; serverRoot: string }
+  | { status: "cancelled" }
+  | { status: "error"; code: ServerRootRecoveryErrorCode };
+
 export interface MatchmakingOccupancy {
   activeCount: number;
 }

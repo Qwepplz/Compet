@@ -1,6 +1,6 @@
 import { Button, Card, message, Space, Spin, Typography } from "antd";
-import { useEffect, useState } from "react";
-import type { BootstrapAdminInput, MatchmakingOccupancy, SavedLoginCredentials, ServiceStatus } from "../../shared/types.js";
+import { useEffect, useRef, useState } from "react";
+import type { BootstrapAdminInput, MatchmakingOccupancy, SavedLoginCredentials, ServerRootRecoveryErrorCode, ServiceStatus } from "../../shared/types.js";
 import { isManagerAuthRequired, managerApi } from "./api/managerApi.js";
 import { AppShell } from "./components/AppShell.js";
 import { AccountsPage } from "./pages/AccountsPage.js";
@@ -16,6 +16,13 @@ import { useLanguage } from "../../../language/react.js";
 const initialStatus: ServiceStatus = { state: "stopped", baseUrl: "https://127.0.0.1:18443" };
 const initialMatchmakingOccupancy: MatchmakingOccupancy = { activeCount: 0 };
 const MATCHMAKING_OCCUPANCY_POLL_MS = 2_000;
+const serverRootRecoveryErrorMessages = {
+  server_root_invalid: "errors.serverRootInvalid",
+  server_root_check_failed: "errors.serverRootCheckFailed",
+  server_root_recovery_busy: "errors.serverRootRecoveryBusy",
+  server_root_save_failed: "errors.serverRootSaveFailed",
+  server_root_selection_failed: "errors.serverRootSelectionFailed",
+} as const satisfies Record<ServerRootRecoveryErrorCode, string>;
 
 export function App() {
   const { t } = useLanguage();
@@ -26,6 +33,8 @@ export function App() {
   const [passwordChangeRequired, setPasswordChangeRequired] = useState(false);
   const [savedLogin, setSavedLogin] = useState<SavedLoginCredentials | null>(null);
   const [serviceActionPending, setServiceActionPending] = useState(false);
+  const [serverRootRecoveryPending, setServerRootRecoveryPending] = useState(false);
+  const serviceActionLock = useRef(false);
   const [matchmakingOccupancy, setMatchmakingOccupancy] = useState<MatchmakingOccupancy>(initialMatchmakingOccupancy);
 
   useEffect(() => {
@@ -94,9 +103,45 @@ export function App() {
     }
   }
 
-  async function startService() {
-    if (serviceActionPending) return;
+  function beginServiceAction() {
+    if (serviceActionLock.current) return false;
+    serviceActionLock.current = true;
     setServiceActionPending(true);
+    return true;
+  }
+  function finishServiceAction() {
+    serviceActionLock.current = false;
+    setServiceActionPending(false);
+  }
+  async function refreshFailedStatus() {
+    if (!beginServiceAction()) return;
+    try {
+      await refreshStatus();
+    } finally {
+      finishServiceAction();
+    }
+  }
+  async function changeServerRoot() {
+    if (!beginServiceAction()) return;
+    setServerRootRecoveryPending(true);
+    try {
+      const result = await managerApi.selectAndSaveServerRoot();
+      if (result.status === "saved") {
+        message.success(t("manager.service.serverRootSaved"));
+        return;
+      }
+      if (result.status === "cancelled") return;
+      message.error(t(serverRootRecoveryErrorMessages[result.code]));
+    } catch (error) {
+      message.error(displayError(error, t, "errors.serverRootRecoveryFailed"));
+    } finally {
+      setServerRootRecoveryPending(false);
+      finishServiceAction();
+    }
+  }
+
+  async function startService() {
+    if (!beginServiceAction()) return;
     try {
       const nextStatus = await managerApi.startService();
       setStatus(nextStatus);
@@ -107,25 +152,23 @@ export function App() {
       message.error(displayError(error, t, "errors.serviceStartFailed"));
       await refreshStatus();
     } finally {
-      setServiceActionPending(false);
+      finishServiceAction();
     }
   }
 
   async function stopService() {
-    if (serviceActionPending) return;
-    setServiceActionPending(true);
+    if (!beginServiceAction()) return;
     try {
       setStatus(await managerApi.stopService());
     } catch (error) {
       message.error(displayError(error, t, "errors.serviceStopFailed"));
       await refreshStatus();
     } finally {
-      setServiceActionPending(false);
+      finishServiceAction();
     }
   }
   async function restartService() {
-    if (serviceActionPending) return;
-    setServiceActionPending(true);
+    if (!beginServiceAction()) return;
     setPage("overview");
     try {
       const nextStatus = await managerApi.restartService();
@@ -137,13 +180,12 @@ export function App() {
       message.error(displayError(error, t, "errors.serviceRestartFailed"));
       await refreshStatus();
     } finally {
-      setServiceActionPending(false);
+      finishServiceAction();
     }
   }
 
   async function bootstrap(input: BootstrapAdminInput) {
-    if (serviceActionPending) return;
-    setServiceActionPending(true);
+    if (!beginServiceAction()) return;
     let bootstrapWritten = false;
     try {
       await managerApi.writeBootstrap(input);
@@ -162,7 +204,7 @@ export function App() {
       }
       message.error(displayError(error, t, "errors.bootstrapFailed"));
     } finally {
-      setServiceActionPending(false);
+      finishServiceAction();
     }
   }
 
@@ -250,7 +292,16 @@ export function App() {
   }
 
   if (status.state === "failed" && !loggedIn) {
-    return <FailedStatusPage status={status} onStart={startService} onRefresh={refreshStatus} />;
+    return (
+      <FailedStatusPage
+        status={status}
+        onStart={startService}
+        onRefresh={refreshFailedStatus}
+        onChangeServerRoot={changeServerRoot}
+        pending={serviceActionPending}
+        recoveryPending={serverRootRecoveryPending}
+      />
+    );
   }
 
   if (passwordChangeRequired && !loggedIn) {
@@ -275,7 +326,21 @@ export function App() {
   );
 }
 
-function FailedStatusPage({ status, onStart, onRefresh }: { status: ServiceStatus; onStart: () => Promise<void>; onRefresh: () => Promise<void> }) {
+function FailedStatusPage({
+  status,
+  onStart,
+  onRefresh,
+  onChangeServerRoot,
+  pending,
+  recoveryPending,
+}: {
+  status: ServiceStatus;
+  onStart: () => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onChangeServerRoot: () => Promise<void>;
+  pending: boolean;
+  recoveryPending: boolean;
+}) {
   const { t } = useLanguage();
   return (
     <div className="auth-page">
@@ -287,8 +352,9 @@ function FailedStatusPage({ status, onStart, onRefresh }: { status: ServiceStatu
           {status.lastError ?? t("manager.service.noErrorDetails")}
         </Typography.Paragraph>
         <Space direction="vertical" style={{ width: "100%" }}>
-          <Button type="primary" block onClick={onStart}>{t("manager.service.startRetry")}</Button>
-          <Button block onClick={onRefresh}>{t("manager.service.refreshStatus")}</Button>
+          <Button type="primary" block onClick={onStart} disabled={pending}>{t("manager.service.startRetry")}</Button>
+          <Button block onClick={onRefresh} disabled={pending}>{t("manager.service.refreshStatus")}</Button>
+          <Button block onClick={onChangeServerRoot} disabled={pending} loading={recoveryPending}>{t(recoveryPending ? "manager.service.changingServerRoot" : "manager.service.changeServerRoot")}</Button>
         </Space>
       </Card>
     </div>

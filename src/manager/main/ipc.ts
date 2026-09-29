@@ -3,7 +3,7 @@ import path from "node:path";
 import type { FileConfigStore } from "./configStore.js";
 import type { FileLogStore } from "./logStore.js";
 import type { ManagedServiceProcess } from "./serviceProcess.js";
-import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, ManagerConfig, SavedLoginCredentials, ServiceStatus, UpdateAccountInput } from "../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, ManagerConfig, ManagerConfigSaveResult, SavedLoginCredentials, ServerRootRecoveryResult, ServiceStatus, UpdateAccountInput } from "../shared/types.js";
 import { ServiceApiClient, ServiceApiError } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
 import { delay } from "../../shared/async.js";
@@ -61,6 +61,7 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   const offlineAccountsLifecycle = new SerialQueue();
   let managerActor: LogActor | undefined;
   let authRequiredNotified = false;
+  let serverRootRecoveryPending = false;
 
   ipcMain.handle("language:load", () => deps.languageStore.load());
   ipcMain.handle("language:save", (_event, language: unknown) => {
@@ -284,10 +285,17 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   }
 
   ipcMain.handle("config:load", () => deps.configStore.load());
-  ipcMain.handle("config:save", (_event, config) => offlineAccountsLifecycle.enqueue(async () => {
+  ipcMain.handle("config:save", (_event, config): Promise<ManagerConfigSaveResult> => offlineAccountsLifecycle.enqueue(async () => {
     closeOfflineAccountsNow();
-    await deps.configStore.save(config);
+    try {
+      await deps.configStore.save(config);
+    } catch (error) {
+      const code = getServerRootValidationCode(error);
+      if (code) return { status: "error", code };
+      throw error;
+    }
     await logActivity({ source: "manager", level: "info", message: "Manager settings updated", actor: managerActor });
+    return { status: "saved" };
   }));
   ipcMain.handle("config:selectServerRoot", async () => {
     const result = await dialog.showOpenDialog({
@@ -295,6 +303,60 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
       properties: ["openDirectory"],
     });
     return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+  ipcMain.handle("config:selectAndSaveServerRoot", async (): Promise<ServerRootRecoveryResult> => {
+    if (serverRootRecoveryPending) {
+      return { status: "error", code: "server_root_recovery_busy" };
+    }
+    serverRootRecoveryPending = true;
+    try {
+      let result;
+      try {
+        result = await dialog.showOpenDialog({
+          title: "Select CSGO Dedicated Server directory",
+          properties: ["openDirectory"],
+        });
+      } catch {
+        await logActivity({
+          source: "manager",
+          level: "error",
+          message: "Failed to select Manager server root",
+          actor: managerActor,
+          context: { reason: "server_root_selection_failed" },
+        });
+        return { status: "error", code: "server_root_selection_failed" };
+      }
+
+      const serverRoot = result.filePaths[0];
+      if (result.canceled || !serverRoot) return { status: "cancelled" };
+
+      try {
+        return await offlineAccountsLifecycle.enqueue(async () => {
+          const status = await statusWithExternalProbe(deps);
+          if (status.state !== "stopped" && status.state !== "failed") {
+            return { status: "error", code: "server_root_recovery_busy" };
+          }
+          const config = await deps.configStore.load();
+          config.serverRoot = serverRoot;
+          closeOfflineAccountsNow();
+          await deps.configStore.save(config);
+          await logActivity({ source: "manager", level: "info", message: "Manager server root updated", actor: managerActor });
+          return { status: "saved", serverRoot: config.serverRoot };
+        });
+      } catch (error) {
+        const code = getServerRootValidationCode(error) ?? "server_root_save_failed";
+        await logActivity({
+          source: "manager",
+          level: "error",
+          message: "Failed to save Manager server root",
+          actor: managerActor,
+          context: { reason: code },
+        });
+        return { status: "error", code };
+      }
+    } finally {
+      serverRootRecoveryPending = false;
+    }
   });
   ipcMain.handle("service:status", () => offlineAccountsLifecycle.enqueue(async () => {
     const current = deps.service.status();
@@ -421,6 +483,14 @@ function toAccountView(account: AccountRecord): AccountView {
 
 function toLogActor(account: AccountRecord): LogActor {
   return { accountId: account.id, username: account.username, role: account.role, ...(account.steam64 ? { steam64: account.steam64 } : {}) };
+}
+
+function getServerRootValidationCode(
+  error: unknown,
+): "server_root_invalid" | "server_root_check_failed" | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  const code = (error as { code?: unknown }).code;
+  return code === "server_root_invalid" || code === "server_root_check_failed" ? code : undefined;
 }
 
 async function statusWithExternalProbe(deps: IpcDeps): Promise<ServiceStatus> {
