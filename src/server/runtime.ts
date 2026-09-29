@@ -14,6 +14,7 @@ import { FriendStore } from "../friends/friendStore.js";
 import { MatchExecutor } from "../game/matchExecutor.js";
 import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
 import { MysqlDatabaseBackup } from "../game/mysqlDatabaseBackup.js";
+import { prepareSourceModForServerStartup } from "../game/sourceModStartup.js";
 import { MatchmakingService, type ServiceShutdownSummary } from "../matchmaking/matchmakingService.js";
 import { MatchmakingStore } from "../matchmaking/matchmakingStore.js";
 import { PresenceService } from "../presence/presenceService.js";
@@ -42,6 +43,7 @@ export interface Runtime {
 const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
 
 export async function createRuntime(config: ServerConfig): Promise<Runtime> {
+  await prepareSourceModForServerStartup(config.gameServer.serverRoot);
   const recordsDir = path.join(config.dataDir, "records");
   await mkdir(recordsDir, { recursive: true });
   const database = await openCompetDatabase(recordsDir, {
