@@ -3,6 +3,13 @@ import type { TranslationCatalog } from "../language/types.js";
 export const zhCNLanguageName = "简体中文";
 
 export const zhCN = {
+  "player.startup.updateUnavailable": "当前可下载版本尚未达到要求，请稍后重试。",
+  "player.startup.connectionFailed": "无法确认服务端准入，请重试连接。",
+  "player.startup.updateRequired": "客户端需要更新，更新后才能连接。",
+  "player.startup.versions": "当前版本 {current} · 要求版本 {required}",
+  "player.startup.retryUpdate": "重试更新",
+  "player.startup.retryConnection": "重试连接",
+  "player.startup.exit": "退出",
   "common.language.label": "语言",
   "common.language.english": "English",
   "common.actions.save": "保存",
@@ -342,6 +349,7 @@ export const zhCN = {
   "manager.settings.updateFound": "发现可用更新",
   "manager.settings.latest": "当前已是最新版本",
   "manager.settings.currentVersion": "当前版本：{version}",
+  "manager.settings.updateBlocked": "更新被阻止，请确认没有比赛、服务已停止且受管文件未被修改。",
   "manager.settings.updateDownloaded": "更新已下载，正在重启",
   "manager.settings.titleLabel": "设置",
   "manager.settings.dataDir": "数据目录",

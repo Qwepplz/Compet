@@ -14,6 +14,13 @@ if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]
 $version = $Version
 
 $packageRoot = Resolve-Path $PackageDir
+if ($AppId -eq "compet-server-manager") {
+  Push-Location (Join-Path $PSScriptRoot "..")
+  try {
+    & node --import tsx (Join-Path $PSScriptRoot "create-package-inventory.ts") verify $packageRoot.Path $version
+  } finally { Pop-Location }
+  if ($LASTEXITCODE -ne 0) { throw "Server package inventory does not match the package." }
+}
 $outputRoot = New-Item -ItemType Directory -Path $OutputDir -Force
 Remove-Item -LiteralPath (Join-Path $outputRoot "files") -Recurse -Force -ErrorAction SilentlyContinue
 

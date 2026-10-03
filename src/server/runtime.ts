@@ -1,3 +1,4 @@
+import { isSemver } from "../shared/version.js";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { AccountService } from "../accounts/accountService.js";
@@ -12,6 +13,7 @@ import type { ServerConfig } from "../config/config.js";
 import { FriendService } from "../friends/friendService.js";
 import { FriendStore } from "../friends/friendStore.js";
 import { MatchExecutor } from "../game/matchExecutor.js";
+import { loadRunCsgoSource } from "../game/runCsgoAssets.js";
 import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
 import { MysqlDatabaseBackup } from "../game/mysqlDatabaseBackup.js";
 import { prepareSourceModForServerStartup } from "../game/sourceModStartup.js";
@@ -43,6 +45,7 @@ export interface Runtime {
 const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
 
 export async function createRuntime(config: ServerConfig): Promise<Runtime> {
+  if (!isSemver(config.requiredClientVersion)) throw new Error("Invalid requiredClientVersion");
   await prepareSourceModForServerStartup(config.gameServer.serverRoot);
   const recordsDir = path.join(config.dataDir, "records");
   await mkdir(recordsDir, { recursive: true });
@@ -98,7 +101,12 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       process.stdout.write(chunk);
     };
     let matchmaking: MatchmakingService | undefined;
+    const runtimeEntry = path.resolve(process.argv[1] ?? "src/main.ts");
+    const packaged = path.basename(runtimeEntry) === "main.cjs" && path.basename(path.dirname(runtimeEntry)) === "dist";
+    const assetAppRoot = packaged ? path.dirname(path.dirname(runtimeEntry)) : process.cwd();
     const executor = new MatchExecutor({
+      assets: () => loadRunCsgoSource({ appRoot: assetAppRoot,
+        ...(packaged ? {} : { developmentRoot: path.join(assetAppRoot, "src/run_csgo") }) }),
       launcher: new NodeGameServerLauncher({
         onStdout: gameStdoutHandler,
         onStderr: (chunk) => process.stderr.write(chunk),
@@ -161,6 +169,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
 
     const auth = new AuthService(accounts, sessions, new InMemoryLoginRateLimiter());
     const app = await createServer({
+      requiredClientVersion: config.requiredClientVersion,
       accounts,
       sessions,
       auth,

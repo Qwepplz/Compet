@@ -1,3 +1,5 @@
+import { compareSemver, isSemver } from "../../../shared/version.js";
+import { reduceStartupGate, type StartupGateContext } from "./startupGate.js";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message } from "antd";
 import { ArrowLeftOutlined, CloseOutlined, MinusOutlined } from "@ant-design/icons";
@@ -355,6 +357,9 @@ function PartyInviteToasts({
 export function App() {
   const { language, setLanguage, t } = useLanguage();
   const [loading, setLoading] = useState(true);
+  const [startupGate, setStartupGate] = useState<StartupGateContext>({ state: "checking_update", generation: 0 });
+  const startupGateRef = useRef(startupGate);
+  const startupRunning = useRef(false);
   const [loadingMessageKey, setLoadingMessageKey] = useState<TranslationKey>("common.state.checkingUpdates");
   const [activeView, setActiveView] = useState<PlayerView>("login");
   const [baseUrl, setBaseUrl] = useState(defaultBaseUrl);
@@ -545,8 +550,11 @@ export function App() {
   useEffect(() => {
     void preloadMapImages().catch(() => undefined);
     void window.playerApi.getVersion().then(setCurrentVersion);
+    const unsubscribeVersion = api.onVersionBlocked(blockStartup);
+    void api.getVersionBlock().then((block) => { if (block) blockStartup(block); });
     void initializeStartup();
     return () => {
+      unsubscribeVersion();
       integrityGeneration.current += 1;
       integrityUnsubscribe.current?.();
       integrityUnsubscribe.current = null;
@@ -1175,6 +1183,7 @@ export function App() {
 
   async function restoreSession(startupDeadline?: number, preserveOnFailure = false): Promise<"restored" | "anonymous" | "retry"> {
     invalidateMatchHistoryResultRequest();
+    const generation = startupGateRef.current.generation;
     try {
       await loadSavedLogin();
       const startupTimeoutMs = startupDeadline === undefined ? undefined : remainingStartupMs(startupDeadline);
@@ -1188,6 +1197,7 @@ export function App() {
       const restored = startupTimeoutMs === undefined
         ? await window.playerApi.restoreSession()
         : await window.playerApi.restoreSession(startupTimeoutMs);
+      if (generation !== startupGateRef.current.generation) return "retry";
       if (!restored) {
         setMatchResult(null);
         setMatchResultMatchId(null);
@@ -1218,6 +1228,8 @@ export function App() {
       void refreshRankmeStanding();
       return "restored";
     } catch (error) {
+      if (generation !== startupGateRef.current.generation) return "retry";
+      if (blockStartup(error)) return "retry";
       if (preserveOnFailure) {
         setLoadingMessageKey("common.state.connectingServer");
         return "retry";
@@ -1246,17 +1258,22 @@ export function App() {
     if (saved) {
       loginForm.setFieldsValue(saved);
     }
+    return saved;
   }
 
   async function login(values: LoginValues) {
     if (loginPending) return;
     invalidateMatchHistoryResultRequest();
     setLoginPending(true);
+    const generation = startupGateRef.current.generation + 1;
+    setGate({ state: "checking_admission", generation });
     try {
+      if (!await checkStartupAdmission(values.baseUrl, generation)) return;
       setBaseUrl(values.baseUrl);
       setCurrentPassword(values.password);
       setSavedLogin({ baseUrl: values.baseUrl, username: values.username, password: values.password });
       const authenticated = await window.playerApi.login(values.baseUrl, values.username, values.password);
+      if (generation !== startupGateRef.current.generation) return;
       setAccount(authenticated.account);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
@@ -1281,7 +1298,7 @@ export function App() {
       void hydrateRealtimeState();
       void refreshRankmeStanding();
     } catch (error) {
-      message.error(displayError(error, t, "errors.loginFailed"));
+      if (!blockStartup(error)) message.error(displayError(error, t, "errors.loginFailed"));
     } finally {
       setLoginPending(false);
     }
@@ -1367,51 +1384,101 @@ export function App() {
     }
   }
 
-  async function initializeStartup() {
-    if (startupInitializationStarted) return;
-    startupInitializationStarted = true;
-    const startupDeadline = performance.now() + STARTUP_CONNECTION_BUDGET_MS;
-    let previousMaintenance: IntegrityReport | null = null;
-    try { previousMaintenance = await api.getMaintenanceResult(); }
-    catch { /* Main startup gate retains the transaction for a later attempt. */ }
-    const maintenanceComplete = previousMaintenance?.status === "passed" && !previousMaintenance.error;
-    if (maintenanceComplete) {
-      void message.success(t("player.integrity.restartPassed"));
-    } else if (previousMaintenance) {
-      setRecoveryReport(previousMaintenance);
-      if (previousMaintenance.status === "passed" && previousMaintenance.error === "maintenance_cleanup_pending") {
-        void message.warning(t("player.integrity.repairCleanupPending"));
-      } else if (previousMaintenance.error === "maintenance_cleanup_pending" ||
-                 previousMaintenance.status === "passed") {
-        void message.error(t("player.integrity.cleanupPending"));
-      } else {
-        void message.error(t("player.integrity.restartFailed"));
+  function setGate(event: StartupGateContext): void {
+    startupGateRef.current = reduceStartupGate(startupGateRef.current, event);
+    setStartupGate(startupGateRef.current);
+  }
+
+  function blockStartup(error: unknown): boolean {
+    if (!error || typeof error !== "object" || !("code" in error) ||
+        (error.code !== "client_update_required" && error.code !== "client_version_invalid")) return false;
+    const requiredClientVersion = "requiredClientVersion" in error && typeof error.requiredClientVersion === "string" ? error.requiredClientVersion : "";
+    const available = startupGateRef.current.availableVersion;
+    const unavailable = isSemver(requiredClientVersion) && available && isSemver(available) && compareSemver(available, requiredClientVersion) < 0;
+    setGate({ state: isSemver(requiredClientVersion) ? "update_required" : "connection_failed",
+      generation: startupGateRef.current.generation + 1, currentVersion, requiredClientVersion, code: unavailable ? "update_unavailable" : error.code });
+    setLoading(true);
+    return true;
+  }
+
+  async function checkStartupAdmission(address: string, generation: number): Promise<boolean> {
+    setGate({ state: "checking_admission", generation });
+    setLoadingMessageKey("common.state.connectingServer");
+    try {
+      const result = await api.checkCompatibility(address, STARTUP_CONNECTION_BUDGET_MS);
+      if (generation !== startupGateRef.current.generation) return false;
+      if (!isSemver(result.requiredClientVersion)) throw new Error("Invalid compatibility response");
+      setGate({ state: "ready", generation, requiredClientVersion: result.requiredClientVersion, code: undefined });
+      return true;
+    } catch (error) {
+      if (generation !== startupGateRef.current.generation) return false;
+      if (!blockStartup(error)) {
+        setGate({ state: "connection_failed", generation, code: "service_unavailable" });
+        setLoading(true);
       }
+      return false;
     }
-    const installing = previousMaintenance && !maintenanceComplete ? false : await checkStartupUpdate(startupDeadline);
-    if (installing) return;
-    let restoreOutcome = await restoreSession(startupDeadline, true);
-    while (restoreOutcome === "retry" && remainingStartupMs(startupDeadline) > 0) {
-      const retryDelayMs = Math.min(SESSION_RESTORE_RETRY_DELAY_MS, remainingStartupMs(startupDeadline));
-      if (retryDelayMs <= 0) break;
-      await new Promise<void>((resolve) => window.setTimeout(resolve, retryDelayMs));
-      restoreOutcome = await restoreSession(startupDeadline, true);
+  }
+
+  async function initializeStartup(retry = false, address?: string) {
+    if (startupRunning.current || (!retry && startupInitializationStarted)) return;
+    startupInitializationStarted = true;
+    startupRunning.current = true;
+    const generation = startupGateRef.current.generation + 1;
+    setGate({ state: "checking_update", generation, availableVersion: undefined, code: undefined });
+    setLoading(true);
+    try {
+      const previousMaintenance = await api.getMaintenanceResult();
+      if (generation !== startupGateRef.current.generation) return;
+      if (previousMaintenance && (previousMaintenance.status !== "passed" || previousMaintenance.error)) {
+        setRecoveryReport(previousMaintenance);
+        setGate({ state: "connection_failed", generation, code: "maintenance_blocked" });
+        return;
+      }
+      if (previousMaintenance?.status === "passed") void message.success(t("player.integrity.restartPassed"));
+      const saved = await loadSavedLogin();
+      const selectedAddress = address ?? saved?.baseUrl ?? baseUrl;
+      setBaseUrl(selectedAddress);
+      const actualVersion = await api.getVersion();
+      setCurrentVersion(actualVersion);
+      const installing = await checkStartupUpdate(performance.now() + STARTUP_CONNECTION_BUDGET_MS);
+      if (generation !== startupGateRef.current.generation) return;
+      if (installing) { setGate({ state: "installing", generation }); return; }
+      if (!await checkStartupAdmission(selectedAddress, generation)) return;
+      const startupDeadline = performance.now() + STARTUP_CONNECTION_BUDGET_MS;
+      let restoreOutcome = saved?.baseUrl && saved.baseUrl !== selectedAddress ? "anonymous" : await restoreSession(startupDeadline, true);
+      while (restoreOutcome === "retry" && generation === startupGateRef.current.generation && remainingStartupMs(startupDeadline) > 0) {
+        await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(SESSION_RESTORE_RETRY_DELAY_MS, remainingStartupMs(startupDeadline))));
+        if (generation !== startupGateRef.current.generation) return;
+        restoreOutcome = await restoreSession(startupDeadline, true);
+      }
+      if (generation !== startupGateRef.current.generation) return;
+      if (restoreOutcome !== "restored") setActiveView("login");
+      setLoading(false);
+    } catch (error) {
+      if (generation === startupGateRef.current.generation && !blockStartup(error)) setGate({ state: "connection_failed", generation, code: "service_unavailable" });
+    } finally {
+      startupRunning.current = false;
     }
-    if (restoreOutcome === "retry") {
-      setActiveView("login");
-    }
-    setLoading(false);
   }
 
   async function checkStartupUpdate(startupDeadline: number): Promise<boolean> {
+    const generation = startupGateRef.current.generation;
     for (let attempt = 0; attempt < STARTUP_UPDATE_MAX_ATTEMPTS; attempt += 1) {
       const timeoutMs = remainingStartupMs(startupDeadline);
       if (timeoutMs <= 0) return false;
       setLoadingMessageKey("common.state.checkingUpdates");
       try {
         const result = await window.playerApi.checkUpdate(timeoutMs) as UpdateCheckResult;
-        if (!result.updateAvailable) return false;
+        if (generation !== startupGateRef.current.generation) return false;
+        setGate({ ...startupGateRef.current, availableVersion: isSemver(result.latestVersion) ? result.latestVersion : undefined });
+        const required = startupGateRef.current.requiredClientVersion;
+        if (required && isSemver(required) && (!isSemver(result.latestVersion) || compareSemver(result.latestVersion, required) < 0)) {
+          setGate({ ...startupGateRef.current, code: "update_unavailable" });
+          return false;
+        }
 
+        if (!result.updateAvailable) return false;
         setLoadingMessageKey("common.state.installingUpdate");
         const installResult = await window.playerApi.installUpdate() as UpdateInstallResult;
         if (installResult.installing) return true;
@@ -1727,8 +1794,13 @@ export function App() {
     return (
       <div className="player-loading-screen">
         <div className="player-loading-content">
-          <Spin size="large" />
-          <span>{t(loadingMessageKey)}</span>
+          {startupGate.state === "update_required" || startupGate.state === "connection_failed" ? <>
+            <span>{t(startupGate.code === "maintenance_blocked" ? "player.integrity.restartFailed" : startupGate.state === "connection_failed" ? "player.startup.connectionFailed" : startupGate.code === "update_unavailable" ? "player.startup.updateUnavailable" : "player.startup.updateRequired")}</span>
+            <span>{t("player.startup.versions", { current: currentVersion, required: startupGate.requiredClientVersion || "—" })}</span>
+            <Input value={baseUrl} placeholder={t("common.labels.serverAddress")} onChange={(event) => setBaseUrl(event.target.value)} />
+            <Button onClick={() => void initializeStartup(true, baseUrl)}>{t(startupGate.state === "update_required" ? "player.startup.retryUpdate" : "player.startup.retryConnection")}</Button>
+          </> : <><Spin size="large" /><span>{t(loadingMessageKey)}</span></>}
+          <Button onClick={() => void api.closeWindow()}>{t("player.startup.exit")}</Button>
         </div>
       </div>
     );

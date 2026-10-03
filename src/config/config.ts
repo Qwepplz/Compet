@@ -1,4 +1,5 @@
 import path from "node:path";
+import { isSemver } from "../shared/version.js";
 import { z } from "zod";
 import { DEFAULT_PROFILE_BASE_URL } from "../profiles/humanProfileIndex.js";
 import { defaultPublicConnectHost } from "../shared/network.js";
@@ -10,6 +11,7 @@ export interface GameServerConfig {
 }
 
 export interface ServerConfig {
+  readonly requiredClientVersion: string;
   host: string;
   port: number;
   dataDir: string;
@@ -22,6 +24,7 @@ const positiveInt = z.coerce.number().int().positive();
 const detectedPublicConnectHost = defaultPublicConnectHost();
 
 const envSchema = z.object({
+  COMPET_REQUIRED_CLIENT_VERSION: z.string().refine(isSemver, "Invalid SemVer"),
   COMPET_HOST: z.string().min(1).default("0.0.0.0"),
   COMPET_PORT: positiveInt.max(65535).default(8443),
   COMPET_DATA_DIR: z.string().min(1).optional(),
@@ -41,6 +44,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
 
   const dataDir = parsed.COMPET_DATA_DIR ?? path.join(cwd, "server-data");
   return {
+    requiredClientVersion: parsed.COMPET_REQUIRED_CLIENT_VERSION,
     host: parsed.COMPET_HOST,
     port: parsed.COMPET_PORT,
     dataDir: path.normalize(dataDir).replace(/\\/g, "/"),

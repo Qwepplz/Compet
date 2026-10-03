@@ -1,9 +1,14 @@
-param([string]$ArtifactsDir)
+param([string]$ArtifactsDir, [string]$RequiredClientVersion = $env:COMPET_REQUIRED_CLIENT_VERSION)
 
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "resolve-csharp-compiler.ps1")
 . (Join-Path $PSScriptRoot "package-common.ps1")
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
+Push-Location $repo
+try {
+  & node --import tsx --input-type=module -e "import { isSemver } from './src/shared/version.ts'; if (!isSemver(process.argv[1])) process.exit(1);" -- $RequiredClientVersion
+} finally { Pop-Location }
+if ($LASTEXITCODE -ne 0) { throw "Invalid or missing RequiredClientVersion (required client version)." }
 $artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $repo "artifacts"))
 $artifacts = if ([string]::IsNullOrWhiteSpace($ArtifactsDir)) {
   $artifactsRoot
@@ -313,12 +318,19 @@ Copy-Item -LiteralPath (Join-Path $repo "out") -Destination $appRoot -Recurse
 New-Item -ItemType Directory -Path (Join-Path $appRoot "sourcemod") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo "src\sourcemod\compet_match_lock.smx") -Destination (Join-Path $appRoot "sourcemod\compet_match_lock.smx")
 Copy-Item -LiteralPath (Join-Path $repo "src\run_csgo") -Destination (Join-Path $appRoot "run_csgo") -Recurse
-Copy-Item -LiteralPath (Join-Path $repo "packaging\server\app-package.json") -Destination (Join-Path $appRoot "package.json")
+$appPackage = Get-Content -LiteralPath (Join-Path $repo "packaging\server\app-package.json") -Raw | ConvertFrom-Json
+$appPackage | Add-Member -NotePropertyName requiredClientVersion -NotePropertyValue $RequiredClientVersion -Force
+$appPackage | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $appRoot "package.json") -Encoding UTF8
 Copy-NodeModulePackage "argon2"
 Copy-NodeModulePackage "@phc\format"
 Copy-NodeModulePackage "node-gyp-build"
 Copy-NodeModulePackage "zod"
 Optimize-RuntimeNodeModules
+Push-Location $repo
+try {
+  & node --import tsx (Join-Path $repo "scripts\create-package-inventory.ts") create $stage $packageVersion
+} finally { Pop-Location }
+if ($LASTEXITCODE -ne 0) { throw "Server package inventory creation failed." }
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage $serverExe)),

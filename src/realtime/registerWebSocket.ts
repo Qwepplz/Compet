@@ -1,3 +1,4 @@
+import { assertClientVersion } from "../api/clientVersionPolicy.js";
 import type { FastifyInstance, RawServerBase } from "fastify";
 import type { RawData, WebSocket } from "ws";
 import type { AccountRecord } from "../accounts/accountTypes.js";
@@ -11,6 +12,7 @@ import { RealtimeSocketRegistry } from "./realtimeSocketRegistry.js";
 import { accountActor, logRealtimeCommand, nextActivityId, writeActivityLog } from "../server/activityLogger.js";
 
 export interface WebSocketDeps {
+  readonly requiredClientVersion: string;
   accounts: AccountService;
   sessions: SessionService;
   events?: RealtimeEventBus;
@@ -58,7 +60,9 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
     done();
   });
 
-  app.get<{ Querystring: WebSocketQuery }>("/ws", { websocket: true }, (socket, request) => {
+  app.get<{ Querystring: WebSocketQuery }>("/ws", { websocket: true, preValidation: async (request) => {
+    assertClientVersion(request.headers["x-compet-client-version"], deps.requiredClientVersion);
+  } }, (socket, request) => {
     const connectionId = `ws-${request.id}`;
     writeActivityLog({
       source: "realtime",

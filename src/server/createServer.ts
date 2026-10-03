@@ -1,3 +1,4 @@
+import { isSemver } from "../shared/version.js";
 import type { ServerOptions } from "node:https";
 import Fastify from "fastify";
 import websocket from "@fastify/websocket";
@@ -15,6 +16,8 @@ export interface CreateServerOptions extends RouteDeps {
 }
 
 export async function createServer(options: CreateServerOptions) {
+  if (!isSemver(options.requiredClientVersion)) throw new Error("Invalid requiredClientVersion");
+  options = { ...options, requiredClientVersion: options.requiredClientVersion };
   const fastifyOptions = options.https ? { logger: false, https: options.https } : { logger: false };
   const app = Fastify(fastifyOptions as any);
   await app.register(websocket);
@@ -30,7 +33,7 @@ export async function createServer(options: CreateServerOptions) {
   app.setErrorHandler((error, request, reply) => {
     recordHttpActivityError(request, error);
     if (error instanceof HttpError) {
-      reply.status(error.statusCode).send({ error: { code: error.code, message: error.message } });
+      reply.status(error.statusCode).send({ error: { code: error.code, message: error.message, ...(error.requiredClientVersion && isSemver(error.requiredClientVersion) ? { requiredClientVersion: error.requiredClientVersion } : {}) } });
       return;
     }
     if (error instanceof ZodError) {

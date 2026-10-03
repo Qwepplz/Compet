@@ -1,4 +1,5 @@
 import https from "node:https";
+import { isSemver } from "./version.js";
 
 export interface JsonRequestOptions {
   baseUrl: string;
@@ -6,9 +7,10 @@ export interface JsonRequestOptions {
   route: string;
   body?: unknown;
   token?: string;
+  headers?: Record<string, string>;
   timeoutMs: number;
   timeoutMessage?: string;
-  createResponseError?: (message: string, statusCode: number, code: string) => Error;
+  createResponseError?: (message: string, statusCode: number, code: string, requiredClientVersion?: string) => Error;
 }
 
 export class HttpRequestTimeoutError extends Error {
@@ -26,9 +28,9 @@ const sharedHttpsAgent = new https.Agent({
   maxSockets: 64,
 });
 
-function readHttpError(data: unknown, fallback: string): { message: string; code: string } {
+function readHttpError(data: unknown, fallback: string): { message: string; code: string; requiredClientVersion?: string } {
   if (typeof data !== "object" || data === null) return { message: fallback, code: "http_error" };
-  const envelope = data as { code?: unknown; message?: unknown; error?: { code?: unknown; message?: unknown } };
+  const envelope = data as { code?: unknown; message?: unknown; error?: { code?: unknown; message?: unknown; requiredClientVersion?: unknown } };
   const message = typeof envelope.message === "string"
     ? envelope.message
     : typeof envelope.error?.message === "string"
@@ -39,7 +41,8 @@ function readHttpError(data: unknown, fallback: string): { message: string; code
     : typeof envelope.error?.code === "string"
       ? envelope.error.code
       : "http_error";
-  return { message, code };
+  const version = envelope.error?.requiredClientVersion;
+  return { message, code, ...(typeof version === "string" && isSemver(version) ? { requiredClientVersion: version } : {}) };
 }
 
 export function requestJson<T>(options: JsonRequestOptions): Promise<T> {
@@ -79,6 +82,7 @@ export function requestJson<T>(options: JsonRequestOptions): Promise<T> {
       agent: sharedHttpsAgent,
       rejectUnauthorized: false,
       headers: {
+        ...options.headers,
         ...(payload ? { "content-type": "application/json", "content-length": Buffer.byteLength(payload) } : {}),
         ...(options.token ? { authorization: `Bearer ${options.token}` } : {}),
       },
@@ -106,7 +110,7 @@ export function requestJson<T>(options: JsonRequestOptions): Promise<T> {
         }
         if (statusCode >= 400) {
           const error = readHttpError(data, `HTTP ${statusCode}`);
-          settleReject(createResponseError(error.message, statusCode, error.code));
+          settleReject(createResponseError(error.message, statusCode, error.code, error.requiredClientVersion));
           return;
         }
         settleResolve(data as T);

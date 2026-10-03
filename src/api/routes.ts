@@ -14,10 +14,12 @@ import { rankmeDisplayFromLookup, type RankmeDisplay } from "../rankme/rankmeSta
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
 import { MATCH_HISTORY_PAGE_SIZE, matchHistoryMatchIdSchema, matchHistoryPageSchema, toMatchHistoryEntry } from "../records/matchHistory.js";
+import { assertClientVersion } from "./clientVersionPolicy.js";
 import { authenticateRequest, requireAdmin, requirePlayer } from "./authMiddleware.js";
 import { badRequest, conflict, forbidden, HttpError, notFound, tooManyRequests, unauthorized } from "./httpErrors.js";
 
 export interface RouteDeps {
+  readonly requiredClientVersion: string;
   config?: ServerConfig;
   accounts: AccountService;
   sessions: SessionService;
@@ -199,7 +201,13 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     return withServerNow(await events.waitForEventsAfter(auth.account.id, afterSeq, timeoutMs));
   });
 
+  app.get("/client/compatibility", async (request) => {
+    assertClientVersion(request.headers["x-compet-client-version"], deps.requiredClientVersion);
+    return { requiredClientVersion: deps.requiredClientVersion };
+  });
+
   app.post("/auth/login", async (request) => {
+    assertClientVersion(request.headers["x-compet-client-version"], deps.requiredClientVersion);
     const username = readStringField(request.body, "username");
     const password = readStringField(request.body, "password");
     try {
@@ -334,6 +342,17 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const match = await records.readPlayerCompletedMatch(account.steam64, matchId);
     if (!match) throw notFound("resource_not_found");
     return { account: publicAccount(account), result: match.result };
+  });
+
+  app.post("/admin/maintenance/prepare", async (request) => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    try { await requireMatchmaking(deps).prepareMaintenance(); }
+    catch (error) {
+      if ((error as { code?: string }).code === "maintenance_matchmaking_busy") throw conflict("maintenance_matchmaking_busy");
+      throw error;
+    }
+    return { ready: true };
   });
 
   app.get("/admin/matchmaking/occupancy", { config: { logSuccessfulActivity: false } }, async (request) => {

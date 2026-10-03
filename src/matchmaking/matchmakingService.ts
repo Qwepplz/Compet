@@ -318,6 +318,7 @@ export class MatchmakingService {
   private readonly matchTasks = new Map<string, { controller: AbortController; backup: Promise<void>; draft?: Promise<void>; prepare?: Promise<void>; cancelled: boolean }>();
   private shutdownPromise?: Promise<ServiceShutdownSummary>;
   private shutdownRequested = false;
+  private maintenanceRequested = false;
   private backgroundTasksStopping = false;
   private preserveBackupsDuringShutdown = false;
 
@@ -1368,6 +1369,7 @@ export class MatchmakingService {
 
   enqueue(input: { accountId: string; partyId?: string }): Promise<QueueEntry[]> {
     return this.enqueueMutation(async () => {
+      this.assertServiceAcceptingMatchmaking();
       await this.requireMatchmakingAccount(input.accountId);
       if (input.partyId) throw new Error("party matchmaking must be started by owner");
       const parties = await this.deps.store.listParties();
@@ -1617,6 +1619,21 @@ export class MatchmakingService {
       room: this.findCurrentRoom(snapshot.rooms),
       occupancy: snapshot.occupancy,
     };
+  }
+
+  async prepareMaintenance(): Promise<void> {
+    return this.enqueueMutation(async () => {
+      const [rooms, parties, queue, cleanup] = await Promise.all([
+        this.deps.store.listRooms(), this.deps.store.listParties(),
+        this.deps.store.listQueue(), this.deps.store.listPendingBackupCleanupMatchIds(),
+      ]);
+      if (queue.length || this.hasActiveMatchmaking(rooms, parties, { pendingCleanupMatchIds: new Set(cleanup) }) ||
+          this.cleanupTasks.size || this.matchTasks.size || this.failedMatchCleanups.size ||
+          this.staleCompensationAttempts.size || this.pendingReadyInvalidations.size) {
+        throw Object.assign(new Error("maintenance_matchmaking_busy"), { code: "maintenance_matchmaking_busy" });
+      }
+      this.maintenanceRequested = true;
+    });
   }
 
   async getOccupancy(): Promise<MatchmakingOccupancySummary> {
@@ -2340,6 +2357,7 @@ export class MatchmakingService {
   }
 
   private assertServiceAcceptingMatchmaking(): void {
+    if (this.maintenanceRequested) throw Object.assign(new Error("maintenance_in_progress"), { code: "maintenance_in_progress" });
     if (this.shutdownRequested) throw new Error("matchmaking service is shutting down");
   }
 

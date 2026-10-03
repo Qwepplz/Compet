@@ -406,6 +406,9 @@ export function createPreviewPlayerApi() {
     cancelIntegrity: async (): Promise<void> => undefined,
     getMaintenanceResult: async (): Promise<IntegrityReport | null> => null,
     onIntegrityProgress: (_callback: (progress: IntegrityProgress) => void): (() => void) => () => {},
+    checkCompatibility: async (_baseUrl: string, _timeoutMs?: number) => ({ requiredClientVersion: "1.7.0" }),
+    getVersionBlock: async () => null,
+    onVersionBlocked: (_listener: (block: import("../shared/types.js").ClientVersionBlock) => void) => () => undefined,
     getVersion: async (): Promise<string> => "preview",
     checkUpdate: async (_timeoutMs?: number): Promise<UpdateCheckResult> => ({
       currentVersion: "preview",

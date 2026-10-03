@@ -1,3 +1,6 @@
+import type { ClientRequest, IncomingMessage } from "node:http";
+import { isSemver } from "../../shared/version.js";
+import type { ClientVersionBlock } from "../shared/types.js";
 import WebSocket, { type RawData } from "ws";
 import type { PlayerRealtimeConnection, PlayerRealtimeEvent } from "../shared/types.js";
 
@@ -10,9 +13,12 @@ interface WebSocketLike {
   on(event: "message", listener: (data: RawData) => void): this;
   on(event: "close", listener: () => void): this;
   on(event: "error", listener: (error: Error) => void): this;
+  on(event: "unexpected-response", listener: (request: ClientRequest, response: IncomingMessage) => void): this;
 }
 
 interface PlayerRealtimeClientOptions {
+  clientVersion?: string;
+  onVersionBlocked?: (block: ClientVersionBlock) => void;
   createSocket?: (url: string) => WebSocketLike;
   reconnectDelaysMs?: readonly number[];
   heartbeatIntervalMs?: number;
@@ -56,6 +62,8 @@ export function isRealtimeCommandServiceError(error: unknown): error is Realtime
 }
 
 export class PlayerRealtimeClient {
+  private readonly clientVersion: string;
+  private readonly onVersionBlocked?: (block: ClientVersionBlock) => void;
   private readonly createSocket: (url: string) => WebSocketLike;
   private readonly reconnectDelaysMs: readonly number[];
   private readonly heartbeatIntervalMs: number;
@@ -84,7 +92,9 @@ export class PlayerRealtimeClient {
   private matchmakingHeartbeat = false;
 
   constructor(options: PlayerRealtimeClientOptions = {}) {
-    this.createSocket = options.createSocket ?? ((url) => new WebSocket(url, { rejectUnauthorized: false }));
+    this.clientVersion = options.clientVersion ?? "";
+    this.onVersionBlocked = options.onVersionBlocked;
+    this.createSocket = options.createSocket ?? ((url) => new WebSocket(url, { rejectUnauthorized: false, headers: { "X-Compet-Client-Version": this.clientVersion } }));
     this.reconnectDelaysMs = options.reconnectDelaysMs ?? DEFAULT_RECONNECT_DELAYS_MS;
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? DEFAULT_HEARTBEAT_INTERVAL_MS;
     this.heartbeatTimeoutMs = options.heartbeatTimeoutMs ?? DEFAULT_HEARTBEAT_TIMEOUT_MS;
@@ -204,6 +214,41 @@ export class PlayerRealtimeClient {
       this.scheduleHeartbeat(socket, connectionId);
     };
     this.scheduleConnectionReadyTimeout(socket, connectionId);
+
+    socket.on("unexpected-response", (_request, response) => {
+      if (connectionId !== this.connectionId || this.socket !== socket) { response.destroy(); return; }
+      if (response.statusCode !== 426) { response.destroy(); socket.terminate?.(); return; }
+      this.manualDisconnect = true;
+      this.clearConnectionReadyTimeout();
+      this.clearHeartbeat();
+      this.rejectPendingCommands(new Error("Client version rejected"));
+      let body = "";
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        if (connectionId !== this.connectionId || this.socket !== socket) { response.destroy(); return; }
+        let code: ClientVersionBlock["code"] = "client_version_invalid";
+        let requiredClientVersion = "";
+        try {
+          const raw: unknown = JSON.parse(body);
+          if (raw && typeof raw === "object" && "error" in raw && raw.error && typeof raw.error === "object") {
+            const details = raw.error as Record<string, unknown>;
+            if (details.code === "client_update_required" || details.code === "client_version_invalid") code = details.code;
+            if (typeof details.requiredClientVersion === "string" && isSemver(details.requiredClientVersion)) requiredClientVersion = details.requiredClientVersion;
+          }
+        } catch { /* A malformed refusal still stops retries. */ }
+        this.onVersionBlocked?.({ code, currentVersion: this.clientVersion, requiredClientVersion });
+        response.destroy();
+        socket.terminate?.();
+      };
+      const timer = setTimeout(finish, 2_000);
+      response.on("data", (chunk: Buffer) => { body += chunk.toString("utf8"); if (body.length > 8192) { body = ""; finish(); } });
+      response.on("end", finish);
+      response.on("error", finish);
+      response.on("close", finish);
+    });
 
     socket.on("message", (data) => {
       if (connectionId !== this.connectionId || this.socket !== socket) {

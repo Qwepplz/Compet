@@ -1,6 +1,7 @@
+import { compareSemver, isSemver } from "../../shared/version.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { access, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { access, copyFile, lstat, mkdir, open, readFile, realpath, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { app } from "electron";
@@ -49,7 +50,7 @@ function updateError(code: string, message: string, ErrorType: ErrorConstructor 
   return error;
 }
 
-const semverPattern = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
+
 const latestUrls: Record<string, string> = {
   "compet-player-client": "https://qwepplz111.site/update/client/latest.json",
   "compet-server-manager": "https://qwepplz111.site/update/server/latest.json",
@@ -128,79 +129,7 @@ async function performInstallUpdate(appId: string, exeName: string): Promise<Upd
       if (maintenanceController === controller) maintenanceController = undefined;
     }
   }
-  const loaded = await loadUpdate(appId);
-  if (compareSemver(loaded.latestVersion, loaded.currentVersion) <= 0) {
-    return {
-      currentVersion: loaded.currentVersion,
-      latestVersion: loaded.latestVersion,
-      updateAvailable: false,
-      changedFiles: 0,
-      changedBytes: 0,
-      manifestUrl: loaded.manifestUrl,
-      installing: false,
-    };
-  }
-
-  const changed = await listChangedFiles(loaded.files);
-  if (changed.files.length === 0) {
-    return {
-      currentVersion: loaded.currentVersion,
-      latestVersion: loaded.latestVersion,
-      updateAvailable: true,
-      changedFiles: 0,
-      changedBytes: 0,
-      manifestUrl: loaded.manifestUrl,
-      installing: false,
-    };
-  }
-
-  const installRoot = getInstallRoot();
-  const pendingRoot = path.join(app.getPath("userData"), "update-pending");
-  const pendingFilesRoot = path.join(pendingRoot, "files");
-  await rm(pendingRoot, { recursive: true, force: true });
-  await mkdir(pendingFilesRoot, { recursive: true });
-
-  const planFiles = [];
-  for (const file of changed.files) {
-    const source = path.join(pendingFilesRoot, file.sha256);
-    const downloadUrl = new URL(file.url, loaded.manifestUrl).toString();
-    ensureSameOrigin(loaded.manifestUrl, downloadUrl);
-    await downloadFile(downloadUrl, source, file.sha256, file.size);
-    if (!(await hasSameFileHash(source, file.sha256, file.size))) {
-      throw updateError("update_file_hash_mismatch", `Update file hash verification failed: ${file.path}`);
-    }
-    planFiles.push({ source, path: file.path });
-  }
-
-  const planPath = path.join(pendingRoot, "plan.txt");
-  await writeFile(
-    planPath,
-    [`root=${installRoot}`, `exe=${exeName}`, ...planFiles.map((file) => `${file.source}\t${file.path}`)].join("\n"),
-    "utf8",
-  );
-
-  const updaterPath = path.join(installRoot, "runtime", "updater", "Compet Updater.exe");
-  await access(updaterPath);
-  const pendingUpdaterPath = path.join(pendingRoot, "Compet Updater.exe");
-  await copyFile(updaterPath, pendingUpdaterPath);
-
-  const child = spawn(pendingUpdaterPath, ["--plan", planPath, "--pid", String(process.pid)], {
-    detached: true,
-    stdio: "ignore",
-    windowsHide: true,
-  });
-  child.unref();
-  app.quit();
-
-  return {
-    currentVersion: loaded.currentVersion,
-    latestVersion: loaded.latestVersion,
-    updateAvailable: true,
-    changedFiles: changed.files.length,
-    changedBytes: changed.bytes,
-    manifestUrl: loaded.manifestUrl,
-    installing: true,
-  };
+  throw updateError("maintenance_manager_required", "Server updates require the Manager lifecycle");
 }
 
 export function getCurrentVersion(): string {
@@ -427,20 +356,7 @@ function hashFile(filePath: string, signal?: AbortSignal): Promise<string> {
   });
 }
 
-function isSemver(version: string): boolean {
-  return semverPattern.test(version);
-}
 
-function compareSemver(a: string, b: string): number {
-  const left = a.match(semverPattern);
-  const right = b.match(semverPattern);
-  if (!left || !right) throw updateError("update_version_invalid", "Invalid version");
-  for (let i = 1; i <= 3; i += 1) {
-    const diff = Number(left[i]) - Number(right[i]);
-    if (diff !== 0) return diff;
-  }
-  return 0;
-}
 
 const integrityListeners = new Set<(progress: IntegrityProgress) => void>();
 
@@ -1123,4 +1039,21 @@ export async function finalizeClientMaintenance(): Promise<IntegrityReport | nul
     await writeFailureSummary(directory, failed, transaction);
     return failed;
   }
+}
+export async function loadServerRelease(): Promise<{ currentVersion: string; latestVersion: string; manifestUrl: string; target: import("./serverMaintenance.js").ServerRelease }> {
+  const loaded = await loadUpdate("compet-server-manager");
+  return { currentVersion: loaded.currentVersion, latestVersion: loaded.latestVersion, manifestUrl: loaded.manifestUrl,
+    target: {
+      version: loaded.latestVersion,
+      files: loaded.files,
+      download: async (file, destination) => {
+        const entry = loaded.files.find(candidate => candidate.path === file.path);
+        if (!entry) throw updateError("update_manifest_files_invalid", "Unknown release file");
+        const url = new URL(entry.url, loaded.manifestUrl).toString();
+        ensureSameOrigin(loaded.manifestUrl, url);
+        await downloadFile(url, destination, entry.sha256, entry.size);
+      },
+      preflight: (helper, plan) => runHelperPreflight(helper, plan, new AbortController().signal),
+    },
+  };
 }

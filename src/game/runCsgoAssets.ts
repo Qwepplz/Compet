@@ -1,55 +1,52 @@
-import { existsSync } from "node:fs";
-import { cp } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import { assertPlainPath, fingerprintFile, listUnmanagedProgramPaths, validatePackageInventory, type PackageFile, type PackageInventory } from "../desktop/main/serverManagedFiles.js";
+import { beginRunCsgoAssets, type AssetInstallInput, type RunCsgoAssetTransaction } from "./runCsgoAssetState.js";
+export interface RunCsgoSource { root: string; files: PackageFile[]; version: string }
 
-const RUN_CSGO_ASSET_DIR = "run_csgo";
-
-export async function installRunCsgoAssets(serverRoot: string): Promise<void> {
-  const sourceDir = findBundledRunCsgoAssets();
-  if (!sourceDir) throw new Error(`Missing bundled run_csgo assets: ${RUN_CSGO_ASSET_DIR}`);
-
-  await cp(sourceDir, serverRoot, { recursive: true, force: true });
+export function resolveRunCsgoSource(input: { appRoot: string; developmentRoot?: string; inventory: PackageInventory }): RunCsgoSource {
+  const inventory = validatePackageInventory(input.inventory);
+  if (!path.isAbsolute(input.appRoot) || (input.developmentRoot && !path.isAbsolute(input.developmentRoot))) throw new Error("asset_source_invalid");
+  const prefix = "runtime/electron/resources/app/run_csgo/";
+  const files = inventory.files.filter(file => file.path.startsWith(prefix)).map(file => ({ ...file, path: file.path.slice(prefix.length) }));
+  if (!files.length) throw new Error("asset_source_empty");
+  return { root: input.developmentRoot ?? path.join(input.appRoot, "run_csgo"), files, version: inventory.version };
 }
-
-function findBundledRunCsgoAssets(): string | undefined {
-  return buildRunCsgoAssetCandidates().find((candidate) => existsSync(candidate));
-}
-
-function buildRunCsgoAssetCandidates(): string[] {
-  const cjsModuleDir = typeof __dirname === "string" ? __dirname : undefined;
-  const baseDirs = [
-    process.cwd(),
-    process.argv[1] ? path.dirname(path.resolve(process.argv[1])) : undefined,
-    cjsModuleDir,
-  ];
-  const candidates: string[] = [];
-  const seen = new Set<string>();
-
-  const addCandidate = (candidate: string): void => {
-    const normalized = path.normalize(candidate);
-    if (seen.has(normalized)) return;
-    seen.add(normalized);
-    candidates.push(normalized);
-  };
-
-  for (const baseDir of baseDirs) {
-    if (!baseDir) continue;
-    for (const dir of getAncestorDirs(path.resolve(baseDir))) {
-      addCandidate(path.join(dir, RUN_CSGO_ASSET_DIR));
-      addCandidate(path.join(dir, "src", RUN_CSGO_ASSET_DIR));
+export async function loadRunCsgoSource(input: { appRoot: string; developmentRoot?: string }): Promise<RunCsgoSource> {
+  let inventory: PackageInventory;
+  const prefix = "runtime/electron/resources/app/run_csgo/";
+  if (input.developmentRoot) {
+    const files: PackageFile[] = [];
+    async function visit(directory: string): Promise<void> {
+      await assertPlainPath(directory);
+      for (const entry of await readdir(directory, { withFileTypes: true })) {
+        const absolute = path.join(directory, entry.name);
+        await assertPlainPath(absolute);
+        if (entry.isDirectory()) await visit(absolute);
+        else {
+          const fingerprint = await fingerprintFile(absolute);
+          if (!fingerprint) throw new Error("asset_source_invalid");
+          files.push({ path: prefix + path.relative(input.developmentRoot!, absolute).split(path.sep).join("/"), ...fingerprint });
+        }
+      }
     }
+    await visit(input.developmentRoot);
+    const identity = JSON.parse(await readFile(path.join(input.appRoot, "packaging/server/app-package.json"), "utf8")) as { version: string };
+    inventory = validatePackageInventory({ schemaVersion: 1, appId: "compet-server-manager", version: identity.version, files });
+  } else {
+    const installRoot = path.resolve(input.appRoot, "../../../..");
+    await assertPlainPath(input.appRoot);
+    const identity = JSON.parse((await readFile(path.join(input.appRoot, "package.json"), "utf8")).replace(/^\uFEFF/, "")) as { name?: unknown; version?: unknown };
+    inventory = validatePackageInventory(JSON.parse(await readFile(path.join(installRoot, "compet-package-manifest.json"), "utf8")));
+    if (identity.name !== inventory.appId || identity.version !== inventory.version) throw new Error("asset_package_identity_invalid");
   }
-
-  return candidates;
+  const source = resolveRunCsgoSource({ ...input, inventory });
+  if (!input.developmentRoot) {
+    const unknown = await listUnmanagedProgramPaths(source.root, source.files, []);
+    if (unknown.length) console.warn("Unmanaged run_csgo source paths preserved and excluded:", unknown);
+  }
+  return source;
 }
-
-function getAncestorDirs(startDir: string): string[] {
-  const dirs: string[] = [];
-  let current = startDir;
-  while (true) {
-    dirs.push(current);
-    const parent = path.dirname(current);
-    if (parent === current) return dirs;
-    current = parent;
-  }
+export function installRunCsgoAssets(input: AssetInstallInput): Promise<RunCsgoAssetTransaction> {
+  return beginRunCsgoAssets(input);
 }

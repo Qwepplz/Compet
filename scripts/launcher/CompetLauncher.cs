@@ -59,7 +59,7 @@ internal static class CompetLauncher
             CheckNoReparse(resultPath);
             CheckNoReparse(helperPath);
             string[] plan = File.ReadAllLines(planPath, new UTF8Encoding(false, true));
-            if (plan.Length < 5 || plan[0] != "protocol=2" ||
+            if (plan.Length < 5 || (plan[0] != "protocol=2" && plan[0] != "protocol=3") ||
                 !plan[1].StartsWith("root=", StringComparison.Ordinal) ||
                 !plan[4].StartsWith("helper=", StringComparison.Ordinal))
                 return false;
@@ -81,7 +81,7 @@ internal static class CompetLauncher
                 try { entered = mutex.WaitOne(5000); }
                 catch (AbandonedMutexException) { entered = true; }
                 if (!entered) return false;
-                try { state = ReadState(resultPath); }
+                try { state = ReadState(resultPath, plan[0]); }
                 finally { mutex.ReleaseMutex(); }
             }
             if (state == "applied" || state == "verified" || state == "rolled_back") return true;
@@ -100,7 +100,7 @@ internal static class CompetLauncher
             {
                 if (recovery == null || !recovery.WaitForExit(120000) || recovery.ExitCode != 0) return false;
             }
-            return ReadState(resultPath) == "rolled_back";
+            return ReadState(resultPath, plan[0]) == "rolled_back";
         }
         catch
         {
@@ -116,13 +116,23 @@ internal static class CompetLauncher
         return new UTF8Encoding(false, true).GetString(bytes);
     }
 
-    private static string ReadState(string resultPath)
+    private static string ReadState(string resultPath, string protocol)
     {
         string[] lines = File.ReadAllLines(resultPath, new UTF8Encoding(false, true));
-        if (lines.Length < 2 || lines[0] != "protocol=2" ||
+        if (lines.Length < 2 || lines.Length > 4 || lines[0] != protocol ||
             !lines[1].StartsWith("state=", StringComparison.Ordinal))
             throw new InvalidDataException("Invalid maintenance result");
-        return lines[1].Substring(6);
+        string state = lines[1].Substring(6);
+        if (state != "prepared" && state != "applying" && state != "applied" &&
+            state != "verified" && state != "rolled_back" && state != "recovery_failed")
+            throw new InvalidDataException("Invalid maintenance result");
+        if (lines.Length >= 3 && (!lines[2].StartsWith("error=", StringComparison.Ordinal) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(lines[2].Substring(6), @"\A[a-z0-9_]+\z")))
+            throw new InvalidDataException("Invalid maintenance result");
+        if (lines.Length == 4 && (state != "recovery_failed" ||
+            (lines[3] != "phase=prepared" && lines[3] != "phase=applying" && lines[3] != "phase=applied")))
+            throw new InvalidDataException("Invalid maintenance result");
+        return state;
     }
 
     private static string HashFile(string file)

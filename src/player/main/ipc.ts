@@ -1,6 +1,7 @@
-import { clipboard, ipcMain, shell } from "electron";
-import type { PlayerFriendSearchResultDto, PlayerLoginIpcResult, PlayerMatchmakingStateDto, PlayerRealtimeEvent, PlayerPartyDto, PlayerLiveMatchStateDto } from "../shared/types.js";
-import { isSessionInvalidError, PlayerApiError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
+import { app, clipboard, ipcMain, shell } from "electron";
+import { isSemver } from "../../shared/version.js";
+import type { ClientVersionBlock, PlayerFriendSearchResultDto, PlayerLoginIpcResult, PlayerMatchmakingStateDto, PlayerRealtimeEvent, PlayerPartyDto, PlayerLiveMatchStateDto } from "../shared/types.js";
+import { isClientVersionError, isSessionInvalidError, PlayerApiError, PlayerApiClient, type RestoredPlayerSession } from "./playerApiClient.js";
 import { RemoteProfileService } from "./remoteProfileService.js";
 import { createAuthRetry, type AuthRetryController } from "./authRetry.js";
 import { revokePlayerSession } from "./sessionShutdown.js";
@@ -68,6 +69,7 @@ export function isSafeSteamConnectUrl(connectUrl: string): boolean {
 }
 
 interface IpcDeps {
+  onVersionBlocked?: (block: ClientVersionBlock) => void;
   clearSession: () => Promise<void>;
   connectRealtime: (baseUrl: string, token: string) => void;
   disconnectRealtime: () => void;
@@ -104,7 +106,12 @@ export function setProfilesUpdatedHandler(handler: () => void): void {
 }
 
 export function createPlayerApiClient(baseUrl: string, token: string | undefined, deps: Pick<IpcDeps, "sendRealtimeCommand">): PlayerApiClient {
-  return new PlayerApiClient(baseUrl, token, sharedProfileService, deps.sendRealtimeCommand);
+  const generation = versionGeneration;
+  return new PlayerApiClient(baseUrl, token, sharedProfileService, deps.sendRealtimeCommand, app.getVersion(), (error) => {
+    if (generation === versionGeneration && isClientVersionError(error)) publishClientVersionBlock({
+      code: error.code, currentVersion: app.getVersion(), requiredClientVersion: error.requiredClientVersion,
+    });
+  });
 }
 
 async function withSavedSession<T>(
@@ -288,6 +295,29 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
       }
     },
   });
+  versionBlock = null;
+  versionGeneration += 1;
+  versionBlockHandler = (block) => {
+    void controller.suspend();
+    deps.disconnectRealtime();
+    deps.onVersionBlocked?.(block);
+  };
+  ipcMain.handle("client:getVersionBlock", () => versionBlock);
+  ipcMain.handle("client:compatibility", async (_event, baseUrl: string, timeoutMs?: number) => {
+    const generation = ++versionGeneration;
+    try {
+      const url = new URL(baseUrl);
+      if (url.protocol !== "https:" || url.username || url.password) throw new Error("Invalid service URL");
+      const result = await createPlayerApiClient(url.origin, undefined, deps).checkCompatibility(normalizeStartupTimeout(timeoutMs));
+      if (generation !== versionGeneration) throw new Error("Compatibility request superseded");
+      if (!result || typeof result.requiredClientVersion !== "string" || !isSemver(result.requiredClientVersion)) throw new Error("Invalid compatibility response");
+      versionBlock = null;
+      return { ok: true, value: result };
+    } catch (error) {
+      if (isClientVersionError(error)) return { ok: false, error: versionErrorData(error) };
+      return { ok: false, error: { code: "service_unavailable", message: "Unable to confirm client compatibility" } };
+    }
+  });
   maintenanceAdmission = false;
   maintenanceAccountId = undefined;
   maintenanceAbort = undefined;
@@ -332,6 +362,7 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
 
   ipcMain.handle("auth:login", async (_event, baseUrl: string, username: string, password: string): Promise<PlayerLoginIpcResult<PlayerAuthenticatedSession>> => {
     try {
+      if (versionBlock) return { ok: false, error: versionErrorData(versionBlock) };
       return await controller.authenticate(async (assertCurrent, previous) => {
         await previous;
         return withSavedSession(deps, assertCurrent, async (persisted) => {
@@ -358,6 +389,7 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
         });
       });
     } catch (error) {
+      if (isClientVersionError(error) || versionBlock) return { ok: false, error: versionErrorData(isClientVersionError(error) ? error : versionBlock!) };
       const details = error && typeof error === "object" ? error as { code?: unknown; statusCode?: unknown } : {};
       const statusCode = typeof details.statusCode === "number" && Number.isFinite(details.statusCode)
         ? details.statusCode : undefined;
@@ -438,7 +470,8 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
     return shell.openExternal(connectUrl);
   });
 
-  ipcMain.handle("session:restore", async (_event, timeoutMs?: number): Promise<RestoreSessionResult | null> => {
+  ipcMain.handle("session:restore", async (_event, timeoutMs?: number): Promise<RestoreSessionResult | null | { ok: false; error: ReturnType<typeof versionErrorData> }> => {
+    if (versionBlock) return { ok: false, error: versionErrorData(versionBlock) };
     const normalizedTimeoutMs = normalizeStartupTimeout(timeoutMs);
     const deadline = normalizedTimeoutMs === undefined ? undefined : performance.now() + normalizedTimeoutMs;
     const remainingTimeout = (): number | undefined => {
@@ -519,6 +552,9 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
           throw error;
         }
       });
+    }).catch((error: unknown) => {
+      if (isClientVersionError(error) || versionBlock) return { ok: false as const, error: versionErrorData(isClientVersionError(error) ? error : versionBlock!) };
+      throw error;
     });
   });
 
@@ -580,4 +616,19 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
     checkForUpdates("compet-player-client", normalizeStartupTimeout(timeoutMs)));
   ipcMain.handle("updates:install", () => installUpdate("compet-player-client", "Compet Player Client.exe"));
   return controller;
+}
+
+let versionBlock: ClientVersionBlock | null = null;
+let versionGeneration = 0;
+let versionBlockHandler: ((block: ClientVersionBlock) => void) | undefined;
+
+export function publishClientVersionBlock(block: ClientVersionBlock): void {
+  if (versionBlock?.code === block.code && versionBlock.requiredClientVersion === block.requiredClientVersion) return;
+  versionBlock = { code: block.code, currentVersion: app.getVersion(), requiredClientVersion: block.requiredClientVersion };
+  versionGeneration += 1;
+  versionBlockHandler?.(versionBlock);
+}
+
+function versionErrorData(value: { code?: string; requiredClientVersion?: string }) {
+  return { code: value.code ?? "client_version_invalid", message: "Client version rejected", statusCode: 426, requiredClientVersion: value.requiredClientVersion ?? "" };
 }

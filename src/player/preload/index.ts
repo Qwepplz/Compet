@@ -6,6 +6,7 @@ import { createPreviewPlayerApi } from "./previewPlayerApi.js";
 import type { SupportedLanguage } from "../../language/types.js";
 import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 import type {
+  ClientVersionBlock,
   PlayerLoginIpcResult,
   PlayerFriendListDto,
   PlayerFriendRequestDto,
@@ -33,6 +34,13 @@ const subscribe = <T>(channel: string, listener: (payload: T) => void): (() => v
 };
 
 export const playerApi = {
+  checkCompatibility: async (baseUrl: string, timeoutMs?: number): Promise<{ requiredClientVersion: string }> => {
+    const result = await invoke<PlayerLoginIpcResult<{ requiredClientVersion: string }>>("client:compatibility", baseUrl, timeoutMs);
+    if (result.ok) return result.value;
+    throw result.error;
+  },
+  getVersionBlock: (): Promise<ClientVersionBlock | null> => invoke("client:getVersionBlock"),
+  onVersionBlocked: (listener: (block: ClientVersionBlock) => void): (() => void) => subscribe("player:versionBlocked", listener),
   loadLanguage: (): Promise<SupportedLanguage> => invoke("language:load"),
   saveLanguage: (language: SupportedLanguage): Promise<void> => invoke("language:save", language),
   login: async (baseUrl: string, username: string, password: string): Promise<PlayerAuthenticatedSession> => {
@@ -44,7 +52,11 @@ export const playerApi = {
   logout: (): Promise<void> => invoke("auth:logout"),
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
     invoke("auth:changePassword", currentPassword, newPassword),
-  restoreSession: (timeoutMs?: number): Promise<RestoreSessionResult | null> => invoke("session:restore", timeoutMs),
+  restoreSession: async (timeoutMs?: number): Promise<RestoreSessionResult | null> => {
+    const result = await invoke<RestoreSessionResult | null | { ok: false; error: unknown }>("session:restore", timeoutMs);
+    if (result && "ok" in result && !result.ok) throw result.error;
+    return result as RestoreSessionResult | null;
+  },
   loadSavedLogin: (): Promise<SavedPlayerLogin | null> => invoke("session:credentials"),
   searchFriends: (query: string): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:search", query),
   reenrichFriends: (results: PlayerFriendSearchResultDto[]): Promise<PlayerFriendSearchResultDto[]> => invoke("friends:reenrich", results),

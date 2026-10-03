@@ -31,14 +31,19 @@ export function createAuthRetry(deps: AuthRetryDeps): AuthRetryController {
       if (paused) throw new PlayerApiError("Authentication paused", 503, "service_unavailable");
       const requestRevision = revision;
       const failedClient = deps.getApiClient();
+      const runCurrent = async (client: PlayerApiClient): Promise<T> => {
+        const value = await operation(client);
+        if (paused || revision !== requestRevision) throw new Error("Authentication operation superseded");
+        return value;
+      };
       try {
-        return await operation(failedClient);
+        return await runCurrent(failedClient);
       } catch (error) {
         if (!isSessionInvalidError(error)) throw error;
         if (paused || revision !== requestRevision) throw error;
         const active = currentClient();
         if (!active) throw error;
-        if (active !== failedClient) return operation(active);
+        if (active !== failedClient) return runCurrent(active);
         if (!recovery) {
           const assertCurrent = () => {
             if (paused || revision !== requestRevision || currentClient() !== failedClient) {
@@ -58,7 +63,7 @@ export function createAuthRetry(deps: AuthRetryDeps): AuthRetryController {
         }
         const recovered = await recovery;
         if (!recovered || paused || revision !== requestRevision) throw error;
-        return operation(deps.getApiClient());
+        return runCurrent(deps.getApiClient());
       }
     },
     authenticate<T>(operation: (assertCurrent: () => void, previous: Promise<void>) => Promise<T>): Promise<T> {

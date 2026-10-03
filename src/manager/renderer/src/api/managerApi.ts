@@ -35,7 +35,7 @@ export const managerApi = {
   matchmakingOccupancy: () => window.managerApi.matchmakingOccupancy() as Promise<MatchmakingOccupancy>,
   getVersion: () => window.managerApi.getVersion() as Promise<string>,
   checkUpdate: () => window.managerApi.checkUpdate() as Promise<UpdateCheckResult>,
-  installUpdate: () => window.managerApi.installUpdate() as Promise<UpdateCheckResult & { installing: boolean }>,
+  installUpdate: () => window.managerApi.installUpdate() as Promise<import("../../../shared/types.js").ManagerUpdateInstallResult>,
 };
 
 export const accountApi = {

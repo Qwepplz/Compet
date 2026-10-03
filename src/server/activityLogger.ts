@@ -1,3 +1,5 @@
+import { isSemver } from "../shared/version.js";
+import { HttpError } from "../api/httpErrors.js";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { AccountRecord } from "../accounts/accountTypes.js";
 import { SERVER_ACTIVITY_PREFIX, type ActivityLogInput, type LogActor, type LogSource } from "../shared/activityLog.js";
@@ -76,7 +78,13 @@ export function installHttpActivityLogging(app: FastifyInstance<any, any, any, a
 }
 
 export function recordHttpActivityError(request: FastifyRequest<any, any, any, any, any>, error: unknown): void {
-  requestErrors.set(request, errorContext(error));
+  const context = errorContext(error);
+  if (error instanceof HttpError && error.statusCode === 426 && error.requiredClientVersion && isSemver(error.requiredClientVersion)) {
+    const clientVersion = request.headers["x-compet-client-version"];
+    context.requiredClientVersion = error.requiredClientVersion;
+    context.clientVersion = typeof clientVersion === "string" && isSemver(clientVersion) ? clientVersion : "invalid";
+  }
+  requestErrors.set(request, context);
 }
 
 export function logRealtimeCommand(account: AccountRecord, command: RealtimeCommand, ack: RealtimeCommandAck): void {

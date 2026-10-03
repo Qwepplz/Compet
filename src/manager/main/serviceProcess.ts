@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { isSemver } from "../../shared/version.js";
 import { EventEmitter } from "node:events";
 import { spawn as nodeSpawn, type ChildProcessByStdio } from "node:child_process";
 import path from "node:path";
@@ -26,15 +28,19 @@ export class ManagedServiceProcess extends EventEmitter {
     private readonly cwd: string,
     private readonly spawnFn: SpawnFn = nodeSpawn,
     private readonly gracefulStopTimeoutMs = GRACEFUL_STOP_TIMEOUT_MS,
+    private readonly requiredClientVersion: () => Promise<string> = () => readRequiredClientVersion(cwd, false),
   ) {
     super();
   }
 
   async start(config: ManagerConfig): Promise<ServiceStatus> {
     if (this.child) return this.current;
+    const requiredClientVersion = await this.requiredClientVersion();
+    if (!isSemver(requiredClientVersion)) throw new Error("Invalid required client version");
     this.setStatus({ state: "starting", baseUrl: this.baseUrl(config) });
     const env: NodeJS.ProcessEnv = {
       ...process.env,
+      COMPET_REQUIRED_CLIENT_VERSION: requiredClientVersion,
       COMPET_HOST: config.host,
       COMPET_PORT: String(config.port),
       COMPET_DATA_DIR: config.dataDir,
@@ -211,4 +217,32 @@ export class ManagedServiceProcess extends EventEmitter {
     this.current = status;
     this.emit("status" satisfies ServiceEvents, status);
   }
+}
+
+export async function readRequiredClientVersion(appRoot: string, packaged: boolean, env: NodeJS.ProcessEnv = process.env): Promise<string> {
+  let value: unknown = env.COMPET_REQUIRED_CLIENT_VERSION;
+  if (packaged) {
+    const raw = await readFile(path.join(appRoot, "package.json"), "utf8");
+    const metadata: unknown = JSON.parse(raw.replace(/^\uFEFF/, ""));
+    if (!metadata || typeof metadata !== "object" || !("name" in metadata) || metadata.name !== "compet-server-manager") throw new Error("Invalid server package identity");
+    value = "requiredClientVersion" in metadata ? metadata.requiredClientVersion : undefined;
+  }
+  if (typeof value !== "string" || !isSemver(value)) throw new Error("Invalid required client version");
+  return value;
+}
+
+export async function assertServicePortClosed(config: Pick<ManagerConfig, "host" | "port">): Promise<void> {
+  const { createConnection } = await import("node:net");
+  const host = config.host === "0.0.0.0" ? "127.0.0.1" : config.host === "::" ? "::1" : config.host;
+  await new Promise<void>((resolve, reject) => {
+    const socket = createConnection({ host, port: config.port });
+    const fail = () => { socket.destroy(); reject(Object.assign(new Error("maintenance_external_service"), { code: "maintenance_external_service" })); };
+    socket.setTimeout(1500, fail);
+    socket.once("connect", fail);
+    socket.once("error", error => {
+      socket.destroy();
+      if ((error as NodeJS.ErrnoException).code === "ECONNREFUSED") resolve();
+      else reject(Object.assign(new Error("maintenance_service_unknown"), { code: "maintenance_service_unknown" }));
+    });
+  });
 }

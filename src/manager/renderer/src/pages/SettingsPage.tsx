@@ -139,8 +139,10 @@ export function SettingsPage() {
   async function installUpdate() {
     setInstallingUpdate(true);
     try {
-      await managerApi.installUpdate();
-      message.info(t("manager.settings.updateDownloaded"));
+      const result = await managerApi.installUpdate();
+      if (result.status === "installing") message.info(t("manager.settings.updateDownloaded"));
+      else if (result.status === "no_changes") { message.info(t("manager.settings.latest")); setInstallingUpdate(false); }
+      else { message.error(`${t(result.status === "blocked" ? "manager.settings.updateBlocked" : "errors.updateInstallFailed")} (${result.error})`); setInstallingUpdate(false); }
     } catch (caught) {
       const messageText = displayError(caught, t, "errors.updateInstallFailed");
       message.error(messageText);

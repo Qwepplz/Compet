@@ -2,10 +2,11 @@ import type { FastifyRequest } from "fastify";
 import type { AccountRecord } from "../accounts/accountTypes.js";
 import type { AccountService } from "../accounts/accountService.js";
 import type { SessionService } from "../auth/sessionService.js";
+import { assertClientVersion } from "./clientVersionPolicy.js";
 import { forbidden, unauthorized } from "./httpErrors.js";
 
 export interface RequestAuth { sessionId: string; token: string; account: AccountRecord; expiresAt: string; }
-export interface AuthDeps { accounts: AccountService; sessions: SessionService; }
+export interface AuthDeps { readonly requiredClientVersion: string; accounts: AccountService; sessions: SessionService; }
 
 declare module "fastify" { interface FastifyRequest { auth?: RequestAuth; } }
 
@@ -17,6 +18,9 @@ export async function authenticateRequest(request: FastifyRequest<any, any>, dep
   if (!verified) throw unauthorized("unauthorized");
   const account = await deps.accounts.getById(verified.accountId);
   if (!account || !account.enabled) throw unauthorized("account_disabled", "Account disabled");
+  if (account.role === "player" && request.routeOptions.url !== "/auth/logout") {
+    assertClientVersion(request.headers["x-compet-client-version"], deps.requiredClientVersion);
+  }
   request.auth = { token, sessionId: verified.sessionId, account, expiresAt: verified.expiresAt };
   return request.auth;
 }

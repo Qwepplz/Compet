@@ -2,9 +2,10 @@ import { randomUUID } from "node:crypto";
 import { lstat, readdir, readFile, rename, rm, rmdir, writeFile } from "node:fs/promises";
 import type { IntegrityReport } from "../updateTypes.js";
 import path from "node:path";
+import { assertManagedRelativePath, fingerprintFile, sameFingerprint, isProtectedProgramPath, pathsOverlap, type ManagedFileOperation } from "./serverManagedFiles.js";
 
 export interface MaintenanceTransaction {
-  protocol: 2;
+  protocol: 2 | 3;
   root: string;
   exe: string;
   targetVersion: string;
@@ -14,11 +15,20 @@ export interface MaintenanceTransaction {
 }
 
 export interface MaintenancePlan {
+  protocol?: 2 | 3;
+  protectedPaths?: string[];
+  operations?: ManagedFileOperation[];
   root: string;
   exe: string;
   targetVersion: string;
   helper: { size: number; sha256: string };
   files: Array<{ source: string; path: string; size: number; sha256: string }>;
+}
+
+export interface ServerMaintenancePlan extends Omit<MaintenancePlan, "files"> {
+  protocol: 3;
+  protectedPaths: string[];
+  operations: ManagedFileOperation[];
 }
 
 const states = new Set<MaintenanceTransaction["state"]>([
@@ -86,7 +96,7 @@ function parseSizeAndHash(fields: string[]): { size: number; sha256: string } {
 
 function parsePlan(directory: string, text: string): MaintenancePlan {
   const lines = text.trimEnd().split(/\r?\n/);
-  if (lines.length < 5 || lines[0] !== "protocol=2" ||
+  if (lines.length < 5 || !["protocol=2", "protocol=3"].includes(lines[0] ?? "") ||
       !lines[1]?.startsWith("root=") || !lines[2]?.startsWith("exe=") ||
       !lines[3]?.startsWith("target=") || !lines[4]?.startsWith("helper=")) {
     throw new Error("Invalid maintenance plan");
@@ -100,6 +110,7 @@ function parsePlan(directory: string, text: string): MaintenancePlan {
   }
   assertRelative(exe);
   const helper = parseSizeAndHash(lines[4].slice(7).split("\t"));
+  if (lines[0] === "protocol=3") return parseServerEntries({ root, exe, targetVersion, helper }, lines.slice(5));
   const files: MaintenancePlan["files"] = [];
   const targets = new Set<string>();
   for (const line of lines.slice(5)) {
@@ -120,15 +131,15 @@ function parsePlan(directory: string, text: string): MaintenancePlan {
   return { root, exe, targetVersion, helper, files };
 }
 
-function serializePlan(directory: string, plan: MaintenancePlan): string {
+function serializePlan(directory: string, plan: MaintenancePlan | ServerMaintenancePlan): string {
   const lines = [
-    "protocol=2",
+    "protocol=" + (plan.protocol ?? 2),
     "root=" + encode(plan.root),
     "exe=" + encode(plan.exe),
     "target=" + encode(plan.targetVersion),
     "helper=" + plan.helper.size + "\t" + plan.helper.sha256,
-    ...plan.files.map(file => "file=" + encode(file.source) + "\t" + encode(file.path) +
-      "\t" + file.size + "\t" + file.sha256),
+    ...(plan.protocol === 3 ? serializeServerEntries(plan) : (plan as MaintenancePlan).files.map(file => "file=" + encode(file.source) + "\t" + encode(file.path) +
+      "\t" + file.size + "\t" + file.sha256)),
   ];
   const text = lines.join("\n") + "\n";
   parsePlan(directory, text);
@@ -154,7 +165,7 @@ export async function readMaintenancePlan(directory: string): Promise<Maintenanc
   }
 }
 
-export async function writeMaintenancePlan(directory: string, plan: MaintenancePlan, manifest: unknown): Promise<void> {
+export async function writeMaintenancePlan(directory: string, plan: MaintenancePlan | ServerMaintenancePlan, manifest: unknown): Promise<void> {
   if (!(await ensureDirectory(directory))) throw new Error("Maintenance transaction directory missing");
   const text = serializePlan(directory, plan);
   if (!manifest || typeof manifest !== "object" || Array.isArray(manifest)) {
@@ -179,14 +190,14 @@ export async function readMaintenanceManifest(directory: string): Promise<unknow
 export async function writeMaintenanceTransaction(directory: string, value: MaintenanceTransaction): Promise<void> {
   if (!(await ensureDirectory(directory))) throw new Error("Maintenance transaction directory missing");
   const plan = await readMaintenancePlan(directory);
-  if (value.protocol !== 2 || value.root !== plan.root || value.exe !== plan.exe ||
+  if (value.protocol !== (plan.protocol ?? 2) || value.root !== plan.root || value.exe !== plan.exe ||
       value.targetVersion !== plan.targetVersion || !states.has(value.state) ||
       (value.error !== undefined && !/^[a-z0-9_]+$/.test(value.error)) ||
       (value.recoveryPhase !== undefined && (value.state !== "recovery_failed" ||
         value.error === undefined || !["prepared", "applying", "applied"].includes(value.recoveryPhase)))) {
     throw new Error("Invalid maintenance transaction state");
   }
-  const lines = ["protocol=2", "state=" + value.state];
+  const lines = ["protocol=" + value.protocol, "state=" + value.state];
   if (value.error !== undefined) lines.push("error=" + value.error);
   if (value.recoveryPhase !== undefined) lines.push("phase=" + value.recoveryPhase);
   await atomicWrite(path.join(directory, "result.txt"), lines.join("\n") + "\n");
@@ -204,7 +215,7 @@ export async function readMaintenanceTransaction(directory: string): Promise<Mai
     throw error;
   }
   const lines = text.trimEnd().split(/\r?\n/);
-  if (lines.length < 2 || lines.length > 4 || lines[0] !== "protocol=2" ||
+  if (lines.length < 2 || lines.length > 4 || lines[0] !== "protocol=" + (plan.protocol ?? 2) ||
       !lines[1]?.startsWith("state=") ||
       (lines.length >= 3 && !lines[2]?.startsWith("error=")) ||
       (lines.length === 4 && !lines[3]?.startsWith("phase="))) {
@@ -218,7 +229,7 @@ export async function readMaintenanceTransaction(directory: string): Promise<Mai
         !["prepared", "applying", "applied"].includes(recoveryPhase)))) {
     throw new Error("Invalid maintenance transaction state");
   }
-  return { protocol: 2, root: plan.root, exe: plan.exe, targetVersion: plan.targetVersion, state,
+  return { protocol: plan.protocol ?? 2, root: plan.root, exe: plan.exe, targetVersion: plan.targetVersion, state,
     ...(error === undefined ? {} : { error }),
     ...(recoveryPhase === undefined ? {} : { recoveryPhase }) };
 }
@@ -247,7 +258,11 @@ export async function readMaintenanceJournal(
     throw error;
   }
   const lines = text.trimEnd().split(/\r?\n/);
-  if (lines[0] !== "protocol=2" || lines.length > plan.files.length + 1 ||
+  if (plan.protocol === 3) {
+    const expectedCount = lines.length - 2;
+    if (expectedCount < 0 || lines.pop() !== "count=" + expectedCount) throw new Error("Invalid maintenance journal");
+  }
+  if (lines[0] !== "protocol=" + (plan.protocol ?? 2) || lines.length > plan.files.length + 1 ||
       (requireComplete && lines.length !== plan.files.length + 1)) {
     throw new Error("Invalid maintenance journal");
   }
@@ -267,6 +282,11 @@ export async function readMaintenanceJournal(
     if (entry.path.toLowerCase() !== plan.files[index]?.path.toLowerCase() ||
         entry.backup !== "backup/" + index + ".bin") {
       throw new Error("Invalid maintenance journal");
+    }
+    const operation = plan.operations?.[index];
+    if (plan.protocol === 3 && (!operation || entry.existed !== !!operation.before ||
+        (operation.before && (entry.size !== operation.before.size || entry.sha256 !== operation.before.sha256)))) {
+      throw new Error("Invalid maintenance journal before image");
     }
     entries.push(entry);
   }
@@ -365,7 +385,7 @@ export async function cleanupMaintenancePayload(directory: string): Promise<void
   const plan = await readMaintenancePlan(directory);
   const journal = await readMaintenanceJournal(directory);
   const content = new Set([...plan.files.map(file => file.sha256), plan.helper.sha256]);
-  const backups = new Set(journal.filter(entry => entry.existed).map(entry => path.basename(entry.backup)));
+  const backups = await allowedMaintenanceBackups(directory, plan, journal);
   const files = await knownPayloadFiles(directory, "files", content);
   const backupFiles = await knownPayloadFiles(directory, "backup", backups);
   for (const file of [...files, ...backupFiles]) await rm(file);
@@ -439,7 +459,7 @@ export async function clearRetiredMaintenance(root: string): Promise<void> {
   }
   if (!info.isDirectory() || info.isSymbolicLink()) throw new Error("Unknown maintenance transaction content");
   await validateTerminalContents(directory);
-  await rm(directory, { recursive: true });
+  await rm(directory, { recursive: true, maxRetries: 10, retryDelay: 100 });
 }
 
 export async function clearMaintenanceTransaction(directory: string): Promise<void> {
@@ -454,10 +474,76 @@ export async function clearMaintenanceTransaction(directory: string): Promise<vo
   const journal = await readMaintenanceJournal(directory);
   await knownPayloadFiles(directory, "files",
     new Set([...plan.files.map(file => file.sha256), plan.helper.sha256]));
-  await knownPayloadFiles(directory, "backup",
-    new Set(journal.filter(entry => entry.existed).map(entry => path.basename(entry.backup))));
+  await knownPayloadFiles(directory, "backup", await allowedMaintenanceBackups(directory, plan, journal));
   const root = path.dirname(directory);
   await clearRetiredMaintenance(root);
   await rename(directory, path.join(root, ".compet-maintenance-retired"));
   await clearRetiredMaintenance(root);
+}
+
+function serializeServerEntries(plan: MaintenancePlan | ServerMaintenancePlan): string[] {
+  if (!plan.protectedPaths || !plan.operations) throw new Error("Invalid server maintenance plan");
+  return [
+    ...plan.protectedPaths.map(value => "protect=" + encode(value)),
+    ...plan.operations.map(op => {
+      const before = op.before ? op.before.size + "\t" + op.before.sha256 : "-\t-";
+      return op.kind === "delete" ? "delete=" + encode(op.path) + "\t" + before
+        : "replace=" + encode(op.source) + "\t" + encode(op.path) + "\t" + op.size + "\t" + op.sha256 + "\t" + before;
+    }),
+  ];
+}
+
+function parseServerEntries(base: Omit<MaintenancePlan, "files">, lines: string[]): MaintenancePlan {
+  const protectedPaths: string[] = [];
+  const operations: ManagedFileOperation[] = [];
+  const targets = new Set<string>();
+  for (const line of lines) {
+    if (line.startsWith("protect=")) {
+      const value = decode(line.slice(8));
+      if (operations.length || !path.isAbsolute(value) || path.resolve(value) !== value ||
+          protectedPaths.some(p => p.toLowerCase() === value.toLowerCase())) throw new Error("Invalid protected path");
+      protectedPaths.push(value);
+      continue;
+    }
+    const deletion = line.startsWith("delete=");
+    if (!deletion && !line.startsWith("replace=")) throw new Error("Invalid server operation");
+    const fields = line.slice(deletion ? 7 : 8).split("\t");
+    if (fields.length !== (deletion ? 3 : 6)) throw new Error("Invalid server operation");
+    const relative = decode(fields[deletion ? 0 : 1]!);
+    assertManagedRelativePath(relative);
+    if (targets.has(relative.toLowerCase()) || isProtectedProgramPath(relative) ||
+        protectedPaths.some(p => pathsOverlap(path.join(base.root, relative), p))) throw new Error("Invalid server target");
+    targets.add(relative.toLowerCase());
+    const beforeFields = fields.slice(deletion ? 1 : 4);
+    const before = beforeFields[0] === "-" && beforeFields[1] === "-" ? undefined : parseSizeAndHash(beforeFields);
+    if (deletion) {
+      if (!before) throw new Error("Delete requires a before image");
+      operations.push({ kind: "delete", path: relative, before });
+    } else {
+      const source = decode(fields[0]!);
+      const fingerprint = parseSizeAndHash(fields.slice(2, 4));
+      if (source !== "files/" + fingerprint.sha256) throw new Error("Invalid server source");
+      operations.push({ kind: "replace", path: relative, source, ...fingerprint, ...(before ? { before } : {}) });
+    }
+  }
+  for (const target of targets) {
+    for (const other of targets) if (target !== other && target.startsWith(other + "/")) throw new Error("Overlapping server targets");
+  }
+  return { ...base, protocol: 3, protectedPaths, operations,
+    files: operations.map(op => op.kind === "replace" ? op :
+      { path: op.path, source: "", size: 0, sha256: "0".repeat(64) }) };
+}
+
+async function allowedMaintenanceBackups(directory: string, plan: MaintenancePlan, journal: MaintenanceJournalEntry[]): Promise<Set<string>> {
+  const allowed = new Set(journal.filter(entry => entry.existed).map(entry => path.basename(entry.backup)));
+  if (plan.protocol === 3) {
+    for (const [index, operation] of (plan.operations ?? []).entries()) {
+      if (!operation.before) continue;
+      const name = index + ".bin";
+      const actual = await fingerprintFile(path.join(directory, "backup", name));
+      if (actual && !sameFingerprint(actual, operation.before)) throw new Error("Invalid maintenance backup");
+      allowed.add(name);
+    }
+  }
+  return allowed;
 }

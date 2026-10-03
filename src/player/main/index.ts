@@ -13,7 +13,7 @@ import type {
 } from "../shared/types.js";
 import type { AccountView } from "../../manager/shared/types.js";
 import { createPlayerApiClient, observeMaintenanceMatchmakingState, observeMaintenanceRealtimeEvent,
-  registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
+  publishClientVersionBlock, registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
 import type { AuthRetryController } from "./authRetry.js";
 import { PlayerRealtimeClient } from "./playerRealtimeClient.js";
@@ -34,6 +34,8 @@ const sessionFile = path.join(app.getPath("userData"), "player-session.json");
 const sessionStore = new SavedLoginStore(sessionFile);
 const languageStore = new LanguagePreferenceStore(path.join(app.getPath("userData"), "language.json"));
 const realtimeClient = new PlayerRealtimeClient({
+  clientVersion: app.getVersion(),
+  onVersionBlocked: publishClientVersionBlock,
   onCommandTrace: ({ phase, commandId, name, connectionId, elapsedMs }) => {
     appendBootLog(
       bootLogFile,
@@ -487,6 +489,7 @@ if (!gotSingleInstanceLock) {
     if (maintenanceReport?.error) appendBootLog(bootLogFile, `maintenance verification: ${maintenanceReport.error}`);
     registerWindowIpc();
     authRetryController = registerPlayerIpc({
+      onVersionBlocked: (block) => currentMainWindow()?.webContents.send("player:versionBlocked", block),
       clearSession,
       connectRealtime,
       disconnectRealtime,

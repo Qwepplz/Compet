@@ -20,7 +20,9 @@ import {
   type Get5MatchResultClassification,
 } from "./get5MatchResult.js";
 import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
-import { installRunCsgoAssets } from "./runCsgoAssets.js";
+import { installRunCsgoAssets, type RunCsgoSource } from "./runCsgoAssets.js";
+import type { RunCsgoAssetTransaction } from "./runCsgoAssetState.js";
+import { legacyRunCsgoFiles } from "./legacyRunCsgoFiles.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
 import { isSourceServerObservable, waitForSourceServerExit, type SourceServerExitMonitorResult, type SourceServerExitMonitorSpec } from "./sourceServerMonitor.js";
 import { delay } from "../shared/async.js";
@@ -36,6 +38,7 @@ export interface MatchConnectInfo {
 }
 
 export interface MatchExecutorOptions {
+  assets?: () => Promise<RunCsgoSource>;
   launcher: GameServerLauncher;
   records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent">;
   events?: Pick<RealtimeEventBus, "publish">;
@@ -81,45 +84,54 @@ const WARMUP_CFG_LINES = [
   "mp_warmup_start",
 ];
 
+const activeAssetRoots = new Set<string>();
+
 export class MatchExecutor {
   private readonly gameServerPresenceMonitors = new Map<string, GameServerPresenceMonitor>();
 
   constructor(private readonly options: MatchExecutorOptions) {}
 
   async prepare(matchPlan: MatchPlan): Promise<MatchConnectInfo> {
-    const safeMatchId = validateMatchId(matchPlan.id);
-    const matchCfgPath = ACTIVE_MATCH_RUNTIME_CFG_PATH;
-
-    await this.writeMatchFiles(matchPlan, safeMatchId, matchCfgPath);
-    await this.options.records?.saveStatus(matchPlan.id, { phase: "server_prepare" });
-    await this.options.records?.appendEvent(matchPlan.id, { type: "server_preparing", at: new Date().toISOString() });
-    this.options.events?.publish({ type: "server_preparing", matchId: matchPlan.id, accountIds: humanAudience(matchPlan) });
-
-    const spec = buildRunCsgoLaunchSpec({
-      serverRoot: this.options.config.serverRoot,
-      map: matchPlan.map,
-      port: this.options.config.portRange.start,
-      clientPort: this.options.config.portRange.start + 1,
-    });
-
-    const launched = await this.options.launcher.launch(spec);
-    const emptyServerWatchdog = this.createEmptyServerWatchdog(matchPlan.id);
-    const connect = buildConnectInfo(matchPlan, this.options.config.publicConnectHost, launched.port);
+    const assetRoot = path.resolve(this.options.config.serverRoot).toLowerCase();
+    if (activeAssetRoots.has(assetRoot)) throw new Error("asset_game_active");
+    activeAssetRoots.add(assetRoot);
+    let launchedGame = false;
     try {
-      await this.saveConnectState(matchPlan.id, launched, connect);
-    } catch (error) {
-      this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
+      const safeMatchId = validateMatchId(matchPlan.id);
+      const matchCfgPath = ACTIVE_MATCH_RUNTIME_CFG_PATH;
+
+      await this.writeMatchFiles(matchPlan, safeMatchId, matchCfgPath);
+      await this.options.records?.saveStatus(matchPlan.id, { phase: "server_prepare" });
+      await this.options.records?.appendEvent(matchPlan.id, { type: "server_preparing", at: new Date().toISOString() });
+      this.options.events?.publish({ type: "server_preparing", matchId: matchPlan.id, accountIds: humanAudience(matchPlan) });
+
+      const spec = buildRunCsgoLaunchSpec({
+        serverRoot: this.options.config.serverRoot,
+        map: matchPlan.map,
+        port: this.options.config.portRange.start,
+        clientPort: this.options.config.portRange.start + 1,
+      });
+
+      const launched = await this.options.launcher.launch(spec);
+      launchedGame = true;
+      const emptyServerWatchdog = this.createEmptyServerWatchdog(matchPlan.id);
+      const connect = buildConnectInfo(matchPlan, this.options.config.publicConnectHost, launched.port);
+      try {
+        await this.saveConnectState(matchPlan.id, launched, connect);
+      } catch (error) {
+        this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
+        emptyServerWatchdog.start();
+        throw error;
+      }
+      const gameServerPresenceMonitor = this.createGameServerPresenceMonitor(matchPlan.id);
+      if (gameServerPresenceMonitor) {
+        this.gameServerPresenceMonitors.set(matchPlan.id, gameServerPresenceMonitor);
+        gameServerPresenceMonitor.start();
+      }
+      this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog, gameServerPresenceMonitor);
       emptyServerWatchdog.start();
-      throw error;
-    }
-    const gameServerPresenceMonitor = this.createGameServerPresenceMonitor(matchPlan.id);
-    if (gameServerPresenceMonitor) {
-      this.gameServerPresenceMonitors.set(matchPlan.id, gameServerPresenceMonitor);
-      gameServerPresenceMonitor.start();
-    }
-    this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog, gameServerPresenceMonitor);
-    emptyServerWatchdog.start();
-    return connect;
+      return connect;
+    } catch (error) { if (!launchedGame) activeAssetRoots.delete(assetRoot); throw error; }
   }
 
   async stopGameServerPresence(matchId: string): Promise<void> {
@@ -158,26 +170,32 @@ export class MatchExecutor {
   }
 
   private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {
-    await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
-    await installRunCsgoAssets(this.options.config.serverRoot);
-    await cleanupGet5MatchStatsFiles(this.options.config.serverRoot);
-    const get5StatsPath = get5MatchStatsPath(this.options.config.serverRoot, safeMatchId);
-    await mkdir(path.dirname(get5StatsPath), { recursive: true });
-    await unlinkIfExists(get5StatsPath);
-    await unlinkIfExists(competMatchStatsPath(this.options.config.serverRoot, safeMatchId));
-    await removeGet5AutoloadCfg(this.options.config.serverRoot);
-    await installCompetLockPlugin(this.options.config.serverRoot);
-    const noRandomBotsCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", NO_RANDOM_BOTS_CFG_PATH);
-    await mkdir(path.dirname(noRandomBotsCfgFile), { recursive: true });
-    await writeFile(noRandomBotsCfgFile, `${buildNoRandomBotsCfg()}\n`, "utf8");
-    const matchCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", matchCfgPath);
-    await mkdir(path.dirname(matchCfgFile), { recursive: true });
-    await writeFile(matchCfgFile, `${buildMatchStartupCfg(matchPlan, safeMatchId)}\n`, "utf8");
-    const activeCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", ACTIVE_MATCH_CFG_PATH);
-    await mkdir(path.dirname(activeCfgFile), { recursive: true });
-    await writeFile(activeCfgFile, `exec ${matchCfgPath}\n`, "utf8");
-    await ensureBaseCfgLoadsNoRandomBots(this.options.config.serverRoot);
-    await ensureSourceModCfgLoadsActiveMatch(this.options.config.serverRoot);
+    if (!this.options.assets) throw new Error("asset_source_required");
+    const source = await this.options.assets();
+    const transaction = await installRunCsgoAssets({ sourceRoot: source.root, serverRoot: this.options.config.serverRoot,
+      version: source.version, files: source.files, legacyFiles: legacyRunCsgoFiles });
+    try {
+      await cleanupLegacyManagedMatchFiles(this.options.config.serverRoot);
+      await cleanupGet5MatchStatsFiles(this.options.config.serverRoot);
+      const get5StatsPath = get5MatchStatsPath(this.options.config.serverRoot, safeMatchId);
+      await mkdir(path.dirname(get5StatsPath), { recursive: true });
+      await unlinkIfExists(get5StatsPath);
+      await unlinkIfExists(competMatchStatsPath(this.options.config.serverRoot, safeMatchId));
+      await removeGet5AutoloadCfg(this.options.config.serverRoot);
+      await installCompetLockPlugin(this.options.config.serverRoot);
+      const noRandomBotsCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", NO_RANDOM_BOTS_CFG_PATH);
+      await mkdir(path.dirname(noRandomBotsCfgFile), { recursive: true });
+      await writeFile(noRandomBotsCfgFile, `${buildNoRandomBotsCfg()}\n`, "utf8");
+      const matchCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", matchCfgPath);
+      await mkdir(path.dirname(matchCfgFile), { recursive: true });
+      await writeFile(matchCfgFile, `${buildMatchStartupCfg(matchPlan, safeMatchId)}\n`, "utf8");
+      const activeCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", ACTIVE_MATCH_CFG_PATH);
+      await mkdir(path.dirname(activeCfgFile), { recursive: true });
+      await writeFile(activeCfgFile, `exec ${matchCfgPath}\n`, "utf8");
+      await ensureBaseCfgLoadsNoRandomBots(this.options.config.serverRoot, transaction);
+      await ensureSourceModCfgLoadsActiveMatch(this.options.config.serverRoot, transaction);
+      await transaction.commit();
+    } catch (error) { await transaction.rollback(); throw error; }
   }
 
   private async saveConnectState(matchId: string, launched: LaunchedGameServer, connect: MatchConnectInfo): Promise<void> {
@@ -198,12 +216,14 @@ export class MatchExecutor {
     gameServerPresenceMonitor?: GameServerPresenceMonitor,
   ): void {
     const stopMonitors = () => {
+      activeAssetRoots.delete(path.resolve(this.options.config.serverRoot).toLowerCase());
       emptyServerWatchdog.stop();
       if (gameServerPresenceMonitor) {
         void this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor).catch(() => undefined);
       }
     };
     const publishExit = (exitInfo: GameServerExitInfo) => {
+      activeAssetRoots.delete(path.resolve(this.options.config.serverRoot).toLowerCase());
       emptyServerWatchdog.stop();
       const stopped = gameServerPresenceMonitor
         ? this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor)
@@ -615,7 +635,7 @@ function appendManagedLines(lines: string[], managedLines: string[]): void {
   lines.push(...managedLines);
 }
 
-async function ensureBaseCfgLoadsNoRandomBots(serverRoot: string): Promise<void> {
+async function ensureBaseCfgLoadsNoRandomBots(serverRoot: string, transaction: RunCsgoAssetTransaction): Promise<void> {
   const baseCfgFile = path.join(serverRoot, "csgo", "cfg", "1.cfg");
   await mkdir(path.dirname(baseCfgFile), { recursive: true });
   let current = "";
@@ -642,11 +662,11 @@ async function ensureBaseCfgLoadsNoRandomBots(serverRoot: string): Promise<void>
 
   const next = nextLines.join("\n").replace(/\n*$/, "\n");
   if (next !== current) {
-    await writeFile(baseCfgFile, next, "utf8");
+    if (!await transaction.writeTemplate("csgo/cfg/1.cfg", current, next)) await writeFile(baseCfgFile, next, "utf8");
   }
 }
 
-async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<void> {
+async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string, transaction: RunCsgoAssetTransaction): Promise<void> {
   const sourceModCfgFile = path.join(serverRoot, "csgo", "cfg", "sourcemod", "sourcemod.cfg");
   await mkdir(path.dirname(sourceModCfgFile), { recursive: true });
   let current = "";
@@ -684,7 +704,7 @@ async function ensureSourceModCfgLoadsActiveMatch(serverRoot: string): Promise<v
 
   const next = nextLines.join("\n").replace(/\n*$/, "\n");
   if (next !== current) {
-    await writeFile(sourceModCfgFile, next, "utf8");
+    if (!await transaction.writeTemplate("csgo/cfg/sourcemod/sourcemod.cfg", current, next)) await writeFile(sourceModCfgFile, next, "utf8");
   }
 }
 

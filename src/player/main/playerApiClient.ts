@@ -1,3 +1,4 @@
+import { isSemver } from "../../shared/version.js";
 import type { AccountView } from "../../manager/shared/types.js";
 import { requestJson } from "../../shared/httpJsonClient.js";
 import type {
@@ -54,7 +55,7 @@ export interface PlayerRealtimeEventsResult {
 type ServerTimedResponse = { serverNow?: string };
 
 export class PlayerApiError extends Error {
-  constructor(message: string, readonly statusCode?: number, readonly code?: string) {
+  constructor(message: string, readonly statusCode?: number, readonly code?: string, readonly requiredClientVersion?: string) {
     super(message);
     this.name = "PlayerApiError";
   }
@@ -72,7 +73,13 @@ export class PlayerApiClient {
     private token: string | undefined,
     private readonly steamProfiles: RemoteProfileService,
     private readonly realtimeCommandSender?: PlayerRealtimeCommandSender,
+    private readonly clientVersion = "",
+    private readonly onVersionBlocked?: (error: PlayerApiError) => void,
   ) {}
+
+  checkCompatibility(timeoutMs?: number): Promise<{ requiredClientVersion: string }> {
+    return this.request("GET", "/client/compatibility", undefined, timeoutMs);
+  }
 
   getBaseUrl(): string {
     return this.baseUrl;
@@ -478,7 +485,11 @@ export class PlayerApiClient {
       body,
       token: this.token,
       timeoutMs,
-      createResponseError: (message, statusCode, code) => new PlayerApiError(message, statusCode, code),
+      headers: { "X-Compet-Client-Version": this.clientVersion },
+      createResponseError: (message, statusCode, code, requiredClientVersion) => new PlayerApiError(message, statusCode, code, requiredClientVersion),
+    }).catch((error: unknown) => {
+      if (isClientVersionError(error)) this.onVersionBlocked?.(error);
+      throw error;
     });
   }
 
@@ -541,4 +552,10 @@ function enrichParticipant(
     steamPersonaName: profile.personaName,
     steamAvatarUrl: profile.avatarUrl,
   };
+}
+
+export function isClientVersionError(error: unknown): error is PlayerApiError & { requiredClientVersion: string; code: "client_update_required" | "client_version_invalid" } {
+  if (!error || typeof error !== "object") return false;
+  const value = error as PlayerApiError;
+  return value.statusCode === 426 && (value.code === "client_update_required" || value.code === "client_version_invalid") && typeof value.requiredClientVersion === "string" && isSemver(value.requiredClientVersion);
 }

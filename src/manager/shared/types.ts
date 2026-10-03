@@ -110,3 +110,7 @@ export interface UpdateAccountInput {
   enabled?: boolean;
   dev?: boolean;
 }
+
+export type ManagerUpdateInstallResult =
+  | (import("../../desktop/updateTypes.js").UpdateInstallResult & ({ status: "installing" } | { status: "no_changes" }))
+  | { status: "blocked" | "failed"; error: string; installing: false };

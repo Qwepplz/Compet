@@ -14,7 +14,7 @@ import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 
 export type PlayerLoginIpcResult<T> =
   | { ok: true; value: T }
-  | { ok: false; error: { code: string; message: string; statusCode?: number } };
+  | { ok: false; error: { code: string; message: string; statusCode?: number; requiredClientVersion?: string } };
 
 export type PlayerRealtimeConnection = "connected" | "connecting" | "disconnected";
 
@@ -120,3 +120,9 @@ export type PlayerRealtimeEvent =
       error: string;
       readyDeclinedByDisplayName?: string;
     }>;
+
+export interface ClientVersionBlock {
+  code: "client_update_required" | "client_version_invalid";
+  currentVersion: string;
+  requiredClientVersion: string;
+}

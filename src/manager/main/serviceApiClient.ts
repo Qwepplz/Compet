@@ -13,6 +13,11 @@ export class ServiceApiClient {
 
   constructor(private readonly baseUrl: string) {}
 
+  async prepareMaintenance(): Promise<void> {
+    const response = await this.request<{ ready: boolean }>("POST", "/admin/maintenance/prepare");
+    if (response.ready !== true) throw new ServiceApiError("Maintenance admission failed", 409, "maintenance_not_ready");
+  }
+
   async health(): Promise<void> {
     await this.request("GET", "/health");
   }

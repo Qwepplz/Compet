@@ -1,5 +1,9 @@
 import { dialog, ipcMain } from "electron";
 import path from "node:path";
+import { prepareServerMaintenance, handoffServerMaintenance } from "../../desktop/main/serverMaintenance.js";
+import { getInstallRoot } from "../../desktop/main/installLayout.js";
+import { compareSemver } from "../../shared/version.js";
+import { assertServicePortClosed } from "./serviceProcess.js";
 import type { FileConfigStore } from "./configStore.js";
 import type { FileLogStore } from "./logStore.js";
 import type { ManagedServiceProcess } from "./serviceProcess.js";
@@ -7,7 +11,7 @@ import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccoun
 import { ServiceApiClient, ServiceApiError } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
 import { delay } from "../../shared/async.js";
-import { checkForUpdates, getCurrentVersion, installUpdate } from "../../desktop/main/updateCheck.js";
+import { checkForUpdates, getCurrentVersion, loadServerRelease } from "../../desktop/main/updateCheck.js";
 import { AccountService } from "../../accounts/accountService.js";
 import { accountIdSchema, createAccountSchema, patchAccountSchema, passwordSchema } from "../../accounts/accountInputSchemas.js";
 import { AccountRepository } from "../../accounts/accountRepository.js";
@@ -37,6 +41,7 @@ export interface IpcDeps {
   clearSavedLogin: () => Promise<void>;
   setApiClient: (client: ServiceApiClient) => void;
   onAuthRequired?: () => void;
+  maintenance?: { appRoot: string; onHandoff: () => void };
 }
 
 const STARTUP_TIMEOUT_MS = 15_000;
@@ -62,6 +67,11 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   let managerActor: LogActor | undefined;
   let authRequiredNotified = false;
   let serverRootRecoveryPending = false;
+  let updatePending = false;
+  let maintenanceBlocked = false;
+  function assertNotMaintaining(): void {
+    if (updatePending || maintenanceBlocked) throw Object.assign(new Error("maintenance_in_progress"), { code: "maintenance_in_progress" });
+  }
 
   ipcMain.handle("language:load", () => deps.languageStore.load());
   ipcMain.handle("language:save", (_event, language: unknown) => {
@@ -104,6 +114,7 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   }
 
   async function ensureOfflineAccounts(allowFailed = false): Promise<OfflineAccountsContext | undefined> {
+    assertNotMaintaining();
     const serviceState = deps.service.status().state;
     if (serviceState !== "stopped" && (!allowFailed || serviceState !== "failed")) {
       closeOfflineAccountsNow();
@@ -286,6 +297,7 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
 
   ipcMain.handle("config:load", () => deps.configStore.load());
   ipcMain.handle("config:save", (_event, config): Promise<ManagerConfigSaveResult> => offlineAccountsLifecycle.enqueue(async () => {
+    assertNotMaintaining();
     closeOfflineAccountsNow();
     try {
       await deps.configStore.save(config);
@@ -332,6 +344,7 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
 
       try {
         return await offlineAccountsLifecycle.enqueue(async () => {
+          assertNotMaintaining();
           const status = await statusWithExternalProbe(deps);
           if (status.state !== "stopped" && status.state !== "failed") {
             return { status: "error", code: "server_root_recovery_busy" };
@@ -365,6 +378,7 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
     return status;
   }));
   ipcMain.handle("service:start", () => offlineAccountsLifecycle.enqueue(async () => {
+    assertNotMaintaining();
     closeOfflineAccountsNow();
     const config = await deps.configStore.load();
     const external = await probeExternalService(config);
@@ -379,6 +393,7 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   }));
   ipcMain.handle("service:stop", () => stopService());
   ipcMain.handle("service:restart", () => offlineAccountsLifecycle.enqueue(async () => {
+    assertNotMaintaining();
     closeOfflineAccountsNow();
     await deps.service.stop();
     const config = await deps.configStore.load();
@@ -471,7 +486,47 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   ipcMain.handle("logs:recent", () => deps.logStore.recent());
   ipcMain.handle("updates:version", () => getCurrentVersion());
   ipcMain.handle("updates:check", () => checkForUpdates("compet-server-manager"));
-  ipcMain.handle("updates:install", () => installUpdate("compet-server-manager", "Compet Server Manager.exe"));
+  ipcMain.handle("updates:install", async (): Promise<import("../shared/types.js").ManagerUpdateInstallResult> => {
+    if (updatePending || !deps.maintenance) return { status: "blocked", installing: false, error: "maintenance_unavailable" };
+    updatePending = true;
+    try {
+      return await offlineAccountsLifecycle.enqueue(async () => {
+        const initialStatus = deps.service.status();
+        if (initialStatus.state === "starting" || initialStatus.state === "stopping") throw new Error("maintenance_service_busy");
+        const config = await deps.configStore.load();
+        const release = await loadServerRelease();
+        if (compareSemver(release.latestVersion, release.currentVersion) <= 0) return {
+          currentVersion: release.currentVersion, latestVersion: release.latestVersion, manifestUrl: release.manifestUrl,
+          updateAvailable: false, changedFiles: 0, changedBytes: 0, installing: false, status: "no_changes" as const,
+        };
+        const appRoot = deps.maintenance!.appRoot;
+        const prepared = await prepareServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config, target: release.target });
+        if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
+        const state = deps.service.status();
+        if (state.state === "running") {
+          if (!state.pid || !deps.getApiClient().sessionToken()) throw new Error("maintenance_manager_login_required");
+          await withAuthBoundary(() => deps.getApiClient().prepareMaintenance());
+          maintenanceBlocked = true;
+          closeOfflineAccountsNow();
+          const stopped = await deps.service.stop();
+          if (stopped.state !== "stopped") throw new Error("maintenance_stop_failed");
+        } else if (state.state !== "stopped") throw new Error("maintenance_service_busy");
+        closeOfflineAccountsNow();
+        await assertServicePortClosed(config);
+        if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
+        await handoffServerMaintenance(prepared);
+        maintenanceBlocked = true;
+        deps.maintenance!.onHandoff();
+        return { currentVersion: release.currentVersion, latestVersion: release.latestVersion, manifestUrl: release.manifestUrl,
+          updateAvailable: true, changedFiles: prepared.plan.operations.length,
+          changedBytes: prepared.plan.operations.reduce((sum, op) => sum + (op.kind === "replace" ? op.size : 0), 0), installing: true, status: "installing" as const };
+      });
+    } catch (error) {
+      const code = (error as { code?: string }).code ?? (error instanceof Error ? error.message : "maintenance_failed");
+      return { status: /busy|conflict|modified|unknown|protected|changed|login_required|external_service|unavailable|inventory_missing/.test(code) ? "blocked" : "failed",
+        installing: false, error: /^[a-z0-9_]+$/.test(code) ? code : "maintenance_failed" };
+    } finally { updatePending = false; }
+  });
 
   return { closeOfflineAccounts, stopService };
 }
