@@ -117,29 +117,20 @@ input {
 }
 
 .player-window-drag-region {
-  position: absolute;
+  position: fixed;
   top: 0;
-  right: 340px;
+  right: 0;
   left: 0;
   z-index: 4;
   height: 44px;
   -webkit-app-region: drag;
-  transition: right 0.26s ease;
 }
 
-.player-app-frame--collapsed .player-window-drag-region {
-  right: 68px;
-}
-
-.player-window-drag-region--auth {
-  right: 0;
-}
-
-.player-auth-chrome {
-  position: absolute;
+.player-window-chrome {
+  position: fixed;
   top: 15px;
   right: 18px;
-  z-index: 6;
+  z-index: 3000;
   -webkit-app-region: no-drag;
 }
 
@@ -196,7 +187,7 @@ input {
 }
 
 .player-app-frame--collapsed .player-app-chrome {
-  right: calc(68px + 18px);
+  right: 98px;
 }
 
 .player-app-brand {
@@ -543,6 +534,7 @@ input {
   display: grid;
   align-content: start;
   gap: 1px;
+  padding-top: 52px;
   border-left: 1px solid #171717;
   border-radius: 16px 0 0 16px;
   background: #121212;
@@ -2322,12 +2314,7 @@ button.faceit-party-slot:not(:disabled):hover {
 
   .player-app-chrome,
   .player-app-frame--collapsed .player-app-chrome {
-    right: 18px;
-  }
-
-  .player-window-drag-region,
-  .player-app-frame--collapsed .player-window-drag-region {
-    right: 0;
+    right: 98px;
   }
 
   .player-social-panel {
@@ -2335,6 +2322,7 @@ button.faceit-party-slot:not(:disabled):hover {
   }
 
   .player-app-sidebar {
+    padding-top: 0;
     border-left: 0;
     border-top: 1px solid #171717;
     border-radius: 16px 16px 0 0;
@@ -2390,7 +2378,7 @@ button.faceit-party-slot:not(:disabled):hover {
   .player-app-profile {
     top: 12px;
     left: 12px;
-    max-width: calc(100% - 24px);
+    max-width: calc(100% - 112px);
   }
 
   .player-app-chrome,
@@ -2399,11 +2387,6 @@ button.faceit-party-slot:not(:disabled):hover {
     right: 12px;
     left: 12px;
     justify-content: flex-start;
-  }
-
-  .player-window-drag-region,
-  .player-app-frame--collapsed .player-window-drag-region {
-    right: 0;
   }
 
   .player-app-meta {

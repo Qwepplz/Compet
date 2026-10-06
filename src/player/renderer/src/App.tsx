@@ -2,7 +2,7 @@ import { compareSemver, isSemver } from "../../../shared/version.js";
 import { reduceStartupGate, type StartupGateContext } from "./startupGate.js";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
 import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message } from "antd";
-import { ArrowLeftOutlined, CloseOutlined, MinusOutlined } from "@ant-design/icons";
+import { ArrowLeftOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
 import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult, UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
 import type { RankmeDisplay } from "../../../rankme/rankmeStandings.js";
@@ -1806,28 +1806,9 @@ export function App() {
     );
   }
 
-  const windowControls = (
-    <div className="player-window-controls">
-      <Button
-        className="player-window-control"
-        icon={<MinusOutlined />}
-        type="text"
-        onClick={() => void api.minimizeWindow()}
-      />
-      <Button
-        className="player-window-control player-window-control--close"
-        icon={<CloseOutlined />}
-        type="text"
-        onClick={() => void api.closeWindow()}
-      />
-    </div>
-  );
-
   if (activeView === "login") {
     return (
       <div className="player-shell player-shell--auth">
-        <div className="player-window-drag-region player-window-drag-region--auth" />
-        <div className="player-auth-chrome">{windowControls}</div>
         <Form
           className="player-login-form"
           form={loginForm}
@@ -1859,8 +1840,6 @@ export function App() {
   if (activeView === "change-password") {
     return (
       <div className="player-shell player-shell--auth">
-        <div className="player-window-drag-region player-window-drag-region--auth" />
-        <div className="player-auth-chrome">{windowControls}</div>
         <Card className="player-card">
           <div className="player-header">
             <div className="player-kicker">{t("player.auth.security")}</div>
@@ -1912,7 +1891,6 @@ export function App() {
   return (
     <div className="player-shell player-shell--app">
       <div className={`player-app-frame${friendsExpanded ? "" : " player-app-frame--collapsed"}`}>
-        <div className="player-window-drag-region" />
         <div className="player-app-profile">
           <div className="player-app-brand">
             <SteamAvatar className="player-app-avatar" avatarUrl={headerAccount?.steamAvatarUrl} />
@@ -1947,7 +1925,6 @@ export function App() {
               type="text"
               onClick={() => setSettingsModalOpen(true)}
             />
-            {windowControls}
           </div>
         </div>
 
