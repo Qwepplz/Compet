@@ -24,6 +24,7 @@ import { ServerSteamPersonaDirectory } from "../profiles/serverSteamPersonaDirec
 import { RankmeScoreStore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import { RealtimeEventBus } from "../realtime/eventBus.js";
 import { MatchRecordStore } from "../records/matchRecordStore.js";
+import { PlayerMatchPolicyStore } from "../matchmaking/playerMatchPolicyStore.js";
 import { openCompetDatabase } from "../storage/competDatabase.js";
 import { ensureServerCertificate } from "../tls/certificateService.js";
 import { writeActivityLog } from "./activityLogger.js";
@@ -122,6 +123,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     });
     const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
     const matchmakingService = new MatchmakingService({
+      playerPolicies: new PlayerMatchPolicyStore(database),
       store: await MatchmakingStore.create(path.join(recordsDir, "matchmaking")),
       accounts,
       friends,

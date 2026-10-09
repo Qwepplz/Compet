@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { ManagerConfigSaveResult, ServerRootRecoveryResult, ServiceStatus } from "../shared/types.js";
+import type { ManagerConfigSaveResult, PlayerMarkView, ServerRootRecoveryResult, ServiceStatus } from "../shared/types.js";
 import type { SupportedLanguage } from "../../language/types.js";
 
 const invoke = <T>(channel: string, ...args: unknown[]): Promise<T> => ipcRenderer.invoke(channel, ...args);
@@ -30,6 +30,8 @@ export const managerApi = {
   },
   matchmakingOccupancy: () => invoke("matchmaking:occupancy"),
   listAccounts: () => invoke("accounts:list"),
+  listPlayerMarks: (): Promise<PlayerMarkView[]> => invoke("player-marks:list"),
+  setPlayerMarked: (id: string, marked: boolean): Promise<PlayerMarkView> => invoke("player-marks:update", id, marked),
   accountMatches: (id: string, page: number) => invoke("accounts:matches", id, page),
   accountMatchDetail: (id: string, matchId: string) => invoke("accounts:matchDetail", id, matchId),
   createAccount: (input: unknown) => invoke("accounts:create", input),

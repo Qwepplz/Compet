@@ -3,6 +3,7 @@ import type { ActivityLogInput } from "../../shared/activityLog.js";
 import type { MatchSeriesResult } from "../../matchmaking/types.js";
 import type { MatchHistoryEntry } from "../../records/matchHistory.js";
 
+export type { PlayerMarkView } from "../../shared/playerMarkTypes.js";
 export type { AccountRole } from "../../accounts/accountTypes.js";
 export type { LogLevel, LogSource } from "../../shared/activityLog.js";
 export type ServiceState = "stopped" | "starting" | "running" | "stopping" | "failed";

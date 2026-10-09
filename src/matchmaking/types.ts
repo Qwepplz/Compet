@@ -67,7 +67,13 @@ export interface MatchPlayerResult {
   rankmeScore?: number;
   rankmeScoreDelta?: number;
 }
+export interface MatchPlayerPolicyContext {
+  forcedBalance: boolean;
+  manualReadyAccountIds: string[];
+}
+
 export interface MatchPlan {
+  matchPolicy?: MatchPlayerPolicyContext;
   id: string;
   phase: MatchPhase;
   dev?: true;

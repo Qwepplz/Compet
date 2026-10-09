@@ -1,5 +1,6 @@
 import { dialog, ipcMain } from "electron";
 import path from "node:path";
+import { z } from "zod";
 import { prepareServerMaintenance, handoffServerMaintenance } from "../../desktop/main/serverMaintenance.js";
 import { getInstallRoot } from "../../desktop/main/installLayout.js";
 import { compareSemver } from "../../shared/version.js";
@@ -473,6 +474,14 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   }));
   ipcMain.handle("credentials:load", () => deps.loadSavedLogin());
   ipcMain.handle("matchmaking:occupancy", () => withAuthBoundary(() => deps.getApiClient().matchmakingOccupancy()));
+  ipcMain.handle("player-marks:list", () => withAuthBoundary(async () => {
+    assertNotMaintaining();
+    return deps.getApiClient().playerMarks();
+  }));
+  ipcMain.handle("player-marks:update", (_event, id, marked) => withAuthBoundary(async () => {
+    assertNotMaintaining();
+    return deps.getApiClient().setPlayerMarked(accountIdSchema.parse(id), z.boolean().parse(marked));
+  }));
   ipcMain.handle("accounts:list", () => withAuthBoundary(listAccounts));
   ipcMain.handle("accounts:matches", (_event, id, page) => withAuthBoundary(() => accountMatchHistory(accountIdSchema.parse(id), matchHistoryPageSchema.parse(page))));
   ipcMain.handle("accounts:matchDetail", (_event, id, matchId) => withAuthBoundary(() => accountMatchDetail(accountIdSchema.parse(id), matchHistoryMatchIdSchema.parse(matchId))));

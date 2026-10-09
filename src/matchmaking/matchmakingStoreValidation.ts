@@ -62,6 +62,7 @@ const partiesFileSchema = z.object({
       deadlineAt: z.string(),
     }).optional(),
     matchmakingDev: z.boolean().optional(),
+    matchmakingForcedBalance: z.boolean().optional(),
     draft: z.object({
       teamA: teamSchema,
       teamB: teamSchema,
@@ -89,6 +90,10 @@ const roomsFileSchema = z.object({
       "connect", "live", "completed", "failed"]),
     dev: z.literal(true).optional(),
     databaseWriteStarted: z.boolean().optional(),
+    matchPolicy: z.object({
+      forcedBalance: z.boolean(),
+      manualReadyAccountIds: z.array(z.string().min(1)),
+    }).optional(),
     teamA: teamSchema,
     teamB: teamSchema,
     humanAccountIds: z.array(z.string()).optional(),

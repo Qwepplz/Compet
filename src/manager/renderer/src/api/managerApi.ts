@@ -1,4 +1,4 @@
-import type { AccountMatchDetail, AccountMatchHistory, AccountView, BootstrapAdminInput, CreateAccountInput, LogEntry, LoginResult, ManagerConfig, ManagerConfigSaveResult, MatchmakingOccupancy, SavedLoginCredentials, ServerRootRecoveryResult, UpdateAccountInput } from "../../../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, BootstrapAdminInput, CreateAccountInput, LogEntry, LoginResult, ManagerConfig, ManagerConfigSaveResult, MatchmakingOccupancy, PlayerMarkView, SavedLoginCredentials, ServerRootRecoveryResult, UpdateAccountInput } from "../../../shared/types.js";
 import type { UpdateCheckResult } from "../../../../desktop/updateTypes.js";
 
 export type { UpdateCheckResult };
@@ -46,6 +46,11 @@ export const accountApi = {
   update: (id: string, input: UpdateAccountInput) => window.managerApi.updateAccount(id, input) as Promise<AccountView>,
   resetPassword: (id: string, password: string) => window.managerApi.resetPassword(id, password) as Promise<AccountView>,
   delete: (id: string) => window.managerApi.deleteAccount(id) as Promise<void>,
+};
+
+export const playerMarkApi = {
+  list: (): Promise<PlayerMarkView[]> => window.managerApi.listPlayerMarks(),
+  update: (id: string, marked: boolean): Promise<PlayerMarkView> => window.managerApi.setPlayerMarked(id, marked),
 };
 
 export const logApi = {

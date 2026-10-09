@@ -4,6 +4,7 @@ import type { BootstrapAdminInput, MatchmakingOccupancy, SavedLoginCredentials, 
 import { isManagerAuthRequired, managerApi } from "./api/managerApi.js";
 import { AppShell } from "./components/AppShell.js";
 import { AccountsPage } from "./pages/AccountsPage.js";
+import { PlayerMarksPage } from "./pages/PlayerMarksPage.js";
 import { BootstrapPage } from "./pages/BootstrapPage.js";
 import { ChangePasswordPage } from "./pages/ChangePasswordPage.js";
 import { LoginPage } from "./pages/LoginPage.js";
@@ -320,6 +321,7 @@ export function App() {
         <OverviewPage status={status} onStart={startService} onStop={stopService} onRestart={restartService} />
       )}
       {page === "accounts" && <AccountsPage />}
+      {page === "player-marks" && <PlayerMarksPage serviceRunning={status.state === "running" && !serviceActionPending} />}
       {page === "logs" && <LogsPage />}
       {page === "settings" && <SettingsPage />}
     </AppShell>

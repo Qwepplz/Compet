@@ -1,5 +1,5 @@
 import { requestJson } from "../../shared/httpJsonClient.js";
-import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, LoginResult, MatchmakingOccupancy, UpdateAccountInput } from "../shared/types.js";
+import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccountInput, LoginResult, MatchmakingOccupancy, PlayerMarkView, UpdateAccountInput } from "../shared/types.js";
 
 export class ServiceApiError extends Error {
   constructor(message: string, readonly statusCode: number, readonly code?: string) {
@@ -53,6 +53,16 @@ export class ServiceApiClient {
   async accounts(): Promise<AccountView[]> {
     const response = await this.request<{ accounts: AccountView[] }>("GET", "/admin/accounts");
     return response.accounts;
+  }
+
+  async playerMarks(): Promise<PlayerMarkView[]> {
+    const response = await this.request<{ players: PlayerMarkView[] }>("GET", "/admin/player-marks");
+    return response.players;
+  }
+
+  async setPlayerMarked(id: string, marked: boolean): Promise<PlayerMarkView> {
+    const response = await this.request<{ player: PlayerMarkView }>("PATCH", `/admin/player-marks/${encodeURIComponent(id)}`, { marked });
+    return response.player;
   }
 
   accountMatchHistory(id: string, page: number): Promise<AccountMatchHistory> {

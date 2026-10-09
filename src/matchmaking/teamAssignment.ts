@@ -11,6 +11,7 @@ export interface PartySnapshot {
 }
 
 export interface AssignTeamsInput {
+  forcedBalance?: boolean;
   humans: MatchParticipant[];
   parties: PartySnapshot[];
   botCandidates: BotCandidate[];
@@ -113,10 +114,13 @@ export function assignTeams(input: AssignTeamsInput): AssignTeamsResult {
 
   const proBotNames = buildProBotNames(input.botRosters);
   const selectedBots = selectBotCandidates(input.botCandidates, botCount, proBotNames, random);
+  if (input.forcedBalance) constrainForcedBotSelection(selectedBots, input.botCandidates, shuffledHumans.length, proBotNames, random);
   const humanIds = new Set(shuffledHumans.map((human) => human.id));
   const usedBotIds = new Set<string>();
   const botParticipants = selectedBots.map((candidate) => toBotParticipant(candidate, humanIds, usedBotIds, proBotNames));
-  const participants = distributeParticipants(shuffledHumans, botParticipants, random);
+  const participants = input.forcedBalance
+    ? distributeForcedParticipants(shuffledHumans, botParticipants, random)
+    : distributeParticipants(shuffledHumans, botParticipants, random);
   const [teamARoster, teamBRoster] = pickTeamRosters(input.botRosters, random);
 
   return {
@@ -208,6 +212,58 @@ function ensureMinimumRegularBotCandidates(
     if (!replacement) return;
     selected[proIndex] = replacement;
   }
+}
+
+function constrainForcedBotSelection(
+  selected: BotCandidate[],
+  candidates: readonly BotCandidate[],
+  humanCount: number,
+  proBotNames: ReadonlySet<string>,
+  random: () => number,
+): void {
+  const botCount = selected.length;
+  const availablePro = candidates.filter((candidate) => isProBotCandidate(candidate, proBotNames)).length;
+  const availableRegular = candidates.length - availablePro;
+  const initialPro = selected.filter((candidate) => isProBotCandidate(candidate, proBotNames)).length;
+  const legal: number[] = [];
+  for (let proCount = 0; proCount <= botCount; proCount += 1) {
+    const regularCount = botCount - proCount;
+    if (proCount <= availablePro && regularCount <= availableRegular
+      && regularCount >= 2 && (humanCount + proCount) % 2 === 0) legal.push(proCount);
+  }
+  if (legal.length === 0) throw new Error("Cannot assign balanced fixed 5v5 teams");
+  const distance = Math.min(...legal.map((count) => Math.abs(count - initialPro)));
+  const target = shuffle(legal.filter((count) => Math.abs(count - initialPro) === distance), random)[0]!;
+  let remaining = Math.abs(target - initialPro);
+  if (remaining === 0) return;
+  const removePro = target < initialPro;
+  const replacements = shuffle(candidates.filter((candidate) =>
+    !selected.includes(candidate) && isProBotCandidate(candidate, proBotNames) !== removePro), random);
+  for (let index = 0; index < selected.length && remaining > 0; index += 1) {
+    if (isProBotCandidate(selected[index]!, proBotNames) !== removePro) continue;
+    const replacement = replacements.shift();
+    if (!replacement) throw new Error("Cannot fill balanced bot selection");
+    selected[index] = replacement;
+    remaining -= 1;
+  }
+}
+
+function distributeForcedParticipants(
+  humans: readonly MatchParticipant[],
+  bots: readonly MatchParticipant[],
+  random: () => number,
+): MatchParticipant[] {
+  const checked = shuffle([...humans, ...bots.filter((bot) => !isRegularBot(bot))], random);
+  const regular = shuffle(bots.filter(isRegularBot), random);
+  if (checked.length % 2 !== 0 || regular.length < 2 || checked.length + regular.length !== 10) {
+    throw new Error("Invalid balanced match participants");
+  }
+  const halfChecks = checked.length / 2;
+  const halfRegular = regular.length / 2;
+  const teamA = shuffle([...checked.slice(0, halfChecks), ...regular.slice(0, halfRegular)], random);
+  const teamB = shuffle([...checked.slice(halfChecks), ...regular.slice(halfRegular)], random);
+  if (teamA.length !== 5 || teamB.length !== 5) throw new Error("Invalid balanced team size");
+  return [...teamA, ...teamB];
 }
 
 function distributeParticipants(

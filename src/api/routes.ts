@@ -45,6 +45,7 @@ function readStringField(payload: unknown, field: string): string {
   return value;
 }
 
+const playerMarkSchema = z.object({ marked: z.boolean() }).strict();
 const matchmakingStartSchema = z.object({ dev: z.boolean().optional() });
 const accountIdParamsSchema = z.object({ id: accountIdSchema });
 const partyJoinSchema = z.object({ partyId: z.string().min(1) });
@@ -245,6 +246,24 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     const auth = await authenticateRequest(request, deps);
     await deps.sessions.revokeSession(auth.sessionId);
     return reply.status(204).send();
+  });
+
+  app.get("/admin/player-marks", async (request) => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    return { players: await requireMatchmaking(deps).listPlayerMarks() };
+  });
+
+  app.patch("/admin/player-marks/:id", async (request) => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    const { id } = accountIdParamsSchema.parse(request.params);
+    const { marked } = playerMarkSchema.parse(request.body);
+    try {
+      return { player: await requireMatchmaking(deps).setPlayerMarked(id, marked) };
+    } catch (error) {
+      mapMatchmakingServiceError(error);
+    }
   });
 
   app.get("/admin/accounts", async (request) => {

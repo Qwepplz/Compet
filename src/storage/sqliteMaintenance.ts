@@ -51,6 +51,8 @@ const REQUIRED_TABLES = [
   "matches",
   "match_participants",
   "schema_migrations",
+  "player_match_policies",
+  "player_match_policy_receipts",
 ] as const;
 const RESOLVED_REQUEST_STATUSES = new Set(["accepted", "declined", "expired"]);
 const MILLISECONDS_PER_DAY = 24 * 60 * 60 * 1000;

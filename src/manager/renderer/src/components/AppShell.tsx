@@ -17,6 +17,7 @@ export function AppShell({ page, status, matchmakingOccupancy, children, onPageC
   const menuItems = [
     { key: "overview", icon: <DashboardOutlined />, label: t("manager.navigation.overview") },
     { key: "accounts", icon: <TeamOutlined />, label: t("manager.navigation.accounts") },
+    { key: "player-marks", icon: <SafetyCertificateOutlined />, label: t("manager.navigation.playerMarks") },
     { key: "logs", icon: <FileTextOutlined />, label: t("manager.navigation.logs") },
     { key: "settings", icon: <SettingOutlined />, label: t("manager.navigation.settings") },
   ];

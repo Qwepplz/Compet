@@ -102,6 +102,28 @@ export const SQLITE_MIGRATIONS: readonly SqliteMigration[] = [
       database.exec("DROP INDEX IF EXISTS sessions_token_hash_idx");
     },
   },
+  {
+    version: 3,
+    name: "create player match policy state",
+    up(database) {
+      database.exec(`
+        CREATE TABLE player_match_policies (
+          account_id TEXT PRIMARY KEY REFERENCES accounts(id) ON DELETE CASCADE,
+          abnormal_streak INTEGER NOT NULL CHECK (typeof(abnormal_streak) = 'integer' AND abnormal_streak BETWEEN 0 AND 2),
+          marked INTEGER NOT NULL CHECK (marked IN (0, 1)),
+          marked_at TEXT,
+          updated_at TEXT NOT NULL,
+          CHECK ((marked = 0 AND marked_at IS NULL) OR (marked = 1 AND marked_at IS NOT NULL))
+        );
+        CREATE TABLE player_match_policy_receipts (
+          match_id TEXT PRIMARY KEY,
+          outcome TEXT NOT NULL CHECK (outcome IN ('completed', 'failed')),
+          payload_json TEXT NOT NULL,
+          applied_at TEXT NOT NULL
+        );
+      `);
+    },
+  },
 ];
 
 export const LATEST_SCHEMA_VERSION = SQLITE_MIGRATIONS.at(-1)?.version ?? 0;
