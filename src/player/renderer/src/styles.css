@@ -132,6 +132,15 @@ input {
   right: 18px;
   z-index: 3000;
   -webkit-app-region: no-drag;
+  transition: right 0.26s ease;
+}
+
+.player-window-chrome--app {
+  right: calc(340px + 18px);
+}
+
+.player-window-chrome--app.player-window-chrome--collapsed {
+  right: calc(68px + 18px);
 }
 
 .player-header {
@@ -176,7 +185,7 @@ input {
 .player-app-chrome {
   position: absolute;
   top: 15px;
-  right: calc(340px + 18px);
+  right: calc(340px + 18px + 80px);
   left: 260px;
   z-index: 6;
   display: flex;
@@ -187,7 +196,7 @@ input {
 }
 
 .player-app-frame--collapsed .player-app-chrome {
-  right: 98px;
+  right: calc(68px + 18px + 80px);
 }
 
 .player-app-brand {
@@ -534,7 +543,6 @@ input {
   display: grid;
   align-content: start;
   gap: 1px;
-  padding-top: 52px;
   border-left: 1px solid #171717;
   border-radius: 16px 0 0 16px;
   background: #121212;
@@ -2312,6 +2320,11 @@ button.faceit-party-slot:not(:disabled):hover {
     grid-template-columns: 1fr;
   }
 
+  .player-window-chrome--app,
+  .player-window-chrome--app.player-window-chrome--collapsed {
+    right: 18px;
+  }
+
   .player-app-chrome,
   .player-app-frame--collapsed .player-app-chrome {
     right: 98px;
@@ -2322,7 +2335,6 @@ button.faceit-party-slot:not(:disabled):hover {
   }
 
   .player-app-sidebar {
-    padding-top: 0;
     border-left: 0;
     border-top: 1px solid #171717;
     border-radius: 16px 16px 0 0;

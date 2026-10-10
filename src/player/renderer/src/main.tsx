@@ -4,7 +4,6 @@ import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../../language/transla
 import { LanguageProvider } from "../../../language/react.js";
 import type { SupportedLanguage } from "../../../language/types.js";
 import { App } from "./App.js";
-import { WindowChrome } from "./components/WindowChrome.js";
 import { theme } from "./theme.js";
 import "./styles.css";
 
@@ -26,7 +25,6 @@ void loadInitialLanguage().then((initialLanguage) => {
         theme={theme}
         documentTitleKey="player.window.title"
       >
-        <WindowChrome />
         <App />
       </LanguageProvider>
     </React.StrictMode>,

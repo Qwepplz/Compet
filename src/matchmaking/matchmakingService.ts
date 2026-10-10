@@ -1407,6 +1407,7 @@ export class MatchmakingService {
         id: party.lockedMatchId,
         mapSelection,
         phase: "ready",
+        databaseWriteStarted: false,
         ...(useDev ? { dev: true as const } : {}),
         teamA,
         teamB,
@@ -1599,34 +1600,42 @@ export class MatchmakingService {
         }
         return undefined;
       }
-      await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
-
       if (ready.some((entry) => !entry.ready)) {
+        await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
         return this.toPlayerPublicRoom(updatedReadyRoom, accountId);
       }
 
-      if (!room.mapSelection) return this.toPublicRoom(await this.failMatchRoom(updatedRooms, updatedReadyRoom, "match_failed"));
-      const mapSelection: MatchMapSelectionState = { ...room.mapSelection, startedAt: new Date(Date.parse(acceptedAt) + FLOW_START_LEAD_MS).toISOString(), revealAt: new Date(Date.parse(acceptedAt) + FLOW_START_LEAD_MS + MAP_RANDOMIZATION_MS).toISOString() };
-      const randomizingRoom: MatchRoomRecord = {
-        ...updatedReadyRoom,
-        phase: "map_randomizing",
-        readyDeadlineAt: undefined,
-        mapSelection,
-      };
-      const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
+      try {
+        await this.emit(this.toReadyEvent("ready_check_updated", updatedReadyRoom));
+        if (!room.mapSelection) return this.toPublicRoom(await this.failMatchRoom(updatedRooms, updatedReadyRoom, "match_failed"));
+        const mapSelection: MatchMapSelectionState = { ...room.mapSelection, startedAt: new Date(Date.parse(acceptedAt) + FLOW_START_LEAD_MS).toISOString(), revealAt: new Date(Date.parse(acceptedAt) + FLOW_START_LEAD_MS + MAP_RANDOMIZATION_MS).toISOString() };
+        const randomizingRoom: MatchRoomRecord = {
+          ...updatedReadyRoom,
+          phase: "map_randomizing",
+          readyDeadlineAt: undefined,
+          mapSelection,
+        };
+        const finalizedRooms = updatedRooms.map((candidate) => (candidate.id === room.id ? randomizingRoom : candidate));
 
-      try { await this.deps.records?.saveMatchPlan(await this.buildMatchPlan(randomizingRoom, mapSelection.finalMap)); }
-      catch { return this.toPublicRoom(await this.failMatchRoom(updatedRooms, updatedReadyRoom, "match_failed")); }
-      await this.deps.store.saveRooms(finalizedRooms);
-      this.clearReadyTimeout(room.id);
-      await this.emitRoomUpdated(randomizingRoom);
-      if (this.deps.executor) {
-        const preparing = await this.saveRoomAfterMapSelected(finalizedRooms, randomizingRoom, mapSelection.finalMap);
-        this.scheduleMapReveal(preparing);
-        return this.toPublicRoom(preparing);
+        try { await this.deps.records?.saveMatchPlan(await this.buildMatchPlan(randomizingRoom, mapSelection.finalMap)); }
+        catch (error) {
+          this.schedulePreparationFailureRecovery(room.id, "room_transition", error);
+          return this.toPublicRoom(await this.failMatchRoom(updatedRooms, updatedReadyRoom, "match_failed"));
+        }
+        await this.deps.store.saveRooms(finalizedRooms);
+        this.clearReadyTimeout(room.id);
+        await this.emitRoomUpdated(randomizingRoom);
+        if (this.deps.executor) {
+          const preparing = await this.saveRoomAfterMapSelected(finalizedRooms, randomizingRoom, mapSelection.finalMap);
+          this.scheduleMapReveal(preparing);
+          return this.toPublicRoom(preparing);
+        }
+        this.scheduleMapReveal(randomizingRoom);
+        return this.toPublicRoom(randomizingRoom);
+      } catch (error) {
+        this.schedulePreparationFailureRecovery(room.id, "room_transition", error);
+        throw error;
       }
-      this.scheduleMapReveal(randomizingRoom);
-      return this.toPublicRoom(randomizingRoom);
     });
   }
 
@@ -2516,6 +2525,33 @@ export class MatchmakingService {
 
 
 
+  private schedulePreparationFailureRecovery(
+    matchId: string,
+    stage: "room_transition" | "server_preparation",
+    error: unknown,
+  ): void {
+    const details: Record<string, string> = { matchId, stage };
+    if (typeof error === "string") details.message = error;
+    if (error && typeof error === "object") {
+      const fields = error as Record<string, unknown>;
+      for (const field of ["message", "code", "syscall", "path", "dest"]) {
+        if (typeof fields[field] === "string") details[field] = fields[field];
+      }
+    }
+    process.stderr.write("Match preparation failed: " + JSON.stringify(details) + "\n");
+    this.clearReadyTimeout(matchId);
+    this.clearMapReveal(matchId);
+    const key = "interrupted-recovery:" + matchId;
+    if (this.staleCompensationAttempts.has(key)) return;
+    this.scheduleStaleCompensationRetry(key, "Match preparation recovery", async () => {
+      const pending = this.recoverInterruptedMatches(new Set([matchId])).then((result) => {
+        if (result.pendingCleanupMatchIds.includes(matchId)) throw new Error("interrupted recovery remains pending");
+      });
+      this.cleanupTasks.add(pending);
+      try { await pending; } finally { this.cleanupTasks.delete(pending); }
+    });
+  }
+
   private async saveRoomAfterMapSelected(rooms: MatchRoomRecord[], room: MatchRoomRecord, finalMap: string): Promise<MatchRoomRecord> {
     if (rooms.some((candidate) => candidate.id !== room.id && isServerManagedPhase(candidate.phase))) {
       return this.failMatchRoom(rooms, room, "match_failed");
@@ -2553,14 +2589,7 @@ export class MatchmakingService {
             await this.emit({ type: "connect_ready", matchId: room.id, accountIds: this.roomAudience(connected), connect }, room.id);
           });
         } catch (error) {
-          process.stderr.write(`Game server preparation failed for ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
-          const current = (await this.deps.store.listRooms()).find((entry) => entry.id === room.id);
-          if (current?.databaseWriteStarted && await this.restoreMatchDatabase(room.id, { preserveBackup: true })) return;
-          await this.enqueueMutation(async () => {
-            const latest = await this.deps.store.listRooms();
-            const target = latest.find((entry) => entry.id === room.id);
-            if (target?.phase === "server_prepare") await this.failMatchRoom(latest, target, "match_failed");
-          });
+          this.schedulePreparationFailureRecovery(room.id, "server_preparation", error);
         }
       });
       void task.prepare.catch((error: unknown) => process.stderr.write(`Match task failed: ${String(error)}\n`));
@@ -2594,7 +2623,7 @@ export class MatchmakingService {
           const steam64 = participant.steam64!;
           const lookup = await lookupRankmeScore(rankme, steam64);
           if (lookup.status === "found") return [steam64, lookup.score] as const;
-          if (lookup.status === "missing" && await this.isFirstCompletedMatch(participant)) {
+          if (lookup.status === "missing") {
             return [steam64, DEFAULT_RANKME_SCORE] as const;
           }
           throw new Error("rankme starting score unavailable");
@@ -2602,13 +2631,6 @@ export class MatchmakingService {
     );
     const rankmeScoresBefore = Object.fromEntries(entries);
     return Object.keys(rankmeScoresBefore).length > 0 ? rankmeScoresBefore : undefined;
-  }
-
-  private async isFirstCompletedMatch(participant: MatchParticipant): Promise<boolean> {
-    const steam64 = participant.steam64?.trim();
-    if (!steam64 || !this.deps.records?.listPlayerCompletedMatches) return false;
-    const matches = await this.deps.records.listPlayerCompletedMatches(steam64, { page: 1, pageSize: 1 });
-    return matches.total === 0;
   }
 
   private async applyRankmeScores(
@@ -2933,6 +2955,7 @@ export class MatchmakingService {
   }
 
   private scheduleMapReveal(room: MatchRoomRecord): void {
+    if (this.staleCompensationAttempts.has("interrupted-recovery:" + room.id)) return;
     if (room.phase !== "map_randomizing" && room.phase !== "server_prepare" && room.phase !== "connect") return;
     if (!room.mapSelection?.startedAt || !room.mapSelection.revealAt || !Number.isFinite(Date.parse(room.mapSelection.startedAt)) || !Number.isFinite(Date.parse(room.mapSelection.revealAt))) return;
     this.clearMapReveal(room.id);
@@ -2945,6 +2968,7 @@ export class MatchmakingService {
   }
 
   private scheduleMapRevealRetry(roomId: string, revealAt: string): void {
+    if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return;
     if (this.shutdownRequested) return;
     this.clearMapReveal(roomId);
     const timeout = this.setTimeoutFn(() => {
@@ -3023,6 +3047,7 @@ export class MatchmakingService {
   private revealMap(roomId: string, revealAt: string): Promise<void> {
     let waitForServerPreparation = false;
     return this.enqueueMutation(async () => {
+      if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return;
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId);
       if (!room
@@ -3054,6 +3079,7 @@ export class MatchmakingService {
       await this.waitForServerPreparation(roomId);
 
       const eligibleRoom = await this.enqueueMutation(async () => {
+        if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return undefined;
         const rooms = await this.deps.store.listRooms();
         const room = rooms.find((candidate) => candidate.id === roomId);
         if (!room
@@ -3086,6 +3112,7 @@ export class MatchmakingService {
       }
 
       await this.enqueueMutation(async () => {
+        if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return;
         const rooms = await this.deps.store.listRooms();
         const room = rooms.find((candidate) => candidate.id === roomId);
         if (!room

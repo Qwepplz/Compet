@@ -40,7 +40,18 @@ export async function writeJsonFileAtomic(
     await writeFile(tempPath, `${json}\n`, "utf8");
     await rename(tempPath, filePath);
   } catch (error) {
-    await rm(tempPath, { force: true });
+    try {
+      await rm(tempPath, { force: true });
+    } catch (cleanupError) {
+      const details: Record<string, string> = { file: tempPath };
+      if (cleanupError && typeof cleanupError === "object") {
+        const fields = cleanupError as Record<string, unknown>;
+        for (const field of ["code", "syscall"]) {
+          if (typeof fields[field] === "string") details[field] = fields[field];
+        }
+      }
+      process.stderr.write("Failed to clean JSON temporary file: " + JSON.stringify(details) + "\n");
+    }
     throw error;
   }
 }

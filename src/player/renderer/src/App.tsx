@@ -1,6 +1,6 @@
 import { compareSemver, isSemver } from "../../../shared/version.js";
 import { reduceStartupGate, type StartupGateContext } from "./startupGate.js";
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
 import type { AccountView } from "../../../manager/shared/types.js";
@@ -22,6 +22,7 @@ import type {
   PlayerRealtimeStatusDto,
 } from "../../shared/types.js";
 import { FriendsPanel } from "./components/FriendsPanel.js";
+import { WindowChrome } from "./components/WindowChrome.js";
 import { SteamAvatar } from "./components/SteamAvatar.js";
 import { LanguageSelector } from "../../../language/LanguageSelector.js";
 import {
@@ -400,6 +401,7 @@ export function App() {
   const [serverClockOffsetMs, setServerClockOffsetMs] = useState<number | null>(null);
   const [currentVersion, setCurrentVersion] = useState("");
   const [loginForm] = Form.useForm<LoginValues>();
+  const loginFormInitialized = useRef(false);
   const resolvedFriendRequestIds = useRef(new Set<string>());
   const resolvedPartyInvitationIds = useRef(new Set<string>());
   const partyInviteAutoIgnoreTimeouts = useRef(new Map<string, number>());
@@ -1181,11 +1183,16 @@ export function App() {
     }
   }
 
-  async function restoreSession(startupDeadline?: number, preserveOnFailure = false): Promise<"restored" | "anonymous" | "retry"> {
+  async function restoreSession(startupDeadline?: number, preserveOnFailure = false, expectedAddress = baseUrl): Promise<"restored" | "anonymous" | "retry"> {
     invalidateMatchHistoryResultRequest();
     const generation = startupGateRef.current.generation;
     try {
-      await loadSavedLogin();
+      const saved = await loadSavedLogin();
+      if (generation !== startupGateRef.current.generation) return "retry";
+      if (saved?.baseUrl && saved.baseUrl !== expectedAddress) {
+        setActiveView("login");
+        return "anonymous";
+      }
       const startupTimeoutMs = startupDeadline === undefined ? undefined : remainingStartupMs(startupDeadline);
       if (startupTimeoutMs !== undefined && startupTimeoutMs <= 0) {
         setActiveView("login");
@@ -1198,7 +1205,7 @@ export function App() {
         ? await window.playerApi.restoreSession()
         : await window.playerApi.restoreSession(startupTimeoutMs);
       if (generation !== startupGateRef.current.generation) return "retry";
-      if (!restored) {
+      if (!restored || restored.baseUrl !== expectedAddress) {
         setMatchResult(null);
         setMatchResultMatchId(null);
         setMatchResultPlayerSteam64(undefined);
@@ -1208,7 +1215,7 @@ export function App() {
         setActiveView("login");
         return "anonymous";
       }
-      setBaseUrl(restored.baseUrl);
+      setServerAddress(restored.baseUrl);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
       acceptedInviteJoinMessageAccountIds.current.clear();
@@ -1246,18 +1253,17 @@ export function App() {
     }
   }
 
+  function setServerAddress(address: string): void {
+    setBaseUrl(address);
+    loginForm.setFieldsValue({ baseUrl: address });
+  }
+
   async function loadSavedLogin() {
+    const generation = startupGateRef.current.generation;
     const saved = await api.loadSavedLogin();
+    if (generation !== startupGateRef.current.generation) return saved;
     setSavedLogin(saved);
-    if (saved?.baseUrl) {
-      setBaseUrl(saved.baseUrl);
-    }
-    if (saved?.password) {
-      setCurrentPassword(saved.password);
-    }
-    if (saved) {
-      loginForm.setFieldsValue(saved);
-    }
+    if (saved?.password) setCurrentPassword(saved.password);
     return saved;
   }
 
@@ -1265,11 +1271,11 @@ export function App() {
     if (loginPending) return;
     invalidateMatchHistoryResultRequest();
     setLoginPending(true);
+    setServerAddress(values.baseUrl);
     const generation = startupGateRef.current.generation + 1;
     setGate({ state: "checking_admission", generation });
     try {
-      if (!await checkStartupAdmission(values.baseUrl, generation)) return;
-      setBaseUrl(values.baseUrl);
+      if (!await checkStartupAdmission(values.baseUrl, generation) || generation !== startupGateRef.current.generation) return;
       setCurrentPassword(values.password);
       setSavedLogin({ baseUrl: values.baseUrl, username: values.username, password: values.password });
       const authenticated = await window.playerApi.login(values.baseUrl, values.username, values.password);
@@ -1298,6 +1304,7 @@ export function App() {
       void hydrateRealtimeState();
       void refreshRankmeStanding();
     } catch (error) {
+      if (generation !== startupGateRef.current.generation) return;
       if (!blockStartup(error)) message.error(displayError(error, t, "errors.loginFailed"));
     } finally {
       setLoginPending(false);
@@ -1414,7 +1421,8 @@ export function App() {
       if (generation !== startupGateRef.current.generation) return false;
       if (!blockStartup(error)) {
         setGate({ state: "connection_failed", generation, code: "service_unavailable" });
-        setLoading(true);
+        setActiveView("login");
+        setLoading(false);
       }
       return false;
     }
@@ -1437,20 +1445,27 @@ export function App() {
       }
       if (previousMaintenance?.status === "passed") void message.success(t("player.integrity.restartPassed"));
       const saved = await loadSavedLogin();
-      const selectedAddress = address ?? saved?.baseUrl ?? baseUrl;
-      setBaseUrl(selectedAddress);
+      if (generation !== startupGateRef.current.generation) return;
+      const firstStartup = !loginFormInitialized.current;
+      const selectedAddress = address ?? (firstStartup ? saved?.baseUrl : undefined) ?? baseUrl;
+      if (firstStartup) {
+        loginForm.setFieldsValue({ username: saved?.username, password: saved?.password });
+        loginFormInitialized.current = true;
+      }
+      setServerAddress(selectedAddress);
       const actualVersion = await api.getVersion();
+      if (generation !== startupGateRef.current.generation) return;
       setCurrentVersion(actualVersion);
       const installing = await checkStartupUpdate(performance.now() + STARTUP_CONNECTION_BUDGET_MS);
       if (generation !== startupGateRef.current.generation) return;
       if (installing) { setGate({ state: "installing", generation }); return; }
-      if (!await checkStartupAdmission(selectedAddress, generation)) return;
+      if (!await checkStartupAdmission(selectedAddress, generation) || generation !== startupGateRef.current.generation) return;
       const startupDeadline = performance.now() + STARTUP_CONNECTION_BUDGET_MS;
-      let restoreOutcome = saved?.baseUrl && saved.baseUrl !== selectedAddress ? "anonymous" : await restoreSession(startupDeadline, true);
+      let restoreOutcome = saved?.baseUrl && saved.baseUrl !== selectedAddress ? "anonymous" : await restoreSession(startupDeadline, true, selectedAddress);
       while (restoreOutcome === "retry" && generation === startupGateRef.current.generation && remainingStartupMs(startupDeadline) > 0) {
         await new Promise<void>((resolve) => window.setTimeout(resolve, Math.min(SESSION_RESTORE_RETRY_DELAY_MS, remainingStartupMs(startupDeadline))));
         if (generation !== startupGateRef.current.generation) return;
-        restoreOutcome = await restoreSession(startupDeadline, true);
+        restoreOutcome = await restoreSession(startupDeadline, true, selectedAddress);
       }
       if (generation !== startupGateRef.current.generation) return;
       if (restoreOutcome !== "restored") setActiveView("login");
@@ -1790,365 +1805,377 @@ export function App() {
     );
   }
 
-  if (loading) {
-    return (
-      <div className="player-loading-screen">
-        <div className="player-loading-content">
-          {startupGate.state === "update_required" || startupGate.state === "connection_failed" ? <>
-            <span>{t(startupGate.code === "maintenance_blocked" ? "player.integrity.restartFailed" : startupGate.state === "connection_failed" ? "player.startup.connectionFailed" : startupGate.code === "update_unavailable" ? "player.startup.updateUnavailable" : "player.startup.updateRequired")}</span>
-            <span>{t("player.startup.versions", { current: currentVersion, required: startupGate.requiredClientVersion || "—" })}</span>
-            <Input value={baseUrl} placeholder={t("common.labels.serverAddress")} onChange={(event) => setBaseUrl(event.target.value)} />
-            <Button onClick={() => void initializeStartup(true, baseUrl)}>{t(startupGate.state === "update_required" ? "player.startup.retryUpdate" : "player.startup.retryConnection")}</Button>
-          </> : <><Spin size="large" /><span>{t(loadingMessageKey)}</span></>}
-          <Button onClick={() => void api.closeWindow()}>{t("player.startup.exit")}</Button>
-        </div>
-      </div>
-    );
-  }
-
-  if (activeView === "login") {
-    return (
-      <div className="player-shell player-shell--auth">
-        <Form
-          className="player-login-form"
-          form={loginForm}
-          layout="vertical"
-          initialValues={{
-            baseUrl: savedLogin?.baseUrl ?? baseUrl,
-            username: savedLogin?.username,
-            password: savedLogin?.password,
-          }}
-          onFinish={(values) => void login(values)}
-        >
-          <Form.Item label={t("common.labels.serverAddress")} name="baseUrl" rules={[{ required: true, message: t("common.labels.serverAddress") }]}>
-            <Input onChange={(event) => setBaseUrl(event.target.value)} />
-          </Form.Item>
-          <Form.Item label={t("common.labels.username")} name="username" rules={[{ required: true, message: t("common.labels.username") }]}>
-            <Input />
-          </Form.Item>
-          <Form.Item label={t("common.labels.password")} name="password" rules={[{ required: true, message: t("common.labels.password") }]}>
-            <Input.Password />
-          </Form.Item>
-          <Button type="primary" htmlType="submit" block loading={loginPending} disabled={loginPending}>
-            {t("common.actions.login")}
-          </Button>
-        </Form>
-      </div>
-    );
-  }
-
-  if (activeView === "change-password") {
-    return (
-      <div className="player-shell player-shell--auth">
-        <Card className="player-card">
-          <div className="player-header">
-            <div className="player-kicker">{t("player.auth.security")}</div>
-            <h2 className="player-title">{t("player.auth.changeInitialPassword")}</h2>
-            <p className="player-copy">{t("player.auth.mustChangePassword")}</p>
+  function renderAppContent(): ReactElement {
+    if (loading) {
+      return (
+        <div className="player-loading-screen">
+          <div className="player-loading-content">
+            {startupGate.state === "update_required" || startupGate.state === "connection_failed" ? <>
+              <span>{t(startupGate.code === "maintenance_blocked" ? "player.integrity.restartFailed" : startupGate.state === "connection_failed" ? "player.startup.connectionFailed" : startupGate.code === "update_unavailable" ? "player.startup.updateUnavailable" : "player.startup.updateRequired")}</span>
+              <span>{t("player.startup.versions", { current: currentVersion, required: startupGate.requiredClientVersion || "—" })}</span>
+              <Input value={baseUrl} placeholder={t("common.labels.serverAddress")} disabled={loginPending} onChange={(event) => setServerAddress(event.target.value)} />
+              <Button onClick={() => void initializeStartup(true, baseUrl)}>{t(startupGate.state === "update_required" ? "player.startup.retryUpdate" : "player.startup.retryConnection")}</Button>
+            </> : <><Spin size="large" /><span>{t(loadingMessageKey)}</span></>}
+            <Button onClick={() => void api.closeWindow()}>{t("player.startup.exit")}</Button>
           </div>
+        </div>
+      );
+    }
+
+    if (activeView === "login") {
+      return (
+        <div className="player-shell player-shell--auth">
           <Form
+            className="player-login-form"
+            form={loginForm}
             layout="vertical"
-            initialValues={{ currentPassword }}
-            onFinish={(values) => void changePassword(values)}
+            initialValues={{
+              baseUrl,
+              username: savedLogin?.username,
+              password: savedLogin?.password,
+            }}
+            onFinish={(values) => void login(values)}
           >
-            <Form.Item label={t("common.labels.currentPassword")} name="currentPassword" rules={[{ required: true, message: t("common.labels.currentPassword") }]}>
+            {startupGate.state === "connection_failed" && startupGate.code === "service_unavailable" ? (
+              <p className="player-copy">{t("errors.serviceUnavailable")}</p>
+            ) : null}
+            <Form.Item label={t("common.labels.serverAddress")} name="baseUrl" rules={[{ required: true, message: t("common.labels.serverAddress") }]}>
+              <Input disabled={loginPending} onChange={(event) => setServerAddress(event.target.value)} />
+            </Form.Item>
+            <Form.Item label={t("common.labels.username")} name="username" rules={[{ required: true, message: t("common.labels.username") }]}>
+              <Input />
+            </Form.Item>
+            <Form.Item label={t("common.labels.password")} name="password" rules={[{ required: true, message: t("common.labels.password") }]}>
               <Input.Password />
             </Form.Item>
-            <Form.Item label={t("common.labels.newPassword")} name="newPassword" rules={[{ required: true, message: t("common.labels.newPassword") }]}>
-              <Input.Password />
-            </Form.Item>
-            <Form.Item
-              dependencies={["newPassword"]}
-              label={t("common.labels.confirmPassword")}
-              name="confirmPassword"
-              rules={[
-                { required: true, message: t("common.labels.confirmPassword") },
-                ({ getFieldValue }) => ({
-                  validator(_, value) {
-                    if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
-                    return Promise.reject(new Error(t("player.auth.confirmPasswordMismatch")));
-                  },
-                }),
-              ]}
-            >
-              <Input.Password />
-            </Form.Item>
-            <Button
-              type="primary"
-              htmlType="submit"
-              block
-              loading={changePasswordPending}
-              disabled={changePasswordPending}
-            >
-              {t("common.actions.saveAndEnter")}
+            <Button type="primary" htmlType="submit" block loading={loginPending} disabled={loginPending}>
+              {t("common.actions.login")}
             </Button>
           </Form>
-        </Card>
+        </div>
+      );
+    }
+
+    if (activeView === "change-password") {
+      return (
+        <div className="player-shell player-shell--auth">
+          <Card className="player-card">
+            <div className="player-header">
+              <div className="player-kicker">{t("player.auth.security")}</div>
+              <h2 className="player-title">{t("player.auth.changeInitialPassword")}</h2>
+              <p className="player-copy">{t("player.auth.mustChangePassword")}</p>
+            </div>
+            <Form
+              layout="vertical"
+              initialValues={{ currentPassword }}
+              onFinish={(values) => void changePassword(values)}
+            >
+              <Form.Item label={t("common.labels.currentPassword")} name="currentPassword" rules={[{ required: true, message: t("common.labels.currentPassword") }]}>
+                <Input.Password />
+              </Form.Item>
+              <Form.Item label={t("common.labels.newPassword")} name="newPassword" rules={[{ required: true, message: t("common.labels.newPassword") }]}>
+                <Input.Password />
+              </Form.Item>
+              <Form.Item
+                dependencies={["newPassword"]}
+                label={t("common.labels.confirmPassword")}
+                name="confirmPassword"
+                rules={[
+                  { required: true, message: t("common.labels.confirmPassword") },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
+                      return Promise.reject(new Error(t("player.auth.confirmPasswordMismatch")));
+                    },
+                  }),
+                ]}
+              >
+                <Input.Password />
+              </Form.Item>
+              <Button
+                type="primary"
+                htmlType="submit"
+                block
+                loading={changePasswordPending}
+                disabled={changePasswordPending}
+              >
+                {t("common.actions.saveAndEnter")}
+              </Button>
+            </Form>
+          </Card>
+        </div>
+      );
+    }
+
+    return (
+      <div className="player-shell player-shell--app">
+        <div className={`player-app-frame${friendsExpanded ? "" : " player-app-frame--collapsed"}`}>
+          <div className="player-app-profile">
+            <div className="player-app-brand">
+              <SteamAvatar className="player-app-avatar" avatarUrl={headerAccount?.steamAvatarUrl} />
+              <div className="player-app-brand-copy">
+                <div className="player-kicker">{t("player.window.title")}</div>
+                <div className="player-app-name-line">
+                  <strong>{accountLabel}</strong>
+                  <span className="player-rankme-score">{formatRankmeScore(headerRankmeStanding?.score)}</span>
+                  <RankmeBadges standing={headerRankmeStanding} />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div className="player-app-chrome">
+            <div className="player-app-meta">
+              <span className="player-status-pill player-status-pill--server">
+                {baseUrl}
+              </span>
+              <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>
+                {realtimeConnectionLabel(realtimeStatus.connection, t)}
+              </span>
+              <Button
+                className={`player-app-settings-button player-app-history-button${viewingMatchHistory ? " player-app-history-button--active" : ""}`}
+                icon={<HistoryChartIcon />}
+                type="text"
+                onClick={() => void openMatchHistory()}
+              />
+              <Button
+                className="player-app-settings-button"
+                icon={<SettingsToolIcon />}
+                type="text"
+                onClick={() => setSettingsModalOpen(true)}
+              />
+            </div>
+          </div>
+
+          <div className={`player-app-layout${friendsExpanded ? "" : " player-app-layout--collapsed"}`}>
+            <main className="player-app-main" style={{ position: "relative" }}>
+              {renderAuthenticatedView()}
+              {matchFlowRoom ? (
+                <div className={`player-match-flow-host${activeView === "match-room" ? " is-active" : ""}`} inert={activeView !== "match-room"}>
+                  <MatchRoomPage key={matchFlowRoom.id} account={account} room={matchFlowRoom} nowMs={syncedNowMs}
+                    active={activeView === "match-room"} connection={realtimeStatus.connection}
+                    preloadVersion={party?.matchmakingPendingAt ? party.preload?.resourceVersion : undefined}
+                    onPreloadReady={async () => {
+                      if (!party?.lockedMatchId || party.preload?.resourceVersion !== PRELOAD_RESOURCE_VERSION) throw new Error("Unsupported preload resources");
+                      await api.acknowledgePreload(party.lockedMatchId, party.preload.resourceVersion);
+                    }}
+                    onReadyViewReady={(id, token) => api.acknowledgeReadyView(id, token)}
+                    onPreloadFailure={() => { void message.warning(t("player.home.preloadRetry")); }}
+                    onAcceptReady={() => acceptReady()} onDeclineReady={() => declineReady()} onCopyText={(text) => copyText(text)} />
+                </div>
+              ) : null}
+            </main>
+            <aside
+              className="player-app-sidebar"
+              onMouseEnter={() => setFriendsExpanded(true)}
+              onMouseLeave={() => setFriendsExpanded(false)}
+            >
+              <FriendsPanel
+                expanded={friendsExpanded}
+                accountId={account?.id ?? ""}
+                account={account}
+                friends={friends}
+                onSearchFriends={searchFriends}
+                onReenrichFriends={(results) => api.reenrichFriends(results)}
+                onProfilesUpdated={(listener) => api.onProfilesUpdated(listener)}
+                onSendFriendRequest={sendFriendRequest}
+                onAcceptFriendRequest={acceptFriendRequest}
+                onDeclineFriendRequest={declineFriendRequest}
+                onViewMatchHistory={openFriendMatchHistory}
+                onRemoveFriend={removeFriend}
+              />
+            </aside>
+          </div>
+          <PartyInviteToasts
+            invitations={matchmaking.partyInvitations}
+            account={account}
+            friends={friends}
+            busyInvitationId={busyPartyInvitationId}
+            nowMs={syncedNowMs}
+            onAccept={acceptPartyInvite}
+            onDecline={declinePartyInvite}
+            onIgnore={ignorePartyInvite}
+          />
+          <Modal
+            centered
+            footer={null}
+            open={passwordModalOpen}
+            title={t("common.actions.changePassword")}
+            onCancel={() => setPasswordModalOpen(false)}
+          >
+            <Form
+              layout="vertical"
+              initialValues={{ currentPassword }}
+              onFinish={(values) => void changePassword(values, { refreshSession: false })}
+            >
+              <Form.Item label={t("common.labels.currentPassword")} name="currentPassword" rules={[{ required: true, message: t("common.labels.currentPassword") }]}>
+                <Input.Password />
+              </Form.Item>
+              <Form.Item label={t("common.labels.newPassword")} name="newPassword" rules={[{ required: true, message: t("common.labels.newPassword") }]}>
+                <Input.Password />
+              </Form.Item>
+              <Form.Item
+                dependencies={["newPassword"]}
+                label={t("common.labels.confirmPassword")}
+                name="confirmPassword"
+                rules={[
+                  { required: true, message: t("common.labels.confirmPassword") },
+                  ({ getFieldValue }) => ({
+                    validator(_, value) {
+                      if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
+                      return Promise.reject(new Error(t("player.auth.confirmPasswordMismatch")));
+                    },
+                  }),
+                ]}
+              >
+                <Input.Password />
+              </Form.Item>
+              <Button type="primary" htmlType="submit" block loading={changePasswordPending} disabled={changePasswordPending}>
+                {t("common.actions.saveNewPassword")}
+              </Button>
+            </Form>
+          </Modal>
+          <Modal
+            centered
+            footer={null}
+            open={settingsModalOpen}
+            title={t("player.settings.title")}
+            onCancel={() => setSettingsModalOpen(false)}
+          >
+            <div className="player-settings">
+              <Tabs
+                items={[
+                  {
+                    key: "general",
+                    label: t("player.settings.general"),
+                    children: (
+                      <div className="player-settings-pane">
+                        <label className="player-settings-row">
+                          <span>{t("player.settings.language")}</span>
+                          <LanguageSelector
+                            disabled={languageSaving}
+                            onChange={(value) => void handleLanguageChange(value)}
+                          />
+                        </label>
+                        <label className="player-settings-row">
+                          <span>{t("player.settings.matchSound")}</span>
+                          <Switch
+                            checked={matchSoundEnabled}
+                            checkedChildren={t("player.settings.toggleOn")}
+                            unCheckedChildren={t("player.settings.toggleOff")}
+                            onChange={setMatchSoundEnabled}
+                            size="small"
+                          />
+                        </label>
+                        <div className="player-settings-actions">
+                          <Button
+                            onClick={() => {
+                              setSettingsModalOpen(false);
+                              setPasswordModalOpen(true);
+                            }}
+                          >
+                            {t("player.settings.changePassword")}
+                          </Button>
+                          <Button onClick={() => void logout()}>
+                            {t("player.settings.logOut")}
+                          </Button>
+                        </div>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: "about",
+                    label: t("player.settings.about"),
+                    children: (
+                      <div className="player-settings-pane">
+                        <div className="player-settings-update">
+                          {recoveryReport ? (
+                            <div className="player-integrity-result">
+                              <div>{t(
+                                recoveryReport.status === "passed" && recoveryReport.error === "maintenance_cleanup_pending"
+                                  ? "player.integrity.repairCleanupPending"
+                                  : recoveryReport.error === "maintenance_cleanup_pending" || recoveryReport.status === "passed"
+                                    ? "player.integrity.cleanupPending"
+                                    : "player.integrity.restartFailed",
+                              )}</div>
+                              <div>{t(`player.integrity.stage.${recoveryReport.stage}`)}</div>
+                              {recoveryReport.error ? <div>{displayError({ code: recoveryReport.error }, t, "player.integrity.retry")}</div> : null}
+                            </div>
+                          ) : null}
+                          <Button loading={integrityPending} disabled={integrityPending || maintenanceFeedback?.status === "installing"}
+                            onClick={() => void handleIntegrityCheck()}>
+                            {t("player.integrity.verify")}
+                          </Button>
+                          {integrityPending && maintenanceFeedback?.status !== "installing" && integrityProgress?.stage !== "verifying" ? (
+                            <Button onClick={() => void api.cancelIntegrity()}>{t("player.integrity.cancel")}</Button>
+                          ) : null}
+                          {integrityPending ? (
+                            <div>
+                              <div>{t(`player.integrity.stage.${integrityProgress?.stage ?? "checking"}`)}</div>
+                              <div>{t("player.integrity.progress", { checked: integrityProgress?.checkedFiles ?? 0,
+                                total: integrityProgress?.totalFiles ?? 0 })}</div>
+                              {integrityProgress?.stage === "downloading" ? (
+                                <div>{t("player.integrity.bytes", {
+                                  downloaded: integrityProgress.downloadedBytes.toLocaleString(),
+                                  total: integrityProgress.totalDownloadBytes.toLocaleString(),
+                                })}</div>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {maintenanceFeedback ? (
+                            <div className="player-integrity-result">
+                              <div>{t(`player.integrity.result.${maintenanceFeedback.status}`)}</div>
+                              {maintenanceFeedback.status === "failed" || maintenanceFeedback.status === "cancelled" ? (
+                                maintenanceFeedback.error ? (
+                                  <div>{displayError({ code: maintenanceFeedback.error }, t, "player.integrity.retry")}</div>
+                                ) : null
+                              ) : null}
+                            </div>
+                          ) : null}
+                          {integrityReport ? (
+                            <div className="player-integrity-result">
+                              <div>{integrityReport.status === "issues" && integrityReport.action === "update"
+                                ? t("player.integrity.updateAvailable", { version: integrityReport.version,
+                                  files: integrityReport.changedFiles, bytes: integrityReport.changedBytes.toLocaleString() })
+                                : integrityReport.status === "issues" && integrityReport.action === "repair"
+                                  ? t("player.integrity.repairAvailable", { files: integrityReport.changedFiles,
+                                    bytes: integrityReport.changedBytes.toLocaleString() })
+                                  : t(`player.integrity.${integrityReport.status}`)}</div>
+                              {integrityReport.error ? (
+                                <div>{displayError({ code: integrityReport.error }, t, "player.integrity.retry")}</div>
+                              ) : null}
+                              {integrityReport.status === "issues" && integrityReport.action !== "none" ? (
+                                <Button disabled={integrityPending || maintenanceFeedback?.status === "installing"}
+                                  onClick={() => void handleRepairIntegrity()}>
+                                  {t(integrityReport.action === "update" ? "player.integrity.updateAndRepair" : "player.integrity.repair")}
+                                </Button>
+                              ) : null}
+                              {integrityReport.issues.length ? (
+                                <ul>{integrityReport.issues.map((issue) => <li key={issue.path}>{issue.path}: {
+                                  integrityReport.action === "update" ? t("player.integrity.targetDifference")
+                                    : t(`player.integrity.${issue.kind}`)
+                                }</li>)}</ul>
+                              ) : null}
+                            </div>
+                          ) : null}
+                          <div className="player-settings-version">{t("player.settings.currentVersion", { version: currentVersion || t("common.state.loading") })}</div>
+                        </div>
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            </div>
+          </Modal>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="player-shell player-shell--app">
-      <div className={`player-app-frame${friendsExpanded ? "" : " player-app-frame--collapsed"}`}>
-        <div className="player-app-profile">
-          <div className="player-app-brand">
-            <SteamAvatar className="player-app-avatar" avatarUrl={headerAccount?.steamAvatarUrl} />
-            <div className="player-app-brand-copy">
-              <div className="player-kicker">{t("player.window.title")}</div>
-              <div className="player-app-name-line">
-                <strong>{accountLabel}</strong>
-                <span className="player-rankme-score">{formatRankmeScore(headerRankmeStanding?.score)}</span>
-                <RankmeBadges standing={headerRankmeStanding} />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="player-app-chrome">
-          <div className="player-app-meta">
-            <span className="player-status-pill player-status-pill--server">
-              {baseUrl}
-            </span>
-            <span className={`player-status-pill player-status-pill--${realtimeStatus.connection}`}>
-              {realtimeConnectionLabel(realtimeStatus.connection, t)}
-            </span>
-            <Button
-              className={`player-app-settings-button player-app-history-button${viewingMatchHistory ? " player-app-history-button--active" : ""}`}
-              icon={<HistoryChartIcon />}
-              type="text"
-              onClick={() => void openMatchHistory()}
-            />
-            <Button
-              className="player-app-settings-button"
-              icon={<SettingsToolIcon />}
-              type="text"
-              onClick={() => setSettingsModalOpen(true)}
-            />
-          </div>
-        </div>
-
-        <div className={`player-app-layout${friendsExpanded ? "" : " player-app-layout--collapsed"}`}>
-          <main className="player-app-main" style={{ position: "relative" }}>
-            {renderAuthenticatedView()}
-            {matchFlowRoom ? (
-              <div className={`player-match-flow-host${activeView === "match-room" ? " is-active" : ""}`} inert={activeView !== "match-room"}>
-                <MatchRoomPage key={matchFlowRoom.id} account={account} room={matchFlowRoom} nowMs={syncedNowMs}
-                  active={activeView === "match-room"} connection={realtimeStatus.connection}
-                  preloadVersion={party?.matchmakingPendingAt ? party.preload?.resourceVersion : undefined}
-                  onPreloadReady={async () => {
-                    if (!party?.lockedMatchId || party.preload?.resourceVersion !== PRELOAD_RESOURCE_VERSION) throw new Error("Unsupported preload resources");
-                    await api.acknowledgePreload(party.lockedMatchId, party.preload.resourceVersion);
-                  }}
-                  onReadyViewReady={(id, token) => api.acknowledgeReadyView(id, token)}
-                  onPreloadFailure={() => { void message.warning(t("player.home.preloadRetry")); }}
-                  onAcceptReady={() => acceptReady()} onDeclineReady={() => declineReady()} onCopyText={(text) => copyText(text)} />
-              </div>
-            ) : null}
-          </main>
-          <aside
-            className="player-app-sidebar"
-            onMouseEnter={() => setFriendsExpanded(true)}
-            onMouseLeave={() => setFriendsExpanded(false)}
-          >
-            <FriendsPanel
-              expanded={friendsExpanded}
-              accountId={account?.id ?? ""}
-              account={account}
-              friends={friends}
-              onSearchFriends={searchFriends}
-              onReenrichFriends={(results) => api.reenrichFriends(results)}
-              onProfilesUpdated={(listener) => api.onProfilesUpdated(listener)}
-              onSendFriendRequest={sendFriendRequest}
-              onAcceptFriendRequest={acceptFriendRequest}
-              onDeclineFriendRequest={declineFriendRequest}
-              onViewMatchHistory={openFriendMatchHistory}
-              onRemoveFriend={removeFriend}
-            />
-          </aside>
-        </div>
-        <PartyInviteToasts
-          invitations={matchmaking.partyInvitations}
-          account={account}
-          friends={friends}
-          busyInvitationId={busyPartyInvitationId}
-          nowMs={syncedNowMs}
-          onAccept={acceptPartyInvite}
-          onDecline={declinePartyInvite}
-          onIgnore={ignorePartyInvite}
-        />
-        <Modal
-          centered
-          footer={null}
-          open={passwordModalOpen}
-          title={t("common.actions.changePassword")}
-          onCancel={() => setPasswordModalOpen(false)}
-        >
-          <Form
-            layout="vertical"
-            initialValues={{ currentPassword }}
-            onFinish={(values) => void changePassword(values, { refreshSession: false })}
-          >
-            <Form.Item label={t("common.labels.currentPassword")} name="currentPassword" rules={[{ required: true, message: t("common.labels.currentPassword") }]}>
-              <Input.Password />
-            </Form.Item>
-            <Form.Item label={t("common.labels.newPassword")} name="newPassword" rules={[{ required: true, message: t("common.labels.newPassword") }]}>
-              <Input.Password />
-            </Form.Item>
-            <Form.Item
-              dependencies={["newPassword"]}
-              label={t("common.labels.confirmPassword")}
-              name="confirmPassword"
-              rules={[
-                { required: true, message: t("common.labels.confirmPassword") },
-                ({ getFieldValue }) => ({
-                  validator(_, value) {
-                    if (!value || getFieldValue("newPassword") === value) return Promise.resolve();
-                    return Promise.reject(new Error(t("player.auth.confirmPasswordMismatch")));
-                  },
-                }),
-              ]}
-            >
-              <Input.Password />
-            </Form.Item>
-            <Button type="primary" htmlType="submit" block loading={changePasswordPending} disabled={changePasswordPending}>
-              {t("common.actions.saveNewPassword")}
-            </Button>
-          </Form>
-        </Modal>
-        <Modal
-          centered
-          footer={null}
-          open={settingsModalOpen}
-          title={t("player.settings.title")}
-          onCancel={() => setSettingsModalOpen(false)}
-        >
-          <div className="player-settings">
-            <Tabs
-              items={[
-                {
-                  key: "general",
-                  label: t("player.settings.general"),
-                  children: (
-                    <div className="player-settings-pane">
-                      <label className="player-settings-row">
-                        <span>{t("player.settings.language")}</span>
-                        <LanguageSelector
-                          disabled={languageSaving}
-                          onChange={(value) => void handleLanguageChange(value)}
-                        />
-                      </label>
-                      <label className="player-settings-row">
-                        <span>{t("player.settings.matchSound")}</span>
-                        <Switch
-                          checked={matchSoundEnabled}
-                          checkedChildren={t("player.settings.toggleOn")}
-                          unCheckedChildren={t("player.settings.toggleOff")}
-                          onChange={setMatchSoundEnabled}
-                          size="small"
-                        />
-                      </label>
-                      <div className="player-settings-actions">
-                        <Button
-                          onClick={() => {
-                            setSettingsModalOpen(false);
-                            setPasswordModalOpen(true);
-                          }}
-                        >
-                          {t("player.settings.changePassword")}
-                        </Button>
-                        <Button onClick={() => void logout()}>
-                          {t("player.settings.logOut")}
-                        </Button>
-                      </div>
-                    </div>
-                  ),
-                },
-                {
-                  key: "about",
-                  label: t("player.settings.about"),
-                  children: (
-                    <div className="player-settings-pane">
-                      <div className="player-settings-update">
-                        {recoveryReport ? (
-                          <div className="player-integrity-result">
-                            <div>{t(
-                              recoveryReport.status === "passed" && recoveryReport.error === "maintenance_cleanup_pending"
-                                ? "player.integrity.repairCleanupPending"
-                                : recoveryReport.error === "maintenance_cleanup_pending" || recoveryReport.status === "passed"
-                                  ? "player.integrity.cleanupPending"
-                                  : "player.integrity.restartFailed",
-                            )}</div>
-                            <div>{t(`player.integrity.stage.${recoveryReport.stage}`)}</div>
-                            {recoveryReport.error ? <div>{displayError({ code: recoveryReport.error }, t, "player.integrity.retry")}</div> : null}
-                          </div>
-                        ) : null}
-                        <Button loading={integrityPending} disabled={integrityPending || maintenanceFeedback?.status === "installing"}
-                          onClick={() => void handleIntegrityCheck()}>
-                          {t("player.integrity.verify")}
-                        </Button>
-                        {integrityPending && maintenanceFeedback?.status !== "installing" && integrityProgress?.stage !== "verifying" ? (
-                          <Button onClick={() => void api.cancelIntegrity()}>{t("player.integrity.cancel")}</Button>
-                        ) : null}
-                        {integrityPending ? (
-                          <div>
-                            <div>{t(`player.integrity.stage.${integrityProgress?.stage ?? "checking"}`)}</div>
-                            <div>{t("player.integrity.progress", { checked: integrityProgress?.checkedFiles ?? 0,
-                              total: integrityProgress?.totalFiles ?? 0 })}</div>
-                            {integrityProgress?.stage === "downloading" ? (
-                              <div>{t("player.integrity.bytes", {
-                                downloaded: integrityProgress.downloadedBytes.toLocaleString(),
-                                total: integrityProgress.totalDownloadBytes.toLocaleString(),
-                              })}</div>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {maintenanceFeedback ? (
-                          <div className="player-integrity-result">
-                            <div>{t(`player.integrity.result.${maintenanceFeedback.status}`)}</div>
-                            {maintenanceFeedback.status === "failed" || maintenanceFeedback.status === "cancelled" ? (
-                              maintenanceFeedback.error ? (
-                                <div>{displayError({ code: maintenanceFeedback.error }, t, "player.integrity.retry")}</div>
-                              ) : null
-                            ) : null}
-                          </div>
-                        ) : null}
-                        {integrityReport ? (
-                          <div className="player-integrity-result">
-                            <div>{integrityReport.status === "issues" && integrityReport.action === "update"
-                              ? t("player.integrity.updateAvailable", { version: integrityReport.version,
-                                files: integrityReport.changedFiles, bytes: integrityReport.changedBytes.toLocaleString() })
-                              : integrityReport.status === "issues" && integrityReport.action === "repair"
-                                ? t("player.integrity.repairAvailable", { files: integrityReport.changedFiles,
-                                  bytes: integrityReport.changedBytes.toLocaleString() })
-                                : t(`player.integrity.${integrityReport.status}`)}</div>
-                            {integrityReport.error ? (
-                              <div>{displayError({ code: integrityReport.error }, t, "player.integrity.retry")}</div>
-                            ) : null}
-                            {integrityReport.status === "issues" && integrityReport.action !== "none" ? (
-                              <Button disabled={integrityPending || maintenanceFeedback?.status === "installing"}
-                                onClick={() => void handleRepairIntegrity()}>
-                                {t(integrityReport.action === "update" ? "player.integrity.updateAndRepair" : "player.integrity.repair")}
-                              </Button>
-                            ) : null}
-                            {integrityReport.issues.length ? (
-                              <ul>{integrityReport.issues.map((issue) => <li key={issue.path}>{issue.path}: {
-                                integrityReport.action === "update" ? t("player.integrity.targetDifference")
-                                  : t(`player.integrity.${issue.kind}`)
-                              }</li>)}</ul>
-                            ) : null}
-                          </div>
-                        ) : null}
-                        <div className="player-settings-version">{t("player.settings.currentVersion", { version: currentVersion || t("common.state.loading") })}</div>
-                      </div>
-                    </div>
-                  ),
-                },
-              ]}
-            />
-          </div>
-        </Modal>
-      </div>
-    </div>
+    <>
+      <WindowChrome appLayout={!loading && activeView !== "login" && activeView !== "change-password"} friendsExpanded={friendsExpanded} />
+      {renderAppContent()}
+    </>
   );
 }
