@@ -1,7 +1,7 @@
 import { dialog, ipcMain } from "electron";
 import path from "node:path";
 import { z } from "zod";
-import { prepareServerMaintenance, handoffServerMaintenance } from "../../desktop/main/serverMaintenance.js";
+import { prepareServerMaintenance, preparePendingServerMaintenance, clearRolledBackServerMaintenance, handoffServerMaintenance } from "../../desktop/main/serverMaintenance.js";
 import { getInstallRoot } from "../../desktop/main/installLayout.js";
 import { compareSemver } from "../../shared/version.js";
 import { assertServicePortClosed } from "./serviceProcess.js";
@@ -498,18 +498,20 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   ipcMain.handle("updates:install", async (): Promise<import("../shared/types.js").ManagerUpdateInstallResult> => {
     if (updatePending || !deps.maintenance) return { status: "blocked", installing: false, error: "maintenance_unavailable" };
     updatePending = true;
+    let terminalCleared = false, handedOff = false;
     try {
       return await offlineAccountsLifecycle.enqueue(async () => {
         const initialStatus = deps.service.status();
         if (initialStatus.state === "starting" || initialStatus.state === "stopping") throw new Error("maintenance_service_busy");
         const config = await deps.configStore.load();
-        const release = await loadServerRelease();
-        if (compareSemver(release.latestVersion, release.currentVersion) <= 0) return {
+        const appRoot = deps.maintenance!.appRoot;
+        const pending = await preparePendingServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config });
+        let release = pending ? undefined : await loadServerRelease();
+        if (release && compareSemver(release.latestVersion, release.currentVersion) <= 0) return {
           currentVersion: release.currentVersion, latestVersion: release.latestVersion, manifestUrl: release.manifestUrl,
           updateAvailable: false, changedFiles: 0, changedBytes: 0, installing: false, status: "no_changes" as const,
         };
-        const appRoot = deps.maintenance!.appRoot;
-        const prepared = await prepareServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config, target: release.target });
+        let prepared = pending ?? await prepareServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config, target: release!.target });
         if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
         const state = deps.service.status();
         if (state.state === "running") {
@@ -523,14 +525,33 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
         closeOfflineAccountsNow();
         await assertServicePortClosed(config);
         if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
+        if (pending && await clearRolledBackServerMaintenance(pending)) {
+          terminalCleared = true;
+          maintenanceBlocked = true;
+          release = await loadServerRelease();
+          if (compareSemver(release.latestVersion, release.currentVersion) <= 0) {
+            maintenanceBlocked = false;
+            return {
+              currentVersion: release.currentVersion, latestVersion: release.latestVersion, manifestUrl: release.manifestUrl,
+              updateAvailable: false, changedFiles: 0, changedBytes: 0, installing: false, status: "no_changes" as const,
+            };
+          }
+          prepared = await prepareServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config, target: release.target });
+          if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
+          if (deps.service.status().state !== "stopped") throw new Error("maintenance_service_busy");
+          await assertServicePortClosed(config);
+        }
         await handoffServerMaintenance(prepared);
+        handedOff = true;
         maintenanceBlocked = true;
         deps.maintenance!.onHandoff();
-        return { currentVersion: release.currentVersion, latestVersion: release.latestVersion, manifestUrl: release.manifestUrl,
-          updateAvailable: true, changedFiles: prepared.plan.operations.length,
-          changedBytes: prepared.plan.operations.reduce((sum, op) => sum + (op.kind === "replace" ? op.size : 0), 0), installing: true, status: "installing" as const };
+        return { currentVersion: release?.currentVersion ?? getCurrentVersion(), latestVersion: prepared.plan?.targetVersion ?? getCurrentVersion(),
+          manifestUrl: release?.manifestUrl ?? "",
+          updateAvailable: true, changedFiles: prepared.plan?.operations.length ?? 0,
+          changedBytes: prepared.plan?.operations.reduce((sum, op) => sum + (op.kind === "replace" ? op.size : 0), 0) ?? 0, installing: true, status: "installing" as const };
       });
     } catch (error) {
+      if (terminalCleared && !handedOff) maintenanceBlocked = false;
       const code = (error as { code?: string }).code ?? (error instanceof Error ? error.message : "maintenance_failed");
       return { status: /busy|conflict|modified|unknown|protected|changed|login_required|external_service|unavailable|inventory_missing/.test(code) ? "blocked" : "failed",
         installing: false, error: /^[a-z0-9_]+$/.test(code) ? code : "maintenance_failed" };

@@ -18,15 +18,18 @@ export type ManagedFileOperation =
 
 function invalid(code = "package_inventory_invalid"): never { throw Object.assign(new Error(code), { code }); }
 
-export function assertManagedRelativePath(value: string): void {
+function assertRelativePath(value: string, serverProgram: boolean): void {
   if (typeof value !== "string" || value.length === 0 || value.length > 240 || value.includes("\\") ||
       path.posix.isAbsolute(value) || value.split("/").some(part =>
         !part || part === "." || part === ".." || /[<>:"|?*\x00-\x1f]/.test(part) ||
         /[. ]$/.test(part) || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\.|$)/i.test(part) ||
-        /^\.compet-maintenance/i.test(part))) invalid("managed_path_invalid");
+        (serverProgram ? /^\.compet-maintenance(?:-staging|-retired)?$/i : /^\.compet-maintenance/i).test(part))) invalid("managed_path_invalid");
 }
 
-export function validatePackageInventory(raw: unknown): PackageInventory {
+export function assertManagedRelativePath(value: string): void { assertRelativePath(value, false); }
+export function assertServerProgramRelativePath(value: string): void { assertRelativePath(value, true); }
+
+export function validatePackageInventory(raw: unknown, serverProgram = false): PackageInventory {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) invalid();
   const value = raw as Partial<PackageInventory>;
   if (value.schemaVersion !== 1 || value.appId !== "compet-server-manager" ||
@@ -37,7 +40,7 @@ export function validatePackageInventory(raw: unknown): PackageInventory {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) invalid();
     const item = entry as Partial<PackageFile>;
     if (typeof item.path !== "string") invalid();
-    assertManagedRelativePath(item.path);
+    assertRelativePath(item.path, serverProgram);
     const key = item.path.toLowerCase();
     if (key === "compet-package-manifest.json" || seen.has(key) ||
         !Number.isSafeInteger(item.size) || item.size! < 0 ||
@@ -55,7 +58,7 @@ export function validatePackageInventory(raw: unknown): PackageInventory {
 export function isProtectedProgramPath(relative: string): boolean {
   return relative.split("/").some(part =>
     /^(user-data|server-data|records|certs|certificates|backups|mysql-backups)$/i.test(part) ||
-    /^(manager-config|manager-login|language|server-installed-files)\.json$/i.test(part) ||
+    /^(manager-config|manager-login|language)\.json$/i.test(part) ||
     /\.(db|sqlite|sqlite3)(-wal|-shm)?$/i.test(part) || /-(wal|shm)$/i.test(part));
 }
 
@@ -132,8 +135,8 @@ export async function buildServerUpdatePlan(input: {
   return { operations: conflicts.length ? [] : operations, conflicts };
 }
 
-export async function saveInstalledInventory(destination: string, inventory: PackageInventory): Promise<void> {
-  const valid = validatePackageInventory(inventory);
+export async function writePackageInventory(destination: string, inventory: PackageInventory): Promise<void> {
+  const valid = validatePackageInventory(inventory, true);
   await assertPlainPath(destination);
   const temporary = destination + "." + randomUUID() + ".tmp";
   try {
@@ -164,4 +167,123 @@ export async function listUnmanagedProgramPaths(root: string, files: PackageFile
   }
   await visit(root, "");
   return unknown;
+}
+
+export interface StrictServerUpdatePlan {
+  operations: ManagedFileOperation[];
+  expectedFiles: PackageFile[];
+  baselineFiles: PackageFile[];
+  conflicts: Array<{ path: string; code: string }>;
+}
+
+export async function buildStrictServerUpdatePlan(input: {
+  root: string; target: PackageInventory; inventoryFile: PackageFile; protectedPaths: string[]; transactionDirectory?: string;
+}): Promise<StrictServerUpdatePlan> {
+  const target = validatePackageInventory(input.target, true);
+  if (input.inventoryFile.path !== "compet-package-manifest.json" ||
+      !Number.isSafeInteger(input.inventoryFile.size) || input.inventoryFile.size < 0 ||
+      !/^[A-Fa-f0-9]{64}$/.test(input.inventoryFile.sha256)) invalid();
+  const expectedFiles = [...target.files, { path: input.inventoryFile.path, size: input.inventoryFile.size, sha256: input.inventoryFile.sha256.toUpperCase() }];
+  const baselineFiles: PackageFile[] = [], operations: ManagedFileOperation[] = [];
+  const conflicts: StrictServerUpdatePlan["conflicts"] = [];
+  const conflict = (relative: string, error: unknown) => {
+    conflicts.push({ path: relative, code: (error as NodeJS.ErrnoException).code ?? "managed_file_unreadable" });
+  };
+  const within = (value: string, boundary: string) => {
+    const relative = path.relative(boundary.toLowerCase(), value.toLowerCase());
+    return relative === "" || (!relative.startsWith(".." + path.sep) && relative !== ".." && !path.isAbsolute(relative));
+  };
+  try {
+    await assertPlainPath(input.root);
+    if (!(await lstat(input.root)).isDirectory()) invalid("managed_path_type_conflict");
+    for (const boundary of input.protectedPaths) {
+
+      await assertPlainPath(boundary);
+      if (within(input.root, boundary)) invalid("managed_path_protected");
+      for (const file of expectedFiles) if (pathsOverlap(path.join(input.root, file.path), boundary)) invalid("managed_path_protected");
+    }
+  } catch (error) {
+    conflict(input.root, error);
+    return { operations: [], expectedFiles, baselineFiles, conflicts };
+  }
+  const seen = new Set<string>();
+  if (input.transactionDirectory) {
+    try { await validateStrictTransaction(input.root, input.transactionDirectory, expectedFiles); }
+    catch (error) { conflict(input.transactionDirectory, error); return { operations: [], expectedFiles, baselineFiles, conflicts }; }
+  }
+  async function visit(directory: string): Promise<void> {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      const absolute = path.join(directory, entry.name);
+      const relative = path.relative(input.root, absolute).split(path.sep).join("/");
+      try {
+        await assertPlainPath(absolute);
+        if (input.transactionDirectory && absolute === input.transactionDirectory) continue;
+        if (input.protectedPaths.some(boundary => within(absolute, boundary))) continue;
+        assertServerProgramRelativePath(relative);
+        const key = relative.toLowerCase();
+        if (seen.has(key)) invalid("managed_path_case_conflict");
+        seen.add(key);
+        if (entry.isDirectory()) await visit(absolute);
+        else {
+          const actual = await fingerprintFile(absolute);
+          if (!actual) invalid("managed_file_changed");
+          baselineFiles.push({ path: relative, ...actual });
+        }
+      } catch (error) { conflict(relative, error); }
+    }
+
+  }
+  try { await visit(input.root); } catch (error) { conflict(input.root, error); }
+  const actualFiles = new Map(baselineFiles.map(file => [file.path.toLowerCase(), file]));
+  const expected = new Map(expectedFiles.map(file => [file.path.toLowerCase(), file]));
+  for (const file of expectedFiles) {
+    try {
+      const absolute = path.join(input.root, file.path);
+      await assertPlainPath(absolute);
+      const actual = await fingerprintFile(absolute);
+      if (!sameFingerprint(actual, actualFiles.get(file.path.toLowerCase()) ?? null)) invalid("managed_file_changed");
+      if (!sameFingerprint(actual, file)) operations.push({ kind: "replace", path: file.path, source: "files/" + file.sha256,
+        size: file.size, sha256: file.sha256, ...(actual ? { before: actual } : {}) });
+    } catch (error) { conflict(file.path, error); }
+  }
+  for (const file of baselineFiles) if (!expected.has(file.path.toLowerCase())) {
+    operations.push({ kind: "delete", path: file.path, before: { size: file.size, sha256: file.sha256 } });
+  }
+  baselineFiles.sort((a, b) => a.path.localeCompare(b.path, "en"));
+  return { operations: conflicts.length ? [] : operations, expectedFiles, baselineFiles, conflicts };
+}
+
+async function validateStrictTransaction(root: string, directory: string, expectedFiles: PackageFile[]): Promise<void> {
+  if ([".compet-maintenance", ".compet-maintenance-retired"].some(name => directory === path.join(root, name))) {
+    const { readServerMaintenancePlan, validateServerTerminalTransaction } = await import("./updateTransaction.js");
+    const plan = await readServerMaintenancePlan(directory);
+    if (plan.root !== root || JSON.stringify(plan.expectedFiles) !== JSON.stringify(expectedFiles)) invalid("managed_transaction_invalid");
+    await validateServerTerminalTransaction(directory);
+    return;
+  }
+  if (directory !== path.join(root, ".compet-maintenance-staging")) invalid("managed_transaction_invalid");
+  await assertPlainPath(directory);
+  const names = await readdir(directory);
+  if (names.some(name => !["files", "Compet Updater.exe", "plan.txt", "manifest.json", "result.txt"].includes(name))) invalid("managed_transaction_invalid");
+  const { readServerMaintenancePlan, readMaintenanceTransaction, readMaintenanceManifest } = await import("./updateTransaction.js");
+  for (const name of names) {
+    const absolute = path.join(directory, name);
+    await assertPlainPath(absolute);
+    if (name === "files") {
+      if (!(await lstat(absolute)).isDirectory()) invalid("managed_transaction_invalid");
+      for (const hash of await readdir(absolute)) {
+        const actual = await fingerprintFile(path.join(absolute, hash));
+        if (!expectedFiles.some(file => file.sha256 === hash && sameFingerprint(actual, file))) invalid("managed_transaction_invalid");
+      }
+    } else if (!(await lstat(absolute)).isFile()) invalid("managed_transaction_invalid");
+  }
+  if (names.includes("Compet Updater.exe") && !sameFingerprint(await fingerprintFile(path.join(directory, "Compet Updater.exe")), expectedFiles.find(file => file.path === "runtime/updater/Compet Updater.exe") ?? null)) invalid("managed_transaction_invalid");
+  if (names.includes("plan.txt") || names.includes("result.txt") || names.includes("manifest.json")) {
+    const plan = await readServerMaintenancePlan(directory);
+    const transaction = await readMaintenanceTransaction(directory);
+    const manifest = await readMaintenanceManifest(directory) as { inventory?: unknown };
+    const inventory = validatePackageInventory(manifest.inventory, true);
+    if (plan.root !== root || transaction?.state !== "prepared" || JSON.stringify(plan.expectedFiles) !== JSON.stringify(expectedFiles) ||
+        JSON.stringify(inventory.files) !== JSON.stringify(expectedFiles.filter(file => file.path !== "compet-package-manifest.json"))) invalid("managed_transaction_invalid");
+  }
 }

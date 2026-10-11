@@ -241,7 +241,7 @@ export function SettingsPage() {
                   type="primary"
                   onClick={() => void installUpdate()}
                   loading={installingUpdate}
-                  disabled={loading || submitting || checkingUpdate || installingUpdate || updateResult?.updateAvailable !== true}
+                  disabled={loading || submitting || checkingUpdate || installingUpdate}
                 >
                   {t("manager.settings.downloadInstall")}
                 </Button>

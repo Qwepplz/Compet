@@ -7,9 +7,10 @@ function normalizeError(error: unknown): string {
   return String(error);
 }
 
-function candidateLogPaths(fileName: string): string[] {
+function candidateLogPaths(fileName: string, options?: { directory: string }): string[] {
   const paths: string[] = [];
-  if (process.execPath) {
+  if (options) paths.push(path.join(options.directory, fileName));
+  if (!options && process.execPath) {
     paths.push(path.join(path.dirname(process.execPath), fileName));
   }
   const localAppData = process.env.LOCALAPPDATA;
@@ -17,12 +18,24 @@ function candidateLogPaths(fileName: string): string[] {
     paths.push(path.join(localAppData, "Compet", fileName));
   }
   paths.push(path.join(os.tmpdir(), fileName));
+  if (options) {
+    const directory = path.resolve(options.directory);
+    const suffix = path.join("runtime", "electron", "resources", "app", "server-data", "logs");
+    if (directory.toLowerCase().endsWith((path.sep + suffix).toLowerCase())) {
+      const installRoot = directory.slice(0, -(suffix.length + 1));
+      return paths.filter((value, index) => {
+        if (index === 0) return true;
+        const relative = path.relative(installRoot, value);
+        return relative === ".." || relative.startsWith(".." + path.sep) || path.isAbsolute(relative);
+      });
+    }
+  }
   return paths;
 }
 
-export function appendBootLog(fileName: string, message: string, error?: unknown): void {
+export function appendBootLog(fileName: string, message: string, error?: unknown, options?: { directory: string }): void {
   const line = `[${new Date().toISOString()}] ${message}${error === undefined ? "" : `\n${normalizeError(error)}`}\n`;
-  for (const logPath of candidateLogPaths(fileName)) {
+  for (const logPath of candidateLogPaths(fileName, options)) {
     try {
       mkdirSync(path.dirname(logPath), { recursive: true });
       appendFileSync(logPath, line, "utf8");

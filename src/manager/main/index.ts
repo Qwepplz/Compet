@@ -12,20 +12,19 @@ import { ServiceApiClient } from "./serviceApiClient.js";
 import { registerManagerIpc } from "./ipc.js";
 import { ensureManagerUserDataPath } from "./userDataPath.js";
 import { translate } from "../../language/translate.js";
-import { finalizeServerMaintenance } from "../../desktop/main/serverMaintenance.js";
-import { getInstallRoot, isInstalledServerLayout } from "../../desktop/main/installLayout.js";
-
-const bootLogFile = "compet-server-manager-boot.log";
-appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`);
-process.on("uncaughtException", (error) => appendBootLog(bootLogFile, "uncaught exception", error));
-process.on("unhandledRejection", (error) => appendBootLog(bootLogFile, "unhandled rejection", error));
-
-configureRemoteDesktopRendering();
 
 const appPath = app.getAppPath();
 const appPathIsResourcesApp = path.basename(appPath) === "app" && path.basename(path.dirname(appPath)) === "resources";
 const isPackagedRuntime = app.isPackaged || appPathIsResourcesApp;
 const appRoot = isPackagedRuntime ? appPath : process.cwd();
+const bootLogOptions = { directory: path.join(appRoot, "server-data", "logs") };
+const bootLogFile = "compet-server-manager-boot.log";
+appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`, undefined, bootLogOptions);
+process.on("uncaughtException", (error) => appendBootLog(bootLogFile, "uncaught exception", error, bootLogOptions));
+process.on("unhandledRejection", (error) => appendBootLog(bootLogFile, "unhandled rejection", error, bootLogOptions));
+
+configureRemoteDesktopRendering();
+
 async function initializeManager(): Promise<void> {
   const managerUserDataPath = ensureManagerUserDataPath({
     appRoot,
@@ -86,9 +85,9 @@ async function initializeManager(): Promise<void> {
   });
 
   async function createWindow(): Promise<void> {
-    appendBootLog(bootLogFile, "creating BrowserWindow");
+    appendBootLog(bootLogFile, "creating BrowserWindow", undefined, bootLogOptions);
     const entry = resolveDesktopWindowEntry(__dirname);
-    appendBootLog(bootLogFile, `resolved entries preload=${entry.preloadPath}; renderer=${entry.rendererPath}; problems=${entry.problems.join(" | ")}`);
+    appendBootLog(bootLogFile, `resolved entries preload=${entry.preloadPath}; renderer=${entry.rendererPath}; problems=${entry.problems.join(" | ")}`, undefined, bootLogOptions);
     const win = new BrowserWindow({
       width: 1280,
       height: 820,
@@ -105,14 +104,14 @@ async function initializeManager(): Promise<void> {
       if (mainWindow === win) mainWindow = undefined;
     });
     win.webContents.on("render-process-gone", (_event, details) => {
-      appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`);
+      appendBootLog(bootLogFile, `renderer process gone: ${details.reason}; exitCode=${details.exitCode}`, undefined, bootLogOptions);
       appendLog({ source: "manager", level: "error", message: "Renderer process exited", context: { reason: details.reason, exitCode: details.exitCode } });
     });
     win.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-      appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`);
+      appendBootLog(bootLogFile, `renderer load failed: ${errorCode} ${errorDescription}; ${validatedURL}`, undefined, bootLogOptions);
     });
     await loadDesktopWindow(win, __dirname, languageStore.load());
-    appendBootLog(bootLogFile, "desktop window load requested");
+    appendBootLog(bootLogFile, "desktop window load requested", undefined, bootLogOptions);
   }
 
   app.on("before-quit", (event) => {
@@ -157,14 +156,14 @@ async function initializeManager(): Promise<void> {
       await logStore.archiveExpiredLogs();
     } catch (error) {
       console.error("Failed to archive expired logs during startup", error);
-      appendBootLog(bootLogFile, "expired log archive failed", error);
+      appendBootLog(bootLogFile, "expired log archive failed", error, bootLogOptions);
       appendLog({ source: "manager", level: "error", message: "Expired log archive failed", context: { errorCode: "log_archive_error" } });
     }
     await createWindow();
   })().catch((error) => {
     const message = error instanceof Error ? error.stack ?? error.message : String(error);
     console.error("Failed to start Compet Server Manager", message);
-    appendBootLog(bootLogFile, "startup failed", error);
+    appendBootLog(bootLogFile, "startup failed", error, bootLogOptions);
     appendLog({ source: "manager", level: "error", message: "Manager startup failed", context: { errorCode: "startup_error" } });
     dialog.showErrorBox(translate(languageStore.load(), "manager.window.startupFailed"), message);
     app.exit(1);
@@ -172,15 +171,8 @@ async function initializeManager(): Promise<void> {
 
 }
 
-app.whenReady().then(async () => {
-  if (isPackagedRuntime) {
-    if (!isInstalledServerLayout(appRoot, app.getPath("exe"))) throw new Error("maintenance_layout_invalid");
-    const result = await finalizeServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot });
-    if (result !== "ready") { app.exit(result === "exit_requested" ? 0 : 1); return; }
-  }
-  await initializeManager();
-}).catch((error) => {
-  appendBootLog(bootLogFile, "maintenance startup failed", error);
+app.whenReady().then(initializeManager).catch((error) => {
+  appendBootLog(bootLogFile, "startup initialization failed", error, bootLogOptions);
   app.exit(1);
 });
 

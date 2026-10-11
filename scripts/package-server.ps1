@@ -171,11 +171,13 @@ function New-CSharpExe {
   param(
     [Parameter(Mandatory = $true)][string]$SourcePath,
     [Parameter(Mandatory = $true)][string]$ExePath,
-    [string[]]$References = @()
+    [string[]]$References = @(),
+    [string[]]$Defines = @()
   )
 
   $csc = Resolve-CSharpCompiler
   $cscArgs = @("/nologo", "/target:winexe", "/optimize+", "/out:$ExePath")
+  if ($Defines.Count -gt 0) { $cscArgs += "/define:$($Defines -join ';')" }
   foreach ($reference in $References) { $cscArgs += "/reference:$reference" }
   $cscArgs += $SourcePath
   & $csc @cscArgs
@@ -276,7 +278,7 @@ New-Item -ItemType Directory -Path $electronRuntimeRoot -Force | Out-Null
 Copy-Item -Path (Join-Path $electronDist "*") -Destination $electronRuntimeRoot -Recurse
 Remove-UnusedElectronFiles -RootDir $electronRuntimeRoot
 $serverExePath = Join-Path $stage $serverExe
-New-CSharpExe -SourcePath $launcherSource -ExePath $serverExePath -References @("System.Windows.Forms.dll")
+New-CSharpExe -SourcePath $launcherSource -ExePath $serverExePath -References @("System.Windows.Forms.dll") -Defines @("COMPET_SERVER")
 Set-ExeVersionInfo `
   -ExePath $serverExePath `
   -Description "Compet Server Manager" `
@@ -286,7 +288,7 @@ Set-ExeVersionInfo `
 $updaterRoot = Join-Path $stage "runtime\updater"
 New-Item -ItemType Directory -Path $updaterRoot -Force | Out-Null
 $updaterExePath = Join-Path $updaterRoot "Compet Updater.exe"
-New-CSharpExe -SourcePath $updaterSource -ExePath $updaterExePath
+New-CSharpExe -SourcePath $updaterSource -ExePath $updaterExePath -References @("System.Windows.Forms.dll", "System.Web.Extensions.dll") -Defines @("COMPET_SERVER")
 Set-ExeVersionInfo `
   -ExePath $updaterExePath `
   -Description "Compet Updater" `

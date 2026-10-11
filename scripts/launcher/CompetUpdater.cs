@@ -10,7 +10,7 @@ using System.Threading;
 internal sealed class MaintenanceFailure : Exception
 {
     internal readonly string Code;
-    internal MaintenanceFailure(string code) : base(code) { Code = code; }
+    internal MaintenanceFailure(string code, string relatedPath = "") : base(code + (relatedPath == "" ? "" : ": " + relatedPath)) { Code = code; }
 }
 
 internal sealed class MaintenanceFile
@@ -28,6 +28,9 @@ internal sealed class MaintenanceFile
 internal sealed class MaintenancePlan
 {
     internal int Protocol = 2;
+    internal int EntryStage;
+    internal readonly List<MaintenanceFile> ExpectedFiles = new List<MaintenanceFile>();
+    internal readonly List<MaintenanceFile> BaselineFiles = new List<MaintenanceFile>();
     internal readonly List<string> ProtectedPaths = new List<string>();
     internal string Directory = "";
     internal string Root = "";
@@ -40,6 +43,7 @@ internal sealed class MaintenancePlan
 
 internal sealed class JournalEntry
 {
+    internal string Temporary = "";
     internal string Target = "";
     internal bool Existed;
     internal string Backup = "";
@@ -54,13 +58,17 @@ internal static class CompetUpdater
 
     private static int Main(string[] args)
     {
+#if COMPET_SERVER
+        return ServerMain(args);
+#else
         try
         {
             string planPath = GetArg(args, "--plan");
             string[] lines = File.ReadAllLines(planPath, Utf8);
             if (lines.Length == 0) return 1;
-            if (lines[0] != "protocol=2" && lines[0] != "protocol=3")
+            if (lines[0] != "protocol=2")
             {
+                if (lines[0].StartsWith("protocol=", StringComparison.Ordinal)) return 1;
                 if (HasArg(args, "--recover") || HasArg(args, "--validate-plan")) return 1;
                 return RunLegacy(planPath, int.Parse(GetArg(args, "--pid"), CultureInfo.InvariantCulture));
             }
@@ -76,6 +84,7 @@ internal static class CompetUpdater
         {
             return 1;
         }
+#endif
     }
 
     private static bool HasArg(string[] args, string name)
@@ -127,15 +136,17 @@ internal static class CompetUpdater
         return value.ToUpperInvariant();
     }
 
-    private static void CheckRelative(string value)
+    private static void CheckRelative(string value, bool serverProgram = false)
     {
         if (String.IsNullOrEmpty(value) || value.IndexOf('\\') >= 0 || Path.IsPathRooted(value))
             throw new MaintenanceFailure("maintenance_path_invalid");
         string[] parts = value.Split('/');
-        if (parts[0].StartsWith(".compet-maintenance", StringComparison.OrdinalIgnoreCase))
+        if (!serverProgram && parts[0].StartsWith(".compet-maintenance", StringComparison.OrdinalIgnoreCase))
             throw new MaintenanceFailure("maintenance_path_invalid");
         foreach (string part in parts)
         {
+            if (serverProgram && (value.Length > 240 || System.Text.RegularExpressions.Regex.IsMatch(part, @"^\.compet-maintenance(?:-staging|-retired)?$", System.Text.RegularExpressions.RegexOptions.IgnoreCase)))
+                throw new MaintenanceFailure("maintenance_path_invalid");
             if (part.Length == 0 || part == "." || part == ".." || part.EndsWith(".") || part.EndsWith(" "))
                 throw new MaintenanceFailure("maintenance_path_invalid");
             foreach (char ch in part)
@@ -149,9 +160,9 @@ internal static class CompetUpdater
         }
     }
 
-    private static string RootChild(string root, string relative)
+    private static string RootChild(string root, string relative, bool serverProgram = false)
     {
-        CheckRelative(relative);
+        CheckRelative(relative, serverProgram);
         string absolute = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
         string prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
         if (!absolute.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
@@ -177,7 +188,7 @@ internal static class CompetUpdater
         try
         {
             if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0)
-                throw new MaintenanceFailure("maintenance_path_linked");
+                throw new MaintenanceFailure("maintenance_path_linked", path);
         }
         catch (FileNotFoundException) { }
         catch (DirectoryNotFoundException) { }
@@ -185,7 +196,7 @@ internal static class CompetUpdater
 
     private static MaintenancePlan ParsePlan(string planPath, string[] lines, bool allowStaging)
     {
-        if (lines.Length < 5 || (lines[0] != "protocol=2" && lines[0] != "protocol=3") ||
+        if (lines.Length < 5 || (lines[0] != "protocol=2" && lines[0] != "protocol=4") ||
             !lines[1].StartsWith("root=", StringComparison.Ordinal) ||
             !lines[2].StartsWith("exe=", StringComparison.Ordinal) ||
             !lines[3].StartsWith("target=", StringComparison.Ordinal) ||
@@ -193,11 +204,12 @@ internal static class CompetUpdater
             throw new MaintenanceFailure("maintenance_plan_invalid");
         CheckNoReparse(planPath);
         MaintenancePlan plan = new MaintenancePlan();
-        plan.Protocol = lines[0] == "protocol=3" ? 3 : 2;
+        plan.Protocol = lines[0] == "protocol=4" ? 4 : 2;
         plan.Directory = Path.GetFullPath(Path.GetDirectoryName(Path.GetFullPath(planPath)));
         string directoryName = Path.GetFileName(plan.Directory);
         if (!directoryName.Equals(".compet-maintenance", StringComparison.OrdinalIgnoreCase) &&
-            !(allowStaging && directoryName.Equals(".compet-maintenance-staging", StringComparison.OrdinalIgnoreCase)))
+            !(allowStaging && directoryName.Equals(".compet-maintenance-staging", StringComparison.OrdinalIgnoreCase)) &&
+            !(plan.Protocol == 4 && directoryName.Equals(".compet-maintenance-retired", StringComparison.OrdinalIgnoreCase)))
             throw new MaintenanceFailure("maintenance_plan_invalid");
         plan.Root = Decode(lines[1].Substring(5));
         if (!Path.IsPathRooted(plan.Root) || !Path.GetFullPath(plan.Root).Equals(plan.Root, StringComparison.OrdinalIgnoreCase) ||
@@ -205,7 +217,7 @@ internal static class CompetUpdater
             throw new MaintenanceFailure("maintenance_plan_invalid");
         plan.Exe = Decode(lines[2].Substring(4));
         plan.Version = Decode(lines[3].Substring(7));
-        CheckRelative(plan.Exe);
+        CheckRelative(plan.Exe, plan.Protocol == 4);
         if (!System.Text.RegularExpressions.Regex.IsMatch(plan.Version,
             @"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$"))
             throw new MaintenanceFailure("maintenance_plan_invalid");
@@ -216,7 +228,7 @@ internal static class CompetUpdater
         HashSet<string> targets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         for (int i = 5; i < lines.Length; i += 1)
         {
-            if (plan.Protocol == 3)
+            if (plan.Protocol == 4)
             {
                 ParseServerEntry(plan, lines[i], targets);
                 continue;
@@ -231,7 +243,7 @@ internal static class CompetUpdater
             file.Size = ParseSize(fields[2]);
             file.Hash = ParseHash(fields[3]);
             CheckRelative(file.Source);
-            RootChild(plan.Root, file.Target);
+            PlanChild(plan, file.Target);
             if (file.Source != "files/" + file.Hash || !targets.Add(file.Target))
                 throw new MaintenanceFailure("maintenance_plan_invalid");
             plan.Files.Add(file);
@@ -240,6 +252,7 @@ internal static class CompetUpdater
             foreach (string other in targets)
                 if (!target.Equals(other, StringComparison.OrdinalIgnoreCase) && target.StartsWith(other + "/", StringComparison.OrdinalIgnoreCase))
                     throw new MaintenanceFailure("maintenance_path_invalid");
+        if (plan.Protocol == 4) ValidateServerPlan(plan);
         CheckNoReparse(plan.Root);
         CheckNoReparse(plan.Directory);
         return plan;
@@ -250,13 +263,31 @@ internal static class CompetUpdater
         if (line.StartsWith("protect=", StringComparison.Ordinal))
         {
             string protection = Decode(line.Substring(8));
-            if (plan.Files.Count != 0 || !Path.IsPathRooted(protection) ||
-                Path.GetFullPath(protection) != protection || plan.ProtectedPaths.Contains(protection))
+            if (plan.EntryStage != 0 || !Path.IsPathRooted(protection) ||
+                Path.GetFullPath(protection) != protection || plan.ProtectedPaths.Exists(p => p.Equals(protection, StringComparison.OrdinalIgnoreCase)) ||
+                plan.Root.Equals(protection, StringComparison.OrdinalIgnoreCase) || plan.Root.StartsWith(protection.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
                 throw new MaintenanceFailure("maintenance_path_invalid");
             CheckNoReparse(protection);
             plan.ProtectedPaths.Add(protection);
             return;
         }
+        bool expected = line.StartsWith("expect=", StringComparison.Ordinal), baseline = line.StartsWith("baseline=", StringComparison.Ordinal);
+        if (expected || baseline)
+        {
+            int stage = expected ? 1 : 2;
+            if (plan.EntryStage > stage) throw new MaintenanceFailure("maintenance_plan_invalid");
+            plan.EntryStage = stage;
+            string[] fingerprintFields = line.Substring(expected ? 7 : 9).Split('\t');
+            if (fingerprintFields.Length != 3 || !System.Text.RegularExpressions.Regex.IsMatch(fingerprintFields[1], @"^(0|[1-9]\d*)$") ||
+                !System.Text.RegularExpressions.Regex.IsMatch(fingerprintFields[2], @"^[A-F0-9]{64}$"))
+                throw new MaintenanceFailure("maintenance_plan_invalid");
+            MaintenanceFile item = new MaintenanceFile();
+            item.Target = Decode(fingerprintFields[0]); item.Size = ParseSize(fingerprintFields[1]); item.Hash = ParseHash(fingerprintFields[2]);
+            if (item.Size > 9007199254740991L) throw new MaintenanceFailure("maintenance_plan_invalid");
+            (expected ? plan.ExpectedFiles : plan.BaselineFiles).Add(item);
+            return;
+        }
+        plan.EntryStage = 3;
         bool delete = line.StartsWith("delete=", StringComparison.Ordinal);
         if (!delete && !line.StartsWith("replace=", StringComparison.Ordinal))
             throw new MaintenanceFailure("maintenance_plan_invalid");
@@ -265,7 +296,7 @@ internal static class CompetUpdater
         MaintenanceFile file = new MaintenanceFile();
         file.Delete = delete;
         file.Target = Decode(fields[delete ? 0 : 1]);
-        RootChild(plan.Root, file.Target);
+        PlanChild(plan, file.Target);
         if (!targets.Add(file.Target)) throw new MaintenanceFailure("maintenance_plan_invalid");
         int before = delete ? 1 : 4;
         file.BeforeExists = fields[before] != "-" || fields[before + 1] != "-";
@@ -288,14 +319,9 @@ internal static class CompetUpdater
 
     private static void CheckServerTarget(MaintenancePlan plan, MaintenanceFile file, bool before)
     {
-        if (plan.Protocol != 3) return;
-        string target = RootChild(plan.Root, file.Target);
+        if (plan.Protocol != 4) return;
+        string target = PlanChild(plan, file.Target);
         CheckNoReparse(target);
-        foreach (string part in file.Target.Split('/'))
-            if (System.Text.RegularExpressions.Regex.IsMatch(part,
-                @"^(user-data|server-data|records|certs|certificates|backups|mysql-backups)$|^(manager-config|manager-login|language|server-installed-files)\.json$|\.(db|sqlite|sqlite3)(-wal|-shm)?$|-(wal|shm)$",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase))
-                throw new MaintenanceFailure("maintenance_path_protected");
         foreach (string protection in plan.ProtectedPaths)
         {
             CheckNoReparse(protection);
@@ -310,6 +336,65 @@ internal static class CompetUpdater
             if (File.Exists(parent)) throw new MaintenanceFailure("maintenance_path_invalid");
         if (before && (file.BeforeExists ? !Matches(target, file.BeforeSize, file.BeforeHash) : File.Exists(target)))
             throw new MaintenanceFailure("maintenance_target_changed");
+    }
+
+
+    private static string PlanChild(MaintenancePlan plan, string relative)
+    {
+        return RootChild(plan.Root, relative, plan.Protocol == 4);
+    }
+
+    private static void ValidateServerPlan(MaintenancePlan plan)
+    {
+        Dictionary<string, MaintenanceFile> expected = ServerCollection(plan, plan.ExpectedFiles);
+        Dictionary<string, MaintenanceFile> baseline = ServerCollection(plan, plan.BaselineFiles);
+        string[] required = { "Compet Server Manager.exe", "runtime/updater/Compet Updater.exe", "runtime/electron/resources/app/package.json", "compet-package-manifest.json" };
+        if (plan.Exe != required[0]) throw new MaintenanceFailure("maintenance_plan_invalid");
+        foreach (string value in required) if (!expected.ContainsKey(value)) throw new MaintenanceFailure("maintenance_plan_invalid");
+        MaintenanceFile helper = expected[required[1]];
+        if (helper.Size != plan.HelperSize || helper.Hash != plan.HelperHash) throw new MaintenanceFailure("maintenance_helper_invalid");
+        foreach (string name in new[] { "server-data", "user-data" })
+        {
+            string protection = Path.Combine(plan.Root, "runtime", "electron", "resources", "app", name);
+            if (!plan.ProtectedPaths.Exists(p => p.Equals(protection, StringComparison.OrdinalIgnoreCase)))
+                throw new MaintenanceFailure("maintenance_path_protected");
+        }
+        Dictionary<string, MaintenanceFile> operations = new Dictionary<string, MaintenanceFile>(StringComparer.OrdinalIgnoreCase);
+        foreach (MaintenanceFile op in plan.Files)
+        {
+            MaintenanceFile before, after;
+            baseline.TryGetValue(op.Target, out before); expected.TryGetValue(op.Target, out after);
+            if (operations.ContainsKey(op.Target) || op.BeforeExists != (before != null) ||
+                (before != null && (op.BeforeSize != before.Size || op.BeforeHash != before.Hash)) ||
+                (op.Delete ? after != null : after == null || op.Size != after.Size || op.Hash != after.Hash))
+                throw new MaintenanceFailure("maintenance_plan_invalid");
+            operations.Add(op.Target, op);
+        }
+        HashSet<string> all = new HashSet<string>(expected.Keys, StringComparer.OrdinalIgnoreCase);
+        all.UnionWith(baseline.Keys);
+        foreach (string key in all)
+        {
+            MaintenanceFile before, after;
+            baseline.TryGetValue(key, out before); expected.TryGetValue(key, out after);
+            bool changed = before == null || after == null || before.Size != after.Size || before.Hash != after.Hash;
+            if (changed != operations.ContainsKey(key)) throw new MaintenanceFailure("maintenance_plan_invalid");
+        }
+    }
+
+    private static Dictionary<string, MaintenanceFile> ServerCollection(MaintenancePlan plan, List<MaintenanceFile> files)
+    {
+        Dictionary<string, MaintenanceFile> result = new Dictionary<string, MaintenanceFile>(StringComparer.OrdinalIgnoreCase);
+        foreach (MaintenanceFile file in files)
+        {
+            CheckServerTarget(plan, file, false);
+            if (result.ContainsKey(file.Target)) throw new MaintenanceFailure("maintenance_plan_invalid");
+            result.Add(file.Target, file);
+        }
+        foreach (string key in result.Keys)
+            foreach (string other in result.Keys)
+                if (!key.Equals(other, StringComparison.OrdinalIgnoreCase) && key.StartsWith(other + "/", StringComparison.OrdinalIgnoreCase))
+                    throw new MaintenanceFailure("maintenance_path_invalid");
+        return result;
     }
 
     private static string HashFile(string file)
@@ -344,19 +429,23 @@ internal static class CompetUpdater
             throw new MaintenanceFailure("maintenance_helper_invalid");
     }
 
-    private static void ValidateSources(MaintenancePlan plan)
+    private static void ValidateSources(MaintenancePlan plan, bool requireQuiet = false)
     {
         VerifyHelper(plan);
         string manifest = Path.Combine(plan.Directory, "manifest.json");
         CheckNoReparse(manifest);
         if (!File.Exists(manifest)) throw new MaintenanceFailure("maintenance_manifest_missing");
+#if COMPET_SERVER
+        if (plan.Protocol == 4) VerifyServerTree(plan, plan.BaselineFiles, requireQuiet);
+#endif
         foreach (MaintenanceFile file in plan.Files)
         {
             string source = Path.Combine(plan.Directory, file.Source.Replace('/', Path.DirectorySeparatorChar));
-            string target = RootChild(plan.Root, file.Target);
+            string target = PlanChild(plan, file.Target);
             CheckNoReparse(source);
             CheckNoReparse(target);
             CheckServerTarget(plan, file, true);
+
             if (!file.Delete && !Matches(source, file.Size, file.Hash))
                 throw new MaintenanceFailure("maintenance_source_invalid");
         }
@@ -364,6 +453,8 @@ internal static class CompetUpdater
 
     private static void AtomicWrite(string destination, string content)
     {
+        CheckNoReparse(destination);
+        CheckNoReparse(Path.GetDirectoryName(destination));
         string temporary = destination + "." + Guid.NewGuid().ToString("N") + ".tmp";
         try
         {
@@ -487,7 +578,7 @@ internal static class CompetUpdater
         string electron = Path.Combine(plan.Root, "runtime", "electron", "electron.exe");
         List<Process> processes = new List<Process>(Process.GetProcessesByName("electron"));
         string node = Path.Combine(plan.Root, "runtime", "electron", "resources", "app", "runtime", "node", "node.exe");
-        if (plan.Protocol == 3) processes.AddRange(Process.GetProcessesByName("node"));
+        if (plan.Protocol == 4) processes.AddRange(Process.GetProcessesByName("node"));
         foreach (Process process in processes)
         {
             using (process)
@@ -495,7 +586,7 @@ internal static class CompetUpdater
                 try
                 {
                     if ((Path.GetFullPath(process.MainModule.FileName).Equals(electron, StringComparison.OrdinalIgnoreCase) ||
-                        (plan.Protocol == 3 && Path.GetFullPath(process.MainModule.FileName).Equals(node, StringComparison.OrdinalIgnoreCase))) &&
+                        (plan.Protocol == 4 && Path.GetFullPath(process.MainModule.FileName).Equals(node, StringComparison.OrdinalIgnoreCase))) &&
                         !process.HasExited) return true;
                 }
                 catch (System.ComponentModel.Win32Exception)
@@ -525,26 +616,32 @@ internal static class CompetUpdater
         }
     }
 
-    private static void CopyDurable(string source, string destination)
+    private static void CopyDurable(string source, string destination, Action onCreated = null)
     {
+        CheckNoReparse(source);
+        CheckNoReparse(destination);
         using (FileStream input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read))
         using (FileStream output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
         {
+            if (onCreated != null) onCreated();
             input.CopyTo(output);
             output.Flush(true);
         }
     }
 
-    private static void ReplaceFrom(string source, string target, long size, string hash)
+    private static void ReplaceFrom(string source, string target, long size, string hash, string registeredTemporary = null)
     {
         string parent = Path.GetDirectoryName(target);
         CheckNoReparse(parent);
         Directory.CreateDirectory(parent);
         CheckNoReparse(parent);
-        string temporary = Path.Combine(parent, ".compet-" + Guid.NewGuid().ToString("N") + ".tmp");
+        string temporary = registeredTemporary ?? Path.Combine(parent, ".compet-" + Guid.NewGuid().ToString("N") + ".tmp");
+        CheckNoReparse(temporary);
+        if (File.Exists(temporary) || Directory.Exists(temporary)) throw new MaintenanceFailure("maintenance_temporary_conflict", temporary);
+        bool temporaryOwned = false;
         try
         {
-            CopyDurable(source, temporary);
+            CopyDurable(source, temporary, delegate { temporaryOwned = true; });
             if (!Matches(temporary, size, hash))
                 throw new MaintenanceFailure("maintenance_source_invalid");
             CheckNoReparse(target);
@@ -553,7 +650,7 @@ internal static class CompetUpdater
         }
         finally
         {
-            if (File.Exists(temporary)) File.Delete(temporary);
+            if (temporaryOwned && File.Exists(temporary)) File.Delete(temporary);
         }
     }
 
@@ -566,9 +663,11 @@ internal static class CompetUpdater
                 .Append(entry.Existed ? "1" : "0").Append('\t')
                 .Append(Encode(entry.Backup)).Append('\t')
                 .Append(entry.Size.ToString(CultureInfo.InvariantCulture)).Append('\t')
-                .Append(entry.Hash).Append('\n');
+                .Append(entry.Hash);
+            if (plan.Protocol == 4) text.Append('\t').Append(entry.Temporary == "" ? "-" : Encode(entry.Temporary));
+            text.Append('\n');
         }
-        if (plan.Protocol == 3) text.Append("count=").Append(entries.Count.ToString(CultureInfo.InvariantCulture)).Append('\n');
+        if (plan.Protocol == 4) text.Append("count=").Append(entries.Count.ToString(CultureInfo.InvariantCulture)).Append('\n');
         AtomicWrite(Path.Combine(plan.Directory, "journal.txt"), text.ToString());
     }
 
@@ -584,7 +683,7 @@ internal static class CompetUpdater
         string[] lines = File.ReadAllLines(journal, Utf8);
         if (lines.Length == 0 || lines[0] != "protocol=" + plan.Protocol)
             throw new MaintenanceFailure("maintenance_journal_invalid");
-        if (plan.Protocol == 3)
+        if (plan.Protocol == 4)
         {
             if (lines.Length < 2 || lines[lines.Length - 1] != "count=" + (lines.Length - 2).ToString(CultureInfo.InvariantCulture))
                 throw new MaintenanceFailure("maintenance_journal_invalid");
@@ -598,7 +697,7 @@ internal static class CompetUpdater
             if (!line.StartsWith("entry=", StringComparison.Ordinal))
                 throw new MaintenanceFailure("maintenance_journal_invalid");
             string[] fields = line.Substring(6).Split('\t');
-            if (fields.Length != 5) throw new MaintenanceFailure("maintenance_journal_invalid");
+            if (fields.Length != (plan.Protocol == 4 ? 6 : 5)) throw new MaintenanceFailure("maintenance_journal_invalid");
             JournalEntry entry = new JournalEntry();
             entry.Target = Decode(fields[0]);
             entry.Existed = fields[1] == "1";
@@ -607,17 +706,29 @@ internal static class CompetUpdater
             entry.Backup = Decode(fields[2]);
             entry.Size = ParseSize(fields[3]);
             entry.Hash = ParseHash(fields[4]);
-            RootChild(plan.Root, entry.Target);
+            PlanChild(plan, entry.Target);
             CheckRelative(entry.Backup);
             if (!entry.Target.Equals(plan.Files[i - 1].Target, StringComparison.OrdinalIgnoreCase) ||
                 entry.Backup != "backup/" + (i - 1).ToString(CultureInfo.InvariantCulture) + ".bin")
                 throw new MaintenanceFailure("maintenance_journal_invalid");
-            if (plan.Protocol == 3)
+            if (plan.Protocol == 4)
             {
                 MaintenanceFile operation = plan.Files[i - 1];
                 if (entry.Existed != operation.BeforeExists || (entry.Existed &&
                     (entry.Size != operation.BeforeSize || entry.Hash != operation.BeforeHash)))
                     throw new MaintenanceFailure("maintenance_journal_invalid");
+            }
+            if (plan.Protocol == 4)
+            {
+                MaintenanceFile op = plan.Files[entries.Count];
+                string temporary = Decode(fields[5]);
+                string parent = op.Target.Substring(0, op.Target.LastIndexOf('/') + 1);
+                if (!System.Text.RegularExpressions.Regex.IsMatch(temporary, "^" + System.Text.RegularExpressions.Regex.Escape(parent) + @"\.compet-[0-9a-f]{32}\.tmp$") ||
+                    plan.ExpectedFiles.Exists(f => f.Target.Equals(temporary, StringComparison.OrdinalIgnoreCase)) ||
+                    plan.BaselineFiles.Exists(f => f.Target.Equals(temporary, StringComparison.OrdinalIgnoreCase)) ||
+                    (!op.BeforeExists && (entry.Size != 0 || entry.Hash != new string('0', 64))))
+                    throw new MaintenanceFailure("maintenance_journal_invalid");
+                entry.Temporary = temporary;
             }
             entries.Add(entry);
         }
@@ -630,7 +741,7 @@ internal static class CompetUpdater
         for (int i = entries.Count - 1; i >= 0; i -= 1)
         {
             JournalEntry entry = entries[i];
-            string target = RootChild(plan.Root, entry.Target);
+            string target = PlanChild(plan, entry.Target);
             CheckNoReparse(target);
             CheckServerTarget(plan, plan.Files[i], false);
             if (entry.Existed)
@@ -683,7 +794,7 @@ internal static class CompetUpdater
             {
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = RootChild(plan.Root, plan.Exe),
+                    FileName = PlanChild(plan, plan.Exe),
                     WorkingDirectory = plan.Root,
                     UseShellExecute = true,
                 });
@@ -705,7 +816,7 @@ internal static class CompetUpdater
                 if (ReadState(plan) != "prepared")
                     throw new MaintenanceFailure("maintenance_state_invalid");
                 WaitForInstallationExit(plan, pid);
-                ValidateSources(plan);
+                ValidateSources(plan, true);
                 WriteResult(plan, "applying", "");
                 applying = true;
                 List<JournalEntry> entries = new List<JournalEntry>();
@@ -713,10 +824,13 @@ internal static class CompetUpdater
                 Directory.CreateDirectory(Path.Combine(plan.Directory, "backup"));
                 foreach (MaintenanceFile file in plan.Files)
                 {
-                    string target = RootChild(plan.Root, file.Target);
+                    string target = PlanChild(plan, file.Target);
                     string source = Path.Combine(plan.Directory, file.Source.Replace('/', Path.DirectorySeparatorChar));
                     CheckNoReparse(target);
                     CheckNoReparse(source);
+#if COMPET_SERVER
+                    if (plan.Protocol == 4) AssertInstallationQuiet(plan);
+#endif
                     CheckServerTarget(plan, file, true);
                     if (!file.Delete && !Matches(source, file.Size, file.Hash))
                         throw new MaintenanceFailure("maintenance_source_invalid");
@@ -731,6 +845,12 @@ internal static class CompetUpdater
                     entry.Target = file.Target;
                     entry.Existed = existed;
                     entry.Backup = "backup/" + entries.Count.ToString(CultureInfo.InvariantCulture) + ".bin";
+                    if (plan.Protocol == 4) {
+                        entry.Temporary = file.Target.Substring(0, file.Target.LastIndexOf('/') + 1) + ".compet-" + Guid.NewGuid().ToString("N") + ".tmp";
+                        string temporary = PlanChild(plan, entry.Temporary);
+                        CheckNoReparse(temporary);
+                        if (File.Exists(temporary) || Directory.Exists(temporary)) throw new MaintenanceFailure("maintenance_temporary_conflict", temporary);
+                    }
                     if (existed)
                     {
                         string backup = Path.Combine(plan.Directory, entry.Backup.Replace('/', Path.DirectorySeparatorChar));
@@ -746,18 +866,29 @@ internal static class CompetUpdater
                     entries.Add(entry);
                     WriteJournal(plan, entries);
                     // intent durable
+#if COMPET_SERVER
+                    if (plan.Protocol == 4) AssertInstallationQuiet(plan);
+#endif
                     CheckServerTarget(plan, file, true);
                     if (file.Delete) { File.Delete(target); // server delete
                     }
-                    else ReplaceFrom(source, target, file.Size, file.Hash);
+                    else ReplaceFrom(source, target, file.Size, file.Hash, entry.Temporary == "" ? null : PlanChild(plan, entry.Temporary));
                     if (file.Delete ? File.Exists(target) : !Matches(target, file.Size, file.Hash))
                         throw new MaintenanceFailure("maintenance_target_invalid");
                 }
                 fullyApplied = true;
                 WriteResult(plan, "applied", "");
+#if COMPET_SERVER
+                if (plan.Protocol == 4) {
+                    VerifyServerInstallation(plan);
+                    WriteResult(plan, "verified", "");
+                    StartServerFinisher(plan);
+                    return 0;
+                }
+#endif
                 Process.Start(new ProcessStartInfo
                 {
-                    FileName = RootChild(plan.Root, plan.Exe),
+                    FileName = PlanChild(plan, plan.Exe),
                     WorkingDirectory = plan.Root,
                     UseShellExecute = true,
                 });
@@ -765,11 +896,22 @@ internal static class CompetUpdater
             }
             catch (Exception error)
             {
+#if COMPET_SERVER
+                if (plan.Protocol == 4 && ReadStateSafely(plan) == "verified") { ReportServerFailure(error); return 1; }
+#endif
                 string code = error is MaintenanceFailure ? ((MaintenanceFailure)error).Code :
                     applying ? "maintenance_apply_failed" : "maintenance_preparation_failed";
                 try
                 {
-                    if (applying) Restore(plan, true, fullyApplied);
+                    if (applying) {
+#if COMPET_SERVER
+                        if (plan.Protocol == 4) RestoreServer(plan, true, fullyApplied); else
+#endif
+                        Restore(plan, true, fullyApplied);
+                    }
+#if COMPET_SERVER
+                    else if (plan.Protocol == 4) VerifyServerTree(plan, plan.BaselineFiles);
+#endif
                     WriteResult(plan, "rolled_back", code);
                 }
                 catch
@@ -778,6 +920,9 @@ internal static class CompetUpdater
                         fullyApplied ? "applied" : applying ? "applying" : "prepared"); }
                     catch { }
                 }
+#if COMPET_SERVER
+                if (plan.Protocol == 4) ReportServerFailure(error);
+#endif
                 return 1;
             }
             finally { mutex.ReleaseMutex(); }
@@ -821,4 +966,411 @@ internal static class CompetUpdater
         }
         catch { return 1; }
     }
+
+#if COMPET_SERVER
+    private static bool SilentErrors;
+    private static int ServerMain(string[] args)
+    {
+        SilentErrors = HasArg(args, "--silent") || HasArg(args, "--validate-plan");
+        try
+        {
+            if (!HasArg(args, "--plan")) return OpenServerUpdater(HasArg(args, "--pid") ? (int?)int.Parse(GetArg(args, "--pid"), CultureInfo.InvariantCulture) : null);
+            string planPath = GetArg(args, "--plan");
+            MaintenancePlan plan = ParsePlan(planPath, File.ReadAllLines(planPath, Utf8), HasArg(args, "--validate-plan"));
+            if (plan.Protocol != 4) throw new MaintenanceFailure("maintenance_plan_invalid");
+            if (HasArg(args, "--validate-plan")) return ValidateOnly(plan);
+            if (HasArg(args, "--finish-server")) return FinishServer(plan, HasArg(args, "--pid") ? (int?)int.Parse(GetArg(args, "--pid"), CultureInfo.InvariantCulture) : null);
+            if (HasArg(args, "--recover")) return ResumeServer(plan);
+            return Apply(plan, int.Parse(GetArg(args, "--pid"), CultureInfo.InvariantCulture));
+        }
+        catch (Exception error) { ReportServerFailure(error); return 1; }
+    }
+
+    private static void ReportServerFailure(Exception error)
+    {
+        string code = error is MaintenanceFailure ? ((MaintenanceFailure)error).Code : "maintenance_io_failed";
+        string detail = code + ": " + error.Message;
+        Console.Error.WriteLine(detail);
+        if (!SilentErrors) System.Windows.Forms.MessageBox.Show(detail, "Compet Server Update", System.Windows.Forms.MessageBoxButtons.OK, System.Windows.Forms.MessageBoxIcon.Error);
+    }
+
+    private static void ServerError(string code, string path)
+    {
+        throw new MaintenanceFailure(code, path);
+    }
+
+    private static void VerifyInstalledHelper(MaintenancePlan plan, bool targetOnly)
+    {
+        string expectedPath = PlanChild(plan, "runtime/updater/Compet Updater.exe");
+        string running = Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName);
+        CheckNoReparse(expectedPath);
+        if (!running.Equals(expectedPath, StringComparison.OrdinalIgnoreCase)) ServerError("maintenance_helper_invalid", running);
+        if (Matches(running, plan.HelperSize, plan.HelperHash)) return;
+        if (!targetOnly) foreach (MaintenanceFile file in plan.BaselineFiles)
+            if (file.Target.Equals("runtime/updater/Compet Updater.exe", StringComparison.OrdinalIgnoreCase) && Matches(running, file.Size, file.Hash)) return;
+        ServerError("maintenance_helper_invalid", running);
+    }
+
+    private static int OpenServerUpdater(int? managerPid)
+    {
+        string own = Path.GetDirectoryName(Path.GetFullPath(Process.GetCurrentProcess().MainModule.FileName));
+        if (Path.GetFileName(own).Equals(".compet-maintenance", StringComparison.OrdinalIgnoreCase))
+        {
+            string planPath = Path.Combine(own, "plan.txt");
+            MaintenancePlan transaction = ParsePlan(planPath, File.ReadAllLines(planPath, Utf8), false);
+            if (transaction.Protocol != 4) ServerError("maintenance_plan_invalid", planPath);
+            VerifyHelper(transaction);
+            return ResumeServer(transaction);
+        }
+        if (!Path.GetFileName(own).Equals("updater", StringComparison.OrdinalIgnoreCase) ||
+            !Path.GetFileName(Path.GetDirectoryName(own)).Equals("runtime", StringComparison.OrdinalIgnoreCase))
+            ServerError("maintenance_layout_invalid", own);
+        string root = Path.GetDirectoryName(Path.GetDirectoryName(own));
+        string active = Path.Combine(root, ".compet-maintenance"), retired = Path.Combine(root, ".compet-maintenance-retired");
+        CheckNoReparse(root); CheckNoReparse(active); CheckNoReparse(retired);
+        WaitForHandoffProcess(managerPid, root);
+        if (Directory.Exists(active) && Directory.Exists(retired)) ServerError("maintenance_transaction_conflict", root);
+        string directory = Directory.Exists(active) ? active : Directory.Exists(retired) ? retired : "";
+        if (directory == "") { Console.WriteLine("No pending server update."); return 0; }
+        string planFile = Path.Combine(directory, "plan.txt");
+        if (!File.Exists(planFile))
+        {
+            if (directory != retired || Directory.GetFileSystemEntries(directory).Length != 0) ServerError("maintenance_plan_invalid", planFile);
+            Directory.Delete(directory);
+            if (managerPid.HasValue) {
+                try { Process.Start(new ProcessStartInfo { FileName = Path.Combine(root, "Compet Server Manager.exe"), WorkingDirectory = root, UseShellExecute = false }); }
+                catch (Exception error) { throw new MaintenanceFailure("maintenance_restart_failed", error.Message); }
+            }
+            return 0;
+        }
+        MaintenancePlan plan = ParsePlan(planFile, File.ReadAllLines(planFile, Utf8), false);
+        if (plan.Protocol != 4) ServerError("maintenance_plan_invalid", planFile);
+        string state = ReadState(plan);
+        if (state == "verified" || directory == retired) return FinishServer(plan, null);
+        VerifyInstalledHelper(plan, false);
+        if (state == "rolled_back")
+        {
+            using (Mutex mutex = Acquire(plan)) {
+                try { AssertInstallationQuiet(plan); VerifyServerTree(plan, plan.BaselineFiles); CleanupServerTransaction(plan); return 0; }
+                finally { mutex.ReleaseMutex(); }
+            }
+        }
+        string helper = HelperPath(plan);
+        CheckNoReparse(helper);
+        if (!Matches(helper, plan.HelperSize, plan.HelperHash)) ServerError("maintenance_helper_invalid", helper);
+        using (Process child = Process.Start(new ProcessStartInfo { FileName = helper,
+            Arguments = "--recover --plan " + Quote(planFile) + (SilentErrors ? " --silent" : ""),
+            WorkingDirectory = directory, UseShellExecute = false, CreateNoWindow = true }))
+        {
+            if (child == null || !child.WaitForExit(WaitTimeoutMs + 10000)) ServerError("maintenance_recovery_timeout", directory);
+            return child.ExitCode;
+        }
+    }
+
+    private static string Quote(string value) { return "\"" + value.Replace("\"", "\\\"") + "\""; }
+
+    private static void AssertInstallationQuiet(MaintenancePlan plan)
+    {
+        if (InstallationElectronAlive(plan)) ServerError("maintenance_process_busy", plan.Root);
+        ValidateCurrentServerBoundaries(plan);
+    }
+
+    private static bool ServerPathsOverlap(string left, string right)
+    {
+        left = left.TrimEnd(Path.DirectorySeparatorChar);
+        right = right.TrimEnd(Path.DirectorySeparatorChar);
+        return left.Equals(right, StringComparison.OrdinalIgnoreCase) ||
+            left.StartsWith(right + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            right.StartsWith(left + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void ValidateCurrentServerBoundaries(MaintenancePlan plan)
+    {
+        string appRoot = Path.Combine(plan.Root, "runtime", "electron", "resources", "app");
+        string configPath = Path.Combine(appRoot, "user-data", "manager-config.json");
+        CheckNoReparse(configPath);
+        string dataDir = Path.Combine(appRoot, "server-data"), gameRoot = "";
+        if (File.Exists(configPath))
+        {
+            Dictionary<string, object> config;
+            try { config = new System.Web.Script.Serialization.JavaScriptSerializer().DeserializeObject(File.ReadAllText(configPath, Utf8)) as Dictionary<string, object>; }
+            catch { throw new MaintenanceFailure("maintenance_config_invalid", configPath); }
+            if (config == null) ServerError("maintenance_config_invalid", configPath);
+            object value;
+            if (config.TryGetValue("dataDir", out value)) {
+                if (!(value is string)) ServerError("maintenance_config_invalid", configPath);
+                dataDir = (string)value;
+            }
+            if (config.TryGetValue("serverRoot", out value)) {
+                if (!(value is string)) ServerError("maintenance_config_invalid", configPath);
+                gameRoot = (string)value;
+            }
+        }
+        for (int boundary = 0; boundary < 2; boundary++)
+        {
+            string value = boundary == 0 ? dataDir : gameRoot;
+            if (boundary == 1 && value == "") continue;
+            if (String.IsNullOrWhiteSpace(value) || !Path.IsPathRooted(value) || Path.GetPathRoot(value) != Path.GetPathRoot(Path.GetFullPath(value)))
+                ServerError("maintenance_config_invalid", configPath);
+            string absolute = Path.GetFullPath(value).TrimEnd(Path.DirectorySeparatorChar);
+            CheckNoReparse(absolute);
+            if (boundary == 1) {
+                if (ServerPathsOverlap(absolute, plan.Root)) ServerError("maintenance_path_protected", absolute);
+                continue;
+            }
+            foreach (MaintenanceFile file in plan.ExpectedFiles)
+                if (ServerPathsOverlap(absolute, PlanChild(plan, file.Target))) ServerError("maintenance_path_protected", absolute);
+            foreach (MaintenanceFile file in plan.BaselineFiles)
+                if (ServerPathsOverlap(absolute, PlanChild(plan, file.Target))) ServerError("maintenance_path_protected", absolute);
+            foreach (string name in new[] { ".compet-maintenance", ".compet-maintenance-staging", ".compet-maintenance-retired" })
+                if (ServerPathsOverlap(absolute, Path.Combine(plan.Root, name))) ServerError("maintenance_path_protected", absolute);
+            if (ServerPathsOverlap(absolute, plan.Root) && !ProtectedDirectory(plan, absolute)) ServerError("maintenance_config_changed", absolute);
+        }
+    }
+
+    private static Dictionary<string, MaintenanceFile> ScanServerFiles(MaintenancePlan plan)
+    {
+        Dictionary<string, MaintenanceFile> files = new Dictionary<string, MaintenanceFile>(StringComparer.OrdinalIgnoreCase);
+        ScanServerDirectory(plan, plan.Root, files);
+        return files;
+    }
+
+    private static bool ProtectedDirectory(MaintenancePlan plan, string absolute)
+    {
+        foreach (string protection in plan.ProtectedPaths)
+            if (absolute.Equals(protection, StringComparison.OrdinalIgnoreCase) || absolute.StartsWith(protection.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    private static void ScanServerDirectory(MaintenancePlan plan, string directory, Dictionary<string, MaintenanceFile> files)
+    {
+        CheckNoReparse(directory);
+        foreach (string absolute in Directory.GetFileSystemEntries(directory))
+        {
+            CheckNoReparse(absolute);
+            if (absolute.Equals(plan.Directory, StringComparison.OrdinalIgnoreCase)) continue;
+            if (ProtectedDirectory(plan, absolute)) continue;
+            string relative = absolute.Substring(plan.Root.TrimEnd(Path.DirectorySeparatorChar).Length + 1).Replace(Path.DirectorySeparatorChar, '/');
+            CheckRelative(relative, true);
+            if (Directory.Exists(absolute)) ScanServerDirectory(plan, absolute, files);
+            else {
+                if (files.ContainsKey(relative)) ServerError("maintenance_path_invalid", absolute);
+                files.Add(relative, new MaintenanceFile { Target = relative, Size = new FileInfo(absolute).Length, Hash = HashFile(absolute) });
+            }
+        }
+    }
+
+    private static void VerifyServerTree(MaintenancePlan plan, List<MaintenanceFile> expected, bool requireQuiet = true)
+    {
+        if (requireQuiet) AssertInstallationQuiet(plan); else ValidateCurrentServerBoundaries(plan);
+        Dictionary<string, MaintenanceFile> actual = ScanServerFiles(plan);
+        foreach (MaintenanceFile file in expected) {
+            MaintenanceFile found;
+            if (!actual.TryGetValue(file.Target, out found) || found.Size != file.Size || found.Hash != file.Hash) ServerError("maintenance_verification_failed", PlanChild(plan, file.Target));
+            actual.Remove(file.Target);
+        }
+        foreach (string extra in actual.Keys) ServerError("maintenance_unexpected_file", PlanChild(plan, extra));
+    }
+
+    private static void VerifyServerInstallation(MaintenancePlan plan)
+    {
+        VerifyServerTree(plan, plan.ExpectedFiles);
+        string package = File.ReadAllText(PlanChild(plan, "runtime/electron/resources/app/package.json"), Utf8);
+        if (!System.Text.RegularExpressions.Regex.IsMatch(package, @"""name""\s*:\s*""compet-server-manager""") ||
+            !System.Text.RegularExpressions.Regex.IsMatch(package, @"""version""\s*:\s*""" + System.Text.RegularExpressions.Regex.Escape(plan.Version) + @""""))
+            ServerError("maintenance_identity_invalid", "runtime/electron/resources/app/package.json");
+    }
+
+    private static void ClearServerTemporary(MaintenancePlan plan, JournalEntry entry)
+    {
+        if (entry.Temporary == "") return;
+        string temporary = PlanChild(plan, entry.Temporary);
+        CheckNoReparse(temporary);
+        if (Directory.Exists(temporary)) ServerError("maintenance_recovery_conflict", temporary);
+        if (File.Exists(temporary)) File.Delete(temporary);
+    }
+
+    private static void RestoreServer(MaintenancePlan plan, bool required, bool complete)
+    {
+        AssertInstallationQuiet(plan);
+        List<JournalEntry> entries = ReadJournal(plan, required, complete);
+        ValidateServerBackups(plan);
+        for (int i = entries.Count - 1; i >= 0; i--) {
+            AssertInstallationQuiet(plan);
+            JournalEntry entry = entries[i]; MaintenanceFile op = plan.Files[i];
+            string target = PlanChild(plan, entry.Target);
+            CheckServerTarget(plan, op, false);
+            ClearServerTemporary(plan, entry);
+            if (entry.Existed) {
+                string backup = Path.Combine(plan.Directory, entry.Backup.Replace('/', Path.DirectorySeparatorChar));
+                CheckNoReparse(backup);
+                if (!Matches(backup, entry.Size, entry.Hash)) ServerError("maintenance_backup_invalid", backup);
+                if (Matches(target, entry.Size, entry.Hash)) continue;
+                if (op.Delete ? File.Exists(target) : !Matches(target, op.Size, op.Hash)) ServerError("maintenance_recovery_conflict", target);
+                ReplaceFrom(backup, target, entry.Size, entry.Hash, PlanChild(plan, entry.Temporary));
+            } else if (File.Exists(target)) {
+                if (op.Delete || !Matches(target, op.Size, op.Hash)) ServerError("maintenance_recovery_conflict", target);
+                File.Delete(target);
+            }
+        }
+        VerifyServerTree(plan, plan.BaselineFiles);
+    }
+
+    private static void StartServerFinisher(MaintenancePlan plan)
+    {
+        string helper = PlanChild(plan, "runtime/updater/Compet Updater.exe");
+        CheckNoReparse(helper);
+        if (!Matches(helper, plan.HelperSize, plan.HelperHash)) ServerError("maintenance_helper_invalid", helper);
+        Process child = Process.Start(new ProcessStartInfo { FileName = helper,
+            Arguments = "--finish-server --plan " + Quote(Path.Combine(plan.Directory, "plan.txt")) + " --pid " + Process.GetCurrentProcess().Id.ToString(CultureInfo.InvariantCulture) + (SilentErrors ? " --silent" : ""),
+            WorkingDirectory = Path.GetDirectoryName(helper), UseShellExecute = false, CreateNoWindow = true });
+        if (child == null) ServerError("maintenance_finish_failed", helper);
+        child.Dispose();
+    }
+
+    private static int ResumeServer(MaintenancePlan plan)
+    {
+        bool finish = false;
+        using (Mutex mutex = Acquire(plan)) {
+            string phase = "applied";
+            try {
+                VerifyHelper(plan);
+                string state = ReadState(plan); phase = RecoveryPhase(plan, state);
+                WaitForInstallationExit(plan, -1);
+                if (state == "verified") { VerifyServerInstallation(plan); finish = true; }
+                else if (state == "rolled_back") { VerifyServerTree(plan, plan.BaselineFiles); return 0; }
+                else {
+                    if (state != "prepared" && state != "applying" && state != "applied" && state != "recovery_failed") ServerError("maintenance_state_invalid", plan.Directory);
+                    bool matches = false;
+                    try { VerifyServerInstallation(plan); matches = true; } catch (MaintenanceFailure) { }
+                    if (matches) { WriteResult(plan, "verified", ""); finish = true; }
+                    else {
+                        RestoreServer(plan, phase != "prepared", phase == "applied");
+                        WriteResult(plan, "rolled_back", "maintenance_interrupted"); return 0;
+                    }
+                }
+            }
+            catch (Exception error) {
+                if (ReadStateSafely(plan) != "verified") try { WriteResult(plan, "recovery_failed", "maintenance_recovery_failed", phase); } catch { }
+                ReportServerFailure(error); return 1;
+            }
+            finally { mutex.ReleaseMutex(); }
+        }
+        if (finish) StartServerFinisher(plan);
+        return 0;
+    }
+
+    private static string ReadStateSafely(MaintenancePlan plan) { try { return ReadState(plan); } catch { return ""; } }
+
+    private static void ValidateServerBackups(MaintenancePlan plan)
+    {
+        string directory = Path.Combine(plan.Directory, "backup");
+        CheckNoReparse(directory);
+        if (!Directory.Exists(directory)) {
+            if (File.Exists(directory)) ServerError("maintenance_backup_invalid", directory);
+            return;
+        }
+        Dictionary<string, MaintenanceFile> expected = new Dictionary<string, MaintenanceFile>(StringComparer.Ordinal);
+        for (int i = 0; i < plan.Files.Count; i++) if (plan.Files[i].BeforeExists)
+            expected.Add(i.ToString(CultureInfo.InvariantCulture) + ".bin", plan.Files[i]);
+        foreach (string backup in Directory.GetFileSystemEntries(directory)) {
+            CheckNoReparse(backup);
+            MaintenanceFile operation;
+            if (Directory.Exists(backup) || !expected.TryGetValue(Path.GetFileName(backup), out operation) ||
+                !Matches(backup, operation.BeforeSize, operation.BeforeHash)) ServerError("maintenance_backup_invalid", backup);
+        }
+    }
+
+    private static void ValidateServerCleanup(MaintenancePlan plan)
+    {
+        HashSet<string> known = new HashSet<string>(new[] { "plan.txt", "manifest.json", "result.txt", "journal.txt", "Compet Updater.exe", "files", "backup" }, StringComparer.Ordinal);
+        foreach (string absolute in Directory.GetFileSystemEntries(plan.Directory)) {
+            CheckNoReparse(absolute); string name = Path.GetFileName(absolute);
+            bool atomic = System.Text.RegularExpressions.Regex.IsMatch(name, @"^(manifest\.json|plan\.txt|result\.txt|journal\.txt)\.[0-9a-f]{32}\.tmp$");
+            if (!known.Contains(name) && !atomic) ServerError("maintenance_cleanup_conflict", absolute);
+            if (name == "backup") { ValidateServerBackups(plan); continue; }
+            if (name == "files") {
+                if (!Directory.Exists(absolute)) ServerError("maintenance_cleanup_conflict", absolute);
+                foreach (string child in Directory.GetFileSystemEntries(absolute)) {
+                    CheckNoReparse(child);
+                    if (Directory.Exists(child)) ServerError("maintenance_cleanup_conflict", child);
+                    bool allowed = false;
+                    foreach (MaintenanceFile expected in plan.ExpectedFiles)
+                        if (Path.GetFileName(child) == expected.Hash && Matches(child, expected.Size, expected.Hash)) allowed = true;
+                    if (!allowed) ServerError("maintenance_cleanup_conflict", child);
+                }
+            } else if (Directory.Exists(absolute)) ServerError("maintenance_cleanup_conflict", absolute);
+        }
+    }
+
+    private static void RemoveEmptyProgramDirectories(MaintenancePlan plan, string directory)
+    {
+        foreach (string child in Directory.GetDirectories(directory)) {
+            CheckNoReparse(child);
+            if (child.Equals(plan.Directory, StringComparison.OrdinalIgnoreCase) || ProtectedDirectory(plan, child)) continue;
+            RemoveEmptyProgramDirectories(plan, child);
+            bool ancestor = plan.ProtectedPaths.Exists(p => p.StartsWith(child.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase));
+            if (!ancestor && Directory.GetFileSystemEntries(child).Length == 0) Directory.Delete(child);
+        }
+    }
+
+    private static void CleanupServerTransaction(MaintenancePlan plan)
+    {
+        ValidateServerCleanup(plan);
+        string retired = Path.Combine(plan.Root, ".compet-maintenance-retired");
+        if (!plan.Directory.Equals(retired, StringComparison.OrdinalIgnoreCase)) {
+            CheckNoReparse(retired);
+            if (File.Exists(retired) || Directory.Exists(retired)) ServerError("maintenance_transaction_conflict", retired);
+            Directory.Move(plan.Directory, retired); plan.Directory = retired;
+        }
+        RemoveEmptyProgramDirectories(plan, plan.Root);
+        foreach (string folder in new[] { "files", "backup" }) {
+            string payload = Path.Combine(plan.Directory, folder);
+            if (!Directory.Exists(payload)) continue;
+            foreach (string file in Directory.GetFiles(payload)) { AssertInstallationQuiet(plan); File.Delete(file); }
+            Directory.Delete(payload);
+        }
+        foreach (string file in Directory.GetFiles(plan.Directory)) {
+            if (Path.GetFileName(file) == "plan.txt" || Path.GetFileName(file) == "result.txt") continue;
+            AssertInstallationQuiet(plan); File.Delete(file);
+        }
+        AssertInstallationQuiet(plan);
+        File.Delete(Path.Combine(plan.Directory, "result.txt"));
+        File.Delete(Path.Combine(plan.Directory, "plan.txt")); // last recovery evidence
+        Directory.Delete(plan.Directory);
+    }
+
+    private static void WaitForHandoffProcess(int? pid, string relatedPath)
+    {
+        if (!pid.HasValue) return;
+        DateTime deadline = DateTime.UtcNow.AddMilliseconds(WaitTimeoutMs);
+        while (ProcessAlive(pid.Value)) { if (DateTime.UtcNow >= deadline) ServerError("maintenance_wait_timeout", relatedPath); Thread.Sleep(50); }
+    }
+
+    private static int FinishServer(MaintenancePlan plan, int? applyPid)
+    {
+        VerifyInstalledHelper(plan, false);
+        WaitForHandoffProcess(applyPid, plan.Directory);
+        bool launch = true;
+        using (Mutex mutex = Acquire(plan)) {
+            try {
+                string state = ReadState(plan);
+                bool lastEvidence = plan.Directory.EndsWith(Path.DirectorySeparatorChar + ".compet-maintenance-retired", StringComparison.OrdinalIgnoreCase) &&
+                    state == "" && Directory.GetFileSystemEntries(plan.Directory).Length == 1;
+                if (state != "verified" && state != "rolled_back" && !lastEvidence) ServerError("maintenance_state_invalid", plan.Directory);
+                if (state == "rolled_back") { VerifyServerTree(plan, plan.BaselineFiles); launch = false; }
+                else if (lastEvidence) {
+                    try { VerifyServerInstallation(plan); VerifyInstalledHelper(plan, true); }
+                    catch (MaintenanceFailure) { VerifyServerTree(plan, plan.BaselineFiles); launch = false; }
+                } else { VerifyInstalledHelper(plan, true); VerifyServerInstallation(plan); }
+                CleanupServerTransaction(plan);
+            }
+            finally { mutex.ReleaseMutex(); }
+        }
+        if (!launch) return 0;
+        try { Process.Start(new ProcessStartInfo { FileName = PlanChild(plan, plan.Exe), WorkingDirectory = plan.Root, UseShellExecute = false }); }
+        catch (Exception error) { ReportServerFailure(new MaintenanceFailure("maintenance_restart_failed", error.Message)); return 1; }
+        return 0;
+    }
+#endif
 }

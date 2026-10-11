@@ -1,7 +1,7 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertPlainPath, fingerprintFile, isProtectedProgramPath, saveInstalledInventory,
+import { assertPlainPath, fingerprintFile, writePackageInventory,
   validatePackageInventory, type PackageFile, type PackageInventory } from "../src/desktop/main/serverManagedFiles.js";
 
 async function scanPackage(root: string, version: string): Promise<PackageInventory> {
@@ -15,7 +15,9 @@ async function scanPackage(root: string, version: string): Promise<PackageInvent
       const absolute = path.join(directory, entry.name);
       const relative = path.relative(root, absolute).split(path.sep).join("/");
       if (relative === "compet-package-manifest.json") continue;
-      if (isProtectedProgramPath(relative)) throw new Error("package_contains_runtime_data: " + relative);
+      const key = relative.toLowerCase();
+      if (["runtime/electron/resources/app/server-data", "runtime/electron/resources/app/user-data"].some(boundary =>
+        key === boundary || key.startsWith(boundary + "/"))) throw new Error("package_contains_runtime_data: " + relative);
       await assertPlainPath(absolute);
       if (entry.isDirectory()) await visit(absolute);
       else {
@@ -27,17 +29,17 @@ async function scanPackage(root: string, version: string): Promise<PackageInvent
   }
   await visit(root);
   files.sort((a, b) => a.path.localeCompare(b.path, "en"));
-  return validatePackageInventory({ schemaVersion: 1, appId: "compet-server-manager", version, files });
+  return validatePackageInventory({ schemaVersion: 1, appId: "compet-server-manager", version, files }, true);
 }
 
 export async function createPackageInventory(root: string, version: string): Promise<PackageInventory> {
   const inventory = await scanPackage(root, version);
-  await saveInstalledInventory(path.join(root, "compet-package-manifest.json"), inventory);
+  await writePackageInventory(path.join(root, "compet-package-manifest.json"), inventory);
   return inventory;
 }
 
 export async function verifyPackageInventory(root: string, version: string): Promise<void> {
-  const recorded = validatePackageInventory(JSON.parse(await readFile(path.join(root, "compet-package-manifest.json"), "utf8")));
+  const recorded = validatePackageInventory(JSON.parse(await readFile(path.join(root, "compet-package-manifest.json"), "utf8")), true);
   const actual = await scanPackage(root, version);
   const normalize = (inventory: PackageInventory) => JSON.stringify({ ...inventory,
     files: [...inventory.files].sort((a, b) => a.path.localeCompare(b.path, "en")) });
