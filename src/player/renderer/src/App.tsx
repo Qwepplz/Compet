@@ -1023,6 +1023,7 @@ export function App() {
         setActiveView("home");
         return;
       case "match_failed":
+        void hydrateRealtimeState();
         if (party?.lockedMatchId === event.matchId && party.preload) {
           void message.error(t(event.error === "preload_timeout" ? "player.home.preloadTimeout" : "errors.matchFailed"));
           setMatchmakingFeedbackPending(false);

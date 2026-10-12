@@ -3469,6 +3469,7 @@ export class MatchmakingService {
           }
           const remaining = await this.deps.store.listPendingBackupCleanupMatchIds();
           await this.deps.store.savePendingBackupCleanupMatchIds(remaining.filter((id) => id !== roomId));
+          await this.emitOccupancyUpdated();
         });
 
         if (failedEventToDeliver && !progress.completed.has("event")) {
