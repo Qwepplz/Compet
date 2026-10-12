@@ -14,6 +14,7 @@ import { FriendService } from "../friends/friendService.js";
 import { FriendStore } from "../friends/friendStore.js";
 import { MatchExecutor } from "../game/matchExecutor.js";
 import { loadRunCsgoSource } from "../game/runCsgoAssets.js";
+import { publishMysqlPreinitScripts } from "../game/mysqlPreinitScripts.js";
 import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
 import { MysqlDatabaseBackup } from "../game/mysqlDatabaseBackup.js";
 import { prepareSourceModForServerStartup } from "../game/sourceModStartup.js";
@@ -48,6 +49,16 @@ const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
 export async function createRuntime(config: ServerConfig): Promise<Runtime> {
   if (!isSemver(config.requiredClientVersion)) throw new Error("Invalid requiredClientVersion");
   await prepareSourceModForServerStartup(config.gameServer.serverRoot);
+  const runtimeEntry = path.resolve(process.argv[1] ?? "src/main.ts");
+  const packaged = path.basename(runtimeEntry) === "main.cjs" && path.basename(path.dirname(runtimeEntry)) === "dist";
+  const assetAppRoot = packaged ? path.dirname(path.dirname(runtimeEntry)) : process.cwd();
+  const scripts = await publishMysqlPreinitScripts({
+    sourceRoot: path.join(assetAppRoot, packaged ? "mysql_preinit" : "src/mysql_preinit"),
+    serverRoot: config.gameServer.serverRoot,
+  });
+  if (scripts.preserved.length) {
+    process.stderr.write(`MySQL preinitialization scripts preserved: ${scripts.preserved.join(", ")}; review and replace them manually if needed\n`);
+  }
   const recordsDir = path.join(config.dataDir, "records");
   await mkdir(recordsDir, { recursive: true });
   const database = await openCompetDatabase(recordsDir, {
@@ -102,9 +113,6 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       process.stdout.write(chunk);
     };
     let matchmaking: MatchmakingService | undefined;
-    const runtimeEntry = path.resolve(process.argv[1] ?? "src/main.ts");
-    const packaged = path.basename(runtimeEntry) === "main.cjs" && path.basename(path.dirname(runtimeEntry)) === "dist";
-    const assetAppRoot = packaged ? path.dirname(path.dirname(runtimeEntry)) : process.cwd();
     const executor = new MatchExecutor({
       assets: () => loadRunCsgoSource({ appRoot: assetAppRoot,
         ...(packaged ? {} : { developmentRoot: path.join(assetAppRoot, "src/run_csgo") }) }),

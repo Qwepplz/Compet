@@ -268,7 +268,7 @@ foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededT
 }
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
 
-$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "packaging\server\profile-seed\human-index.json", "packaging\assets\compet-icon.ico", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
+$required = @("src\main.ts", "src\sourcemod\compet_match_lock.smx", "src\run_csgo", "src\mysql_preinit\compet_mysql_preinit.ps1", "src\mysql_preinit\compet_mysql_preinit.cmd", "out\main", "out\preload", "out\renderer", "packaging\server\app-package.json", "packaging\server\profile-seed\human-index.json", "packaging\assets\compet-icon.ico", "node_modules\.bin\esbuild.cmd", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
 foreach ($relative in $required) {
   $path = Join-Path $repo $relative
   if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
@@ -320,6 +320,7 @@ Copy-Item -LiteralPath (Join-Path $repo "out") -Destination $appRoot -Recurse
 New-Item -ItemType Directory -Path (Join-Path $appRoot "sourcemod") -Force | Out-Null
 Copy-Item -LiteralPath (Join-Path $repo "src\sourcemod\compet_match_lock.smx") -Destination (Join-Path $appRoot "sourcemod\compet_match_lock.smx")
 Copy-Item -LiteralPath (Join-Path $repo "src\run_csgo") -Destination (Join-Path $appRoot "run_csgo") -Recurse
+Copy-Item -LiteralPath (Join-Path $repo "src\mysql_preinit") -Destination (Join-Path $appRoot "mysql_preinit") -Recurse
 $appPackage = Get-Content -LiteralPath (Join-Path $repo "packaging\server\app-package.json") -Raw | ConvertFrom-Json
 $appPackage | Add-Member -NotePropertyName requiredClientVersion -NotePropertyValue $RequiredClientVersion -Force
 $appPackage | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $appRoot "package.json") -Encoding UTF8
@@ -347,6 +348,8 @@ $requiredArchiveEntries = @(
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\preload\index.js")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "out\renderer\index.html")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "sourcemod\compet_match_lock.smx")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "mysql_preinit\compet_mysql_preinit.ps1")),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "mysql_preinit\compet_mysql_preinit.cmd")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "run_csgo\run_csgo.ps1")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "run_csgo\csgo\cfg\1.cfg")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $appRoot "node_modules\zod\package.json"))
