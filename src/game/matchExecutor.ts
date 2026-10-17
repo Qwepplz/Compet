@@ -40,7 +40,7 @@ export interface MatchConnectInfo {
 export interface MatchExecutorOptions {
   assets?: () => Promise<RunCsgoSource>;
   launcher: GameServerLauncher;
-  records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent">;
+  records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent"> & Partial<Pick<MatchRecordStore, "readServer">>;
   events?: Pick<RealtimeEventBus, "publish">;
   config: GameServerConfig;
   onServerExit?: (matchId: string, report: MatchServerExitReport) => Promise<void> | void;
@@ -112,7 +112,13 @@ export class MatchExecutor {
         clientPort: this.options.config.portRange.start + 1,
       });
 
-      const launched = await this.options.launcher.launch(spec);
+      let launched: LaunchedGameServer;
+      try { launched = await this.options.launcher.launch(spec); }
+      catch (error) {
+        const identity = this.options.launcher.getIdentity?.(this.options.config.serverRoot);
+        if (identity) await this.options.records?.saveServer(matchPlan.id, { identity, port: spec.port });
+        throw error;
+      }
       launchedGame = true;
       const emptyServerWatchdog = this.createEmptyServerWatchdog(matchPlan.id);
       const connect = buildConnectInfo(matchPlan, this.options.config.publicConnectHost, launched.port);
@@ -134,6 +140,22 @@ export class MatchExecutor {
     } catch (error) { if (!launchedGame) activeAssetRoots.delete(assetRoot); throw error; }
   }
 
+  async getGameServerStatus(): Promise<import("../server/adminStatus.js").AdminGameStatus> {
+    const port = this.options.config.portRange.start;
+    if (process.platform === "linux") {
+      const processModule = await import("./linuxProcess.js");
+      const identity = this.options.launcher.getIdentity?.(this.options.config.serverRoot);
+      const [processState, portState] = await Promise.all([
+        identity ? processModule.probeLinuxGameProcess(identity) : processModule.inspectLinuxGameRoot(this.options.config.serverRoot),
+        processModule.inspectLinuxUdpPort(port),
+      ]);
+      const state = processState === "alive" ? "running" : processState === "gone" && portState === "free" ? "stopped" : "unknown";
+      return { state, port, ...(identity && processState === "alive" ? { pid: identity.pid } : {}) };
+    }
+    const { querySourceServer } = await import("./sourceServerMonitor.js");
+    return { state: await querySourceServer("127.0.0.1", port, 500) ? "running" : "unknown", port };
+  }
+
   async stopGameServerPresence(matchId: string): Promise<void> {
     const monitor = this.gameServerPresenceMonitors.get(matchId);
     if (!monitor) return;
@@ -145,13 +167,19 @@ export class MatchExecutor {
       staleAfterMs: 90_000,
       nowMs: Date.now,
     });
-    const owned = Boolean(status) || this.gameServerPresenceMonitors.has(matchId);
+    const saved = process.platform === "linux" ? await this.options.records?.readServer?.(matchId) as { identity?: import("./linuxProcess.js").GameProcessIdentity } | undefined : undefined;
+    const identity = this.options.launcher.getIdentity?.(this.options.config.serverRoot) ?? saved?.identity;
+    const processOwned = process.platform !== "linux" || (identity &&
+      await import("./linuxProcess.js").then(module => module.probeLinuxGameProcess(identity)) === "alive");
+    const owned = (Boolean(status) || this.gameServerPresenceMonitors.has(matchId)) && Boolean(processOwned);
     // Losing ownership does not prove the server is running or stopped.
     // Observe without sending commands to a potentially unrelated server.
     if (owned) await requestSourceModShutdown(this.options.config.serverRoot, matchId);
     const timeoutMs = this.options.gameServerShutdownTimeoutMs ?? DEFAULT_GAME_SERVER_SHUTDOWN_TIMEOUT_MS;
     const pollIntervalMs = this.options.gameServerShutdownPollIntervalMs ?? GAME_SERVER_SHUTDOWN_POLL_INTERVAL_MS;
     const result = await this.waitForGameServerShutdown({
+      ...(identity ? { identity } : {}),
+      serverRoot: this.options.config.serverRoot,
       host: "127.0.0.1",
       port: this.options.config.portRange.start,
       intervalMs: pollIntervalMs,
@@ -201,6 +229,7 @@ export class MatchExecutor {
   private async saveConnectState(matchId: string, launched: LaunchedGameServer, connect: MatchConnectInfo): Promise<void> {
     await this.options.records?.saveServer(matchId, {
       pid: launched.pid,
+      ...(launched.identity ? { identity: launched.identity } : {}),
       port: launched.port,
       clientPort: launched.clientPort,
       connect,

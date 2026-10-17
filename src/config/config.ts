@@ -1,4 +1,5 @@
 import path from "node:path";
+import { assertServerRoots, type ServerLayout } from "../shared/serverPackageLayout.js";
 import { isSemver } from "../shared/version.js";
 import { z } from "zod";
 import { DEFAULT_PROFILE_BASE_URL } from "../profiles/humanProfileIndex.js";
@@ -20,20 +21,39 @@ export interface ServerConfig {
   gameServer: GameServerConfig;
 }
 
-const positiveInt = z.coerce.number().int().positive();
 const detectedPublicConnectHost = defaultPublicConnectHost();
 
+export const serverConfigSchema = z.strictObject({
+  requiredClientVersion: z.string().refine(isSemver, "Invalid SemVer"),
+  host: z.string().min(1).default("0.0.0.0"),
+  port: z.number().int().positive().max(65535).default(8443),
+  dataDir: z.string().min(1),
+  tokenTtlMinutes: z.number().int().positive().default(1440),
+  profileBaseUrl: z.string().url().default(DEFAULT_PROFILE_BASE_URL),
+  gameServer: z.strictObject({
+    serverRoot: z.string(),
+    publicConnectHost: z.string().min(1).default(detectedPublicConnectHost),
+    portRange: z.strictObject({
+      start: z.number().int().positive().max(65535).default(27015),
+      end: z.number().int().positive().max(65535).default(27030),
+    }).refine(range => range.end >= range.start, "Invalid port range"),
+  }),
+});
+
+const numberFromEnv = (schema: z.ZodType<number>) =>
+  z.preprocess(value => value === undefined ? undefined : Number(value), schema).default(schema.parse(undefined));
+const gameSchema = serverConfigSchema.shape.gameServer.shape;
 const envSchema = z.object({
-  COMPET_REQUIRED_CLIENT_VERSION: z.string().refine(isSemver, "Invalid SemVer"),
-  COMPET_HOST: z.string().min(1).default("0.0.0.0"),
-  COMPET_PORT: positiveInt.max(65535).default(8443),
-  COMPET_DATA_DIR: z.string().min(1).optional(),
-  COMPET_TOKEN_TTL_MINUTES: positiveInt.default(1440),
-  COMPET_PROFILE_BASE_URL: z.string().min(1).url().default(DEFAULT_PROFILE_BASE_URL),
-  COMPET_CSGO_SERVER_ROOT: z.string().default(""),
-  COMPET_PUBLIC_CONNECT_HOST: z.string().min(1).default(detectedPublicConnectHost),
-  COMPET_GAME_PORT_START: positiveInt.max(65535).default(27015),
-  COMPET_GAME_PORT_END: positiveInt.max(65535).default(27030),
+  COMPET_REQUIRED_CLIENT_VERSION: serverConfigSchema.shape.requiredClientVersion,
+  COMPET_HOST: serverConfigSchema.shape.host,
+  COMPET_PORT: numberFromEnv(serverConfigSchema.shape.port),
+  COMPET_DATA_DIR: serverConfigSchema.shape.dataDir.optional(),
+  COMPET_TOKEN_TTL_MINUTES: numberFromEnv(serverConfigSchema.shape.tokenTtlMinutes),
+  COMPET_PROFILE_BASE_URL: serverConfigSchema.shape.profileBaseUrl,
+  COMPET_CSGO_SERVER_ROOT: gameSchema.serverRoot.default(""),
+  COMPET_PUBLIC_CONNECT_HOST: gameSchema.publicConnectHost,
+  COMPET_GAME_PORT_START: numberFromEnv(gameSchema.portRange.shape.start),
+  COMPET_GAME_PORT_END: numberFromEnv(gameSchema.portRange.shape.end),
 });
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.cwd()): ServerConfig {
@@ -43,7 +63,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
   }
 
   const dataDir = parsed.COMPET_DATA_DIR ?? path.join(cwd, "server-data");
-  return {
+  return serverConfigSchema.parse({
     requiredClientVersion: parsed.COMPET_REQUIRED_CLIENT_VERSION,
     host: parsed.COMPET_HOST,
     port: parsed.COMPET_PORT,
@@ -58,5 +78,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env, cwd = process.c
         end: parsed.COMPET_GAME_PORT_END,
       },
     },
-  };
+  });
+}
+
+export function assertServerConfigPaths(config: ServerConfig, layout: ServerLayout): void {
+  assertServerRoots({ platform: layout.platform, installRoot: layout.installRoot,
+    dataDir: config.dataDir, serverRoot: config.gameServer.serverRoot });
 }

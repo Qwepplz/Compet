@@ -203,6 +203,7 @@ type ReadyTimeoutScheduler = (handler: () => void, timeoutMs: number) => ReadyTi
 type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
 
 export interface MatchExecutorPort {
+  getGameServerStatus?(): Promise<import("../server/adminStatus.js").AdminGameStatus>;
   prepare(plan: MatchPlan): Promise<MatchConnectInfo>;
   deleteMatchArtifacts?(matchId: string): Promise<void>;
   requestGameServerShutdown?(matchId: string): Promise<GameServerShutdownResult>;
@@ -218,6 +219,7 @@ export interface MatchDatabaseBackup {
 }
 
 export interface MatchmakingServiceDeps {
+  isServerUpdateBlocked?: () => Promise<boolean>;
   playerPolicies: PlayerMatchPolicyPort;
   store: MatchmakingStore;
   accounts: AccountService;
@@ -1724,6 +1726,46 @@ export class MatchmakingService {
       }
       this.maintenanceRequested = true;
     });
+  }
+
+  private async readAdminSnapshot() {
+    const [rooms, parties, queue, cleanup] = await Promise.all([
+      this.deps.store.listRooms(), this.deps.store.listParties(),
+      this.deps.store.listQueue(), this.deps.store.listPendingBackupCleanupMatchIds(),
+    ]);
+    const pending = new Set(cleanup);
+    return { rooms, queue, pendingCleanupCount: pending.size,
+      occupancy: this.occupancySummary(this.pruneTerminalRooms(rooms, parties, pending), parties, pending) };
+  }
+
+  async getMaintenanceStatus(): Promise<import("../server/adminStatus.js").MaintenanceStatus> {
+    return this.enqueueMutation(async () => {
+      const snapshot = await this.readAdminSnapshot();
+      return { requested: this.maintenanceRequested, occupancy: snapshot.occupancy, pendingCleanupCount: snapshot.pendingCleanupCount };
+    });
+  }
+
+  async leaveMaintenance(): Promise<void> {
+    return this.enqueueMutation(async () => {
+      let blocked = true;
+      try { blocked = await this.deps.isServerUpdateBlocked?.() ?? true; } catch { /* Unknown update ownership remains blocked. */ }
+      if (blocked) throw Object.assign(new Error("maintenance_update_in_progress"), { code: "maintenance_update_in_progress" });
+      this.maintenanceRequested = false;
+    });
+  }
+
+  async getAdminServerStatus(): Promise<import("../server/adminStatus.js").AdminServerStatus> {
+    const snapshot = await this.enqueueMutation(async () => ({ ...await this.readAdminSnapshot(), maintenanceRequested: this.maintenanceRequested }));
+    const game = await this.deps.executor?.getGameServerStatus?.() ?? { state: "unknown" as const };
+    return {
+      maintenanceRequested: snapshot.maintenanceRequested, occupancy: snapshot.occupancy,
+      queue: { count: snapshot.queue.length, entries: snapshot.queue.map(entry => ({ accountId: entry.accountId,
+        ...(entry.partyId ? { partyId: entry.partyId } : {}), queuedAt: entry.queuedAt })) },
+      matches: snapshot.rooms.map(room => ({ id: room.id, phase: room.phase, createdAt: room.createdAt,
+        ...(room.partyId ? { partyId: room.partyId } : {}), ...(room.mapSelection ? { map: room.mapSelection.finalMap } : {}),
+        humanCount: room.humanAccountIds?.length ?? [room.teamA, room.teamB].reduce((count, team) =>
+          count + (team?.participants.filter(player => player.kind === "human").length ?? 0), 0) })), game,
+    };
   }
 
   async getOccupancy(): Promise<MatchmakingOccupancySummary> {

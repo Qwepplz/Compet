@@ -1,6 +1,8 @@
 import path from "node:path";
 import { execFile } from "node:child_process";
-import { access, readFile } from "node:fs/promises";
+import { readFile } from "node:fs/promises";
+import { resolveMysqlTool } from "../shared/mysqlCli.js";
+import type { ServerPlatform } from "../shared/serverPackageLayout.js";
 import { promisify } from "node:util";
 import {
   buildRankmeLeaderboardSnapshot,
@@ -35,14 +37,6 @@ export interface RankmeDatabaseConfig {
   password: string;
   port: number;
 }
-
-const mysqlCliPaths = [
-  "mysql.exe",
-  path.join(process.env.ProgramFiles ?? "C:\\Program Files", "MySQL", "MySQL Server 5.6", "bin", "mysql.exe"),
-  path.join(process.env.ProgramFiles ?? "C:\\Program Files", "MySQL", "MySQL Server 8.0", "bin", "mysql.exe"),
-  path.join(process.env.ProgramFiles ?? "C:\\Program Files", "MySQL", "MySQL Workbench 8.0", "mysql.exe"),
-  path.join(process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)", "MySQL", "MySQL Server 5.6", "bin", "mysql.exe"),
-];
 
 export function parseRankmeDatabaseConfig(source: string): RankmeDatabaseConfig | null {
   const block = source.match(/"rankme"\s*\{([\s\S]*?)\}/)?.[1];
@@ -182,23 +176,8 @@ export class RankmeLeaderboardCache {
 }
 
 export async function resolveMysqlCliPath(): Promise<string | null> {
-  for (const candidate of mysqlCliPaths) {
-    if (candidate === "mysql.exe") {
-      try {
-        await execFileAsync(candidate, ["--version"], { windowsHide: true });
-        return candidate;
-      } catch {
-        continue;
-      }
-    }
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      continue;
-    }
-  }
-  return null;
+  try { return await resolveMysqlTool({ platform: (process.platform + "-" + process.arch) as ServerPlatform, tool: "mysql" }); }
+  catch { return null; }
 }
 
 export class RankmeScoreStore implements RankmeScoreReader {

@@ -15,11 +15,9 @@ $version = $Version
 
 $packageRoot = Resolve-Path $PackageDir
 if ($AppId -eq "compet-server-manager") {
-  Push-Location (Join-Path $PSScriptRoot "..")
-  try {
-    & node --import tsx (Join-Path $PSScriptRoot "create-package-inventory.ts") verify $packageRoot.Path $version
-  } finally { Pop-Location }
-  if ($LASTEXITCODE -ne 0) { throw "Server package inventory does not match the package." }
+  & node --import tsx (Join-Path $PSScriptRoot "create-server-update-feed.ts") $packageRoot.Path $OutputDir "win32-x64" $version $LatestUrlBase
+  if ($LASTEXITCODE -ne 0) { throw "Server package feed generation failed." }
+  return
 }
 $outputRoot = New-Item -ItemType Directory -Path $OutputDir -Force
 Remove-Item -LiteralPath (Join-Path $outputRoot "files") -Recurse -Force -ErrorAction SilentlyContinue

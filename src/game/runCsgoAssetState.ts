@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { assertManagedRelativePath, assertPlainPath, buildServerUpdatePlan, fingerprintFile, sameFingerprint,
   validatePackageInventory, type PackageFile, type PackageInventory, type FileFingerprint } from "../desktop/main/serverManagedFiles.js";
@@ -13,7 +13,7 @@ const active = new Set<string>();
 const templatePaths = new Set(["csgo/cfg/1.cfg", "csgo/cfg/sourcemod/sourcemod.cfg"]);
 const fingerprintText = (value: string): FileFingerprint => ({ size: Buffer.byteLength(value), sha256: createHash("sha256").update(value).digest("hex").toUpperCase() });
 interface AssetState { schemaVersion: 1; root: string; version: string; files: PackageFile[]; transactionId: string }
-interface AssetEntry { path: string; before: FileFingerprint | null; backup: string; template?: FileFingerprint }
+interface AssetEntry { path: string; before: FileFingerprint | null; beforeMode?: number; backup: string; template?: FileFingerprint }
 interface AssetJournal { schemaVersion: 2; intentCount: number; root: string; id: string; previous: AssetState | null; owned: PackageInventory | null; target: PackageInventory; entries: AssetEntry[] }
 export interface RunCsgoAssetTransaction {
   writeTemplate(relative: string, current: string, next: string): Promise<boolean>;
@@ -24,6 +24,11 @@ export interface AssetInstallInput {
   legacyFiles: ReadonlyArray<{ path: string; sha256: string; version: string }>;
 }
 function fail(code: string): never { throw Object.assign(new Error(code), { code }); }
+async function matchesBefore(root: string, entry: AssetEntry): Promise<boolean> {
+  const target = path.join(root, entry.path);
+  return sameFingerprint(await fingerprintFile(target), entry.before) &&
+    (entry.beforeMode === undefined || ((await lstat(target)).mode & 0o777) === entry.beforeMode);
+}
 const asInventory = (version: string, files: PackageFile[]): PackageInventory =>
   validatePackageInventory({ schemaVersion: 1, appId: "compet-server-manager", version, files });
 
@@ -90,6 +95,7 @@ async function readJournal(root: string, directory: string): Promise<AssetJourna
       journal.previous?.files.some(file => !owned?.files.some(old => old.path === file.path && sameFingerprint(old, file)))) fail("asset_journal_invalid");
   const seen = new Set<string>();
   for (const [index, entry] of journal.entries.entries()) {
+    if (entry.beforeMode !== undefined && (!entry.before || !Number.isInteger(entry.beforeMode) || entry.beforeMode < 0 || entry.beforeMode > 0o777)) fail("asset_journal_invalid");
     assertManagedRelativePath(entry.path);
     if (entry.path.toLowerCase().startsWith(".compet-") || seen.has(entry.path.toLowerCase()) || entry.backup !== index + ".bin") fail("asset_journal_invalid");
     seen.add(entry.path.toLowerCase());
@@ -107,7 +113,10 @@ async function committed(root: string, journal: AssetJournal): Promise<boolean> 
   if (current?.transactionId !== journal.id) return false;
   if (current.version !== journal.target.version || current.files.length !== journal.target.files.length ||
       current.files.some((file, index) => file.path !== journal.target.files[index]?.path)) fail("asset_state_invalid");
-  for (const file of current.files) if (!sameFingerprint(await fingerprintFile(path.join(root, file.path)), file)) fail("asset_committed_file_invalid");
+  for (const file of current.files) {
+    if (!sameFingerprint(await fingerprintFile(path.join(root, file.path)), file) ||
+        (file.mode !== undefined && process.platform === "linux" && ((await lstat(path.join(root, file.path))).mode & 0o777) !== file.mode)) fail("asset_committed_file_invalid");
+  }
   for (const entry of journal.entries) {
     if (!current.files.some(file => file.path === entry.path) && await fingerprintFile(path.join(root, entry.path))) fail("asset_committed_file_invalid");
   }
@@ -142,15 +151,18 @@ async function restore(root: string): Promise<void> {
     const target = path.join(root, entry.path);
     await assertPlainPath(target);
     const actual = await fingerprintFile(target);
-    if (sameFingerprint(actual, entry.before)) continue;
+    const mode = actual && process.platform === "linux" ? (await lstat(target)).mode & 0o777 : undefined;
+    if (sameFingerprint(actual, entry.before) && (entry.beforeMode === undefined || mode === entry.beforeMode)) continue;
     const intended = journal.target.files.find(file => file.path === entry.path) ?? null;
-    if (!sameFingerprint(actual, intended) && !(entry.template && sameFingerprint(actual, entry.template))) {
+    if ((!sameFingerprint(actual, intended) && !(entry.template && sameFingerprint(actual, entry.template))) ||
+        (mode !== undefined && intended?.mode !== undefined && mode !== intended.mode && mode !== entry.beforeMode)) {
       conflicts.push(entry.path);
       continue;
     }
     if (entry.before) {
       await mkdir(path.dirname(target), { recursive: true });
       await copyFile(path.join(directory, entry.backup), target);
+      if (entry.beforeMode !== undefined && process.platform === "linux") await chmod(target, entry.beforeMode);
       const handle = await open(target, "r+");
       try { await handle.sync(); } finally { await handle.close(); }
       if (!sameFingerprint(await fingerprintFile(target), entry.before)) fail("asset_recovery_failed");
@@ -162,13 +174,13 @@ async function restore(root: string): Promise<void> {
   await cleanTransaction(root, journal);
 }
 export async function recoverRunCsgoAssets(serverRoot: string): Promise<void> {
-  const root = path.resolve(serverRoot), key = root.toLowerCase();
+  const root = path.resolve(serverRoot), key = process.platform === "win32" ? root.toLowerCase() : root;
   if (active.has(key)) fail("asset_transaction_busy");
   active.add(key);
   try { await restore(root); } finally { active.delete(key); }
 }
 export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunCsgoAssetTransaction> {
-  const root = path.resolve(input.serverRoot), key = root.toLowerCase();
+  const root = path.resolve(input.serverRoot), key = process.platform === "win32" ? root.toLowerCase() : root;
   if (active.has(key)) fail("asset_transaction_busy");
   active.add(key);
   let journalCreated = false;
@@ -176,7 +188,8 @@ export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunC
     await assertPlainPath(root);
     await mkdir(root, { recursive: true });
     await restore(root);
-    const target = asInventory(input.version, input.files);
+    const target = asInventory(input.version, await Promise.all(input.files.map(async file => ({ ...file,
+      ...(process.platform === "linux" ? { mode: file.mode ?? ((await lstat(path.join(input.sourceRoot, file.path))).mode & 0o111 ? 0o755 : 0o644) } : {}) }))));
     if (target.files.some(file => file.path.toLowerCase().startsWith(".compet-"))) fail("asset_path_invalid");
     for (const file of target.files) {
       if (!sameFingerprint(await fingerprintFile(path.join(input.sourceRoot, file.path)), file)) fail("asset_source_invalid");
@@ -204,7 +217,9 @@ export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunC
     const journal: AssetJournal = { schemaVersion: 2, intentCount: 0, root, id: randomUUID(), previous, owned: current, target, entries: [] };
     const directory = path.join(root, stagingName);
     for (const [index, relative] of allPaths.entries()) {
-      journal.entries.push({ path: relative, before: await fingerprintFile(path.join(root, relative)), backup: index + ".bin" });
+      const before = await fingerprintFile(path.join(root, relative));
+      journal.entries.push({ path: relative, before, backup: index + ".bin",
+        ...(before && process.platform === "linux" ? { beforeMode: (await lstat(path.join(root, relative))).mode & 0o777 } : {}) });
     }
     await mkdir(directory);
     await writeDurable(path.join(directory, "journal.json"), journal);
@@ -216,21 +231,22 @@ export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunC
         if (!sameFingerprint(await fingerprintFile(path.join(directory, entry.backup)), entry.before)) fail("asset_backup_invalid");
       }
     }
-    for (const entry of journal.entries) if (!sameFingerprint(await fingerprintFile(path.join(root, entry.path)), entry.before)) fail("asset_target_changed");
+    for (const entry of journal.entries) if (!await matchesBefore(root, entry)) fail("asset_target_changed");
     await rename(directory, path.join(root, transactionName));
     journalCreated = true;
     for (const entry of journal.entries) {
       const destination = path.join(root, entry.path);
-      if (!sameFingerprint(await fingerprintFile(destination), entry.before)) fail("asset_target_changed");
+      if (!await matchesBefore(root, entry)) fail("asset_target_changed");
       // Persist intent before mutation so a crash during copy/delete remains recoverable.
       const nextJournal = { ...journal, intentCount: journal.intentCount + 1 };
       await writeDurable(path.join(root, transactionName, "journal.json"), nextJournal);
       journal.intentCount = nextJournal.intentCount;
-      if (!sameFingerprint(await fingerprintFile(destination), entry.before)) fail("asset_target_changed");
+      if (!await matchesBefore(root, entry)) fail("asset_target_changed");
       const file = target.files.find(file => file.path === entry.path);
       if (file) {
         await mkdir(path.dirname(destination), { recursive: true });
         await copyFile(path.join(input.sourceRoot, file.path), destination);
+        if (file.mode !== undefined && process.platform === "linux") await chmod(destination, file.mode);
         if (!sameFingerprint(await fingerprintFile(destination), file)) fail("asset_source_invalid");
       } else await rm(destination, { force: true });
     }
@@ -254,6 +270,7 @@ export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunC
         const temporary = path.join(root, transactionName, entry.backup + ".template");
         const handle = await open(temporary, "wx");
         try { await handle.writeFile(next); await handle.sync(); } finally { await handle.close(); }
+        if (published.mode !== undefined && process.platform === "linux") await chmod(temporary, published.mode);
         if (!sameFingerprint(await fingerprintFile(temporary), template)) fail("asset_template_invalid");
         if (!sameFingerprint(await fingerprintFile(destination), published)) fail("asset_target_changed");
         await rename(temporary, destination);
@@ -271,7 +288,8 @@ export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunC
             if (!sameFingerprint(actual, expected)) fail("asset_target_changed");
             const handle = await open(path.join(root, file.path), "r+");
             try { await handle.sync(); } finally { await handle.close(); }
-            files.push({ path: file.path, ...actual });
+            if (file.mode !== undefined && process.platform === "linux" && ((await lstat(path.join(root, file.path))).mode & 0o777) !== file.mode) fail("asset_target_changed");
+            files.push({ path: file.path, ...actual, ...(file.mode === undefined ? {} : { mode: file.mode }) });
           }
           await writeDurable(path.join(root, stateName), { schemaVersion: 1, root, version: target.version, files, transactionId: journal.id });
           await cleanTransaction(root, journal);

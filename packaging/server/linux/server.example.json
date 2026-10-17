@@ -1,0 +1,16 @@
+{
+  "requiredClientVersion": "1.6.8",
+  "host": "0.0.0.0",
+  "port": 8443,
+  "dataDir": "/var/lib/compet",
+  "tokenTtlMinutes": 1440,
+  "profileBaseUrl": "https://qwepplz111.site/cos-upload",
+  "gameServer": {
+    "serverRoot": "/home/qwe/csgo-server",
+    "publicConnectHost": "127.0.0.1",
+    "portRange": {
+      "start": 27015,
+      "end": 27030
+    }
+  }
+}

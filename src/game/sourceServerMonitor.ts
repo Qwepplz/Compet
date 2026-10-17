@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import dgram from "node:dgram";
 import { promisify } from "node:util";
 import { delay } from "../shared/async.js";
+import { inspectLinuxGameRoot, inspectLinuxUdpPort, probeLinuxGameProcess, type GameProcessIdentity } from "./linuxProcess.js";
 
 export interface SourceServerExitMonitorSpec {
   host: string;
@@ -10,6 +11,8 @@ export interface SourceServerExitMonitorSpec {
   queryTimeoutMs: number;
   missedResponsesBeforeExit: number;
   startupObservationTimeoutMs: number;
+  identity?: GameProcessIdentity;
+  serverRoot?: string;
 }
 
 export type SourceServerExitMonitorResult = "closed" | "not_observed";
@@ -45,6 +48,15 @@ export async function waitForSourceServerExit(
 }
 
 export async function isSourceServerObservable(spec: SourceServerExitMonitorSpec): Promise<boolean> {
+  if (process.platform === "linux") {
+    const [port, processState, rootState] = await Promise.all([
+      inspectLinuxUdpPort(spec.port),
+      spec.identity ? probeLinuxGameProcess(spec.identity) :
+        spec.serverRoot ? inspectLinuxGameRoot(spec.serverRoot) : Promise.resolve("unknown"),
+      spec.serverRoot ? inspectLinuxGameRoot(spec.serverRoot) : Promise.resolve("gone"),
+    ]);
+    return port !== "free" || processState !== "gone" || rootState !== "gone";
+  }
   const [queryAlive, ownerPid] = await Promise.all([
     querySourceServer(spec.host, spec.port, spec.queryTimeoutMs),
     findUdpPortOwnerPid(spec.port),
@@ -95,10 +107,38 @@ export async function querySourceServer(host: string, port: number, timeoutMs: n
     };
 
     const timer = setTimeout(() => done(false), timeoutMs);
-    socket.once("message", () => done(true));
+    let challenges = 0;
+    socket.on("message", message => {
+      if (message.length === 9 && message.readUInt32LE(0) === 0xffffffff && message[4] === 0x41) {
+        if (++challenges > 2) return;
+        socket.send(Buffer.concat([A2S_INFO_QUERY, message.subarray(5)]), error => { if (error) done(false); });
+      } else if (validInfoResponse(message)) done(true);
+    });
     socket.once("error", () => done(false));
-    socket.send(A2S_INFO_QUERY, port, host, (error) => {
-      if (error) done(false);
+    socket.connect(port, host, () => {
+      socket.send(A2S_INFO_QUERY, error => { if (error) done(false); });
     });
   });
+}
+
+function validInfoResponse(message: Buffer): boolean {
+  if (message.length < 6 || message.length > 4096 || message.readUInt32LE(0) !== 0xffffffff || message[4] !== 0x49) return false;
+  let offset = 6;
+  const string = () => {
+    const end = message.indexOf(0, offset);
+    if (end < 0) return false;
+    offset = end + 1; return true;
+  };
+  for (let n = 0; n < 4; n++) if (!string()) return false;
+  offset += 9;
+  if (offset > message.length || !string()) return false;
+  if (offset === message.length) return true;
+  const flags = message[offset++]!;
+  if (flags & ~0xf1) return false;
+  if (flags & 0x80) offset += 2;
+  if (flags & 0x10) offset += 8;
+  if (flags & 0x40) { offset += 2; if (!string()) return false; }
+  if (flags & 0x20) if (!string()) return false;
+  if (flags & 0x01) offset += 8;
+  return offset === message.length;
 }

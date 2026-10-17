@@ -140,9 +140,10 @@ export function SettingsPage() {
     setInstallingUpdate(true);
     try {
       const result = await managerApi.installUpdate();
-      if (result.status === "installing") message.info(t("manager.settings.updateDownloaded"));
+      if (result.status === "handed_off") message.info(t("manager.settings.updateDownloaded"));
+      else if (result.status === "completed") { message.success(t("manager.settings.updateDownloaded")); setInstallingUpdate(false); }
       else if (result.status === "no_changes") { message.info(t("manager.settings.latest")); setInstallingUpdate(false); }
-      else { message.error(`${t(result.status === "blocked" ? "manager.settings.updateBlocked" : "errors.updateInstallFailed")} (${result.error})`); setInstallingUpdate(false); }
+      else { message.error(`${t(result.status === "blocked" ? "manager.settings.updateBlocked" : "errors.updateInstallFailed")} (${result.code ?? "maintenance_failed"})`); setInstallingUpdate(false); }
     } catch (caught) {
       const messageText = displayError(caught, t, "errors.updateInstallFailed");
       message.error(messageText);

@@ -162,6 +162,10 @@ async function atomicWrite(filePath: string, content: string): Promise<void> {
 
 export async function readMaintenancePlan(directory: string): Promise<MaintenancePlan> {
   try {
+    try {
+      await lstat(path.join(directory, "plan.json"));
+      throw Object.assign(new Error("Conflicting maintenance plan formats"), { code: "update_transaction_format_conflict" });
+    } catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     return parsePlan(directory, await readFile(path.join(directory, "plan.txt"), "utf8"));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") throw new Error("Maintenance transaction incomplete: plan");

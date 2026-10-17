@@ -25,7 +25,9 @@ const RUN_CSGO_LAUNCH_SCRIPT = "run_csgo.ps1";
 
 export function buildRunCsgoLaunchSpec(input: RunCsgoLaunchInput): RunCsgoLaunchSpec {
   validateInput(input);
-  const launchScriptPath = path.normalize(path.join(input.serverRoot, RUN_CSGO_LAUNCH_SCRIPT));
+  const linux = process.platform === "linux";
+  if (!linux && process.platform !== "win32") throw new Error("game_platform_unsupported");
+  const launchScriptPath = path.normalize(path.join(input.serverRoot, linux ? "run_csgo.sh" : RUN_CSGO_LAUNCH_SCRIPT));
   if (!existsSync(launchScriptPath)) {
     throw new Error(`Missing run_csgo launch script: ${launchScriptPath}`);
   }
@@ -39,21 +41,21 @@ export function buildRunCsgoLaunchSpec(input: RunCsgoLaunchInput): RunCsgoLaunch
   };
 
   return {
-    command: process.platform === "win32" ? "powershell.exe" : "pwsh",
-    args: ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", launchScriptPath],
+    command: linux ? "/bin/bash" : "powershell.exe",
+    args: linux ? [launchScriptPath] : ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", launchScriptPath],
     cwd: input.serverRoot,
     env: commonEnv,
     port: input.port,
     clientPort: input.clientPort,
-    exitIndicatesServerExit: false,
-    serverExitMonitor: {
+    exitIndicatesServerExit: linux,
+    ...(linux ? {} : { serverExitMonitor: {
       host: "127.0.0.1",
       port: input.port,
       intervalMs: 1_000,
       queryTimeoutMs: 750,
       missedResponsesBeforeExit: 3,
       startupObservationTimeoutMs: 60_000,
-    },
+    } }),
   };
 }
 

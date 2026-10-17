@@ -1,0 +1,4 @@
+#!/bin/sh
+set -eu
+COMPET_ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$COMPET_ROOT/runtime/node/bin/node" "$COMPET_ROOT/dist/cli.cjs" "$@"

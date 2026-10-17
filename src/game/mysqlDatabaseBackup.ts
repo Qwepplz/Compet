@@ -1,18 +1,15 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { execFile } from "node:child_process";
 import { createReadStream, createWriteStream, existsSync } from "node:fs";
-import { access, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
-import { promisify } from "node:util";
+import { resolveMysqlTools, type MysqlToolsInput } from "../shared/mysqlCli.js";
 import {
   parseRankmeDatabaseConfig,
-  resolveMysqlCliPath,
   type RankmeDatabaseConfig,
 } from "../rankme/rankmeScoreStore.js";
 
-const execFileAsync = promisify(execFile);
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 export type MysqlDatabaseConfig = RankmeDatabaseConfig;
@@ -114,25 +111,21 @@ export function mysqlBackupFilePath(backupDir: string, matchId: string): string 
   return path.join(backupDir, `${matchId}.sql`);
 }
 
-class MysqlCliBackupProcess implements MysqlBackupProcess {
+export class MysqlCliBackupProcess implements MysqlBackupProcess {
   private constructor(
     private readonly mysqlPath: string,
     private readonly mysqldumpPath: string,
   ) {}
 
-  static async create(): Promise<MysqlCliBackupProcess> {
-    const mysqlPath = await resolveMysqlCliPath();
-    if (!mysqlPath) throw new Error("mysql.exe not found");
-
-    const mysqldumpPath = await resolveMysqldumpCliPath(mysqlPath);
-    if (!mysqldumpPath) throw new Error("mysqldump.exe not found");
-
-    return new MysqlCliBackupProcess(mysqlPath, mysqldumpPath);
+  static async create(input: MysqlToolsInput = { platform: (process.platform + "-" + process.arch) as MysqlToolsInput["platform"] }): Promise<MysqlCliBackupProcess> {
+    const tools = await resolveMysqlTools(input);
+    return new MysqlCliBackupProcess(tools.mysql, tools.mysqldump);
   }
 
   async dump(database: MysqlDatabaseConfig, filePath: string, signal?: AbortSignal): Promise<void> {
     const child = spawn(this.mysqldumpPath, [
       "--single-transaction",
+      "--no-tablespaces",
       "--quick",
       "--routines",
       "--triggers",
@@ -153,7 +146,7 @@ class MysqlCliBackupProcess implements MysqlBackupProcess {
 
     const results = await Promise.allSettled([
       pipeline(child.stdout, createWriteStream(filePath)),
-      waitForProcess(child, "mysqldump"),
+      waitForProcess(child, "mysqldump", database.password),
     ]);
     const failed = results.find((result) => result.status === "rejected");
     if (failed?.status === "rejected") throw failed.reason;
@@ -173,35 +166,9 @@ class MysqlCliBackupProcess implements MysqlBackupProcess {
 
     await Promise.all([
       pipeline(createReadStream(filePath), child.stdin),
-      waitForProcess(child, "mysql"),
+      waitForProcess(child, "mysql", database.password),
     ]);
   }
-}
-
-async function resolveMysqldumpCliPath(mysqlPath: string): Promise<string | null> {
-  const candidates: string[] = [];
-  const mysqlDir = path.dirname(mysqlPath);
-  if (mysqlDir && mysqlDir !== ".") candidates.push(path.join(mysqlDir, "mysqldump.exe"));
-  candidates.push("mysqldump.exe");
-
-  for (const candidate of candidates) {
-    if (candidate === "mysqldump.exe") {
-      try {
-        await execFileAsync(candidate, ["--version"], { windowsHide: true });
-        return candidate;
-      } catch {
-        continue;
-      }
-    }
-
-    try {
-      await access(candidate);
-      return candidate;
-    } catch {
-      continue;
-    }
-  }
-  return null;
 }
 
 function mysqlEnv(database: MysqlDatabaseConfig): NodeJS.ProcessEnv {
@@ -228,7 +195,7 @@ function quoteMysqlIdentifier(value: string): string {
   return `\`${value.replace(/`/g, "``")}\``;
 }
 
-function waitForProcess(child: ReturnType<typeof spawn>, label: string): Promise<void> {
+function waitForProcess(child: ReturnType<typeof spawn>, label: string, password: string): Promise<void> {
   let stderr = "";
   child.stderr?.on("data", (chunk: Buffer) => {
     if (stderr.length < 8192) stderr += chunk.toString("utf8");
@@ -243,7 +210,8 @@ function waitForProcess(child: ReturnType<typeof spawn>, label: string): Promise
         resolve();
         return;
       }
-      reject(new Error(`${label} exited with code ${code}: ${stderr.trim()}`));
+      const detail = password ? stderr.replaceAll(password, "[redacted]") : stderr;
+      reject(Object.assign(new Error(`${label} exited with code ${code}: ${detail.trim()}`), { code: "mysql_process_failed" }));
     });
   });
 }

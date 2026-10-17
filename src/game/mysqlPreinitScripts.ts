@@ -2,6 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { fstat, type Stats } from "node:fs";
 import { link, lstat, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
+import type { ServerPlatform } from "../shared/serverPackageLayout.js";
 import { assertPlainPath, fingerprintFile, sameFingerprint, type FileFingerprint } from "../desktop/main/serverManagedFiles.js";
 
 export const MYSQL_PREINIT_SCRIPT_FILES = [
@@ -43,6 +44,7 @@ interface StagedScript {
 export async function publishMysqlPreinitScripts(input: {
   sourceRoot: string;
   serverRoot: string;
+  platform?: ServerPlatform;
 }): Promise<MysqlPreinitPublishResult> {
   const sourceRoot = path.resolve(input.sourceRoot);
   const serverRoot = path.resolve(input.serverRoot);
@@ -50,7 +52,9 @@ export async function publishMysqlPreinitScripts(input: {
     if (!(await inspect(root))?.isDirectory()) fail("mysql_preinit_root_invalid", root);
   }
   const sources: Array<{ name: string; bytes: Buffer; fingerprint: FileFingerprint }> = [];
-  for (const name of MYSQL_PREINIT_SCRIPT_FILES) {
+  const scriptFiles: readonly string[] = (input.platform ?? process.platform + "-" + process.arch) === "linux-x64"
+    ? ["compet_mysql_preinit.sh"] : MYSQL_PREINIT_SCRIPT_FILES;
+  for (const name of scriptFiles) {
     const file = path.join(sourceRoot, name);
     await inspect(file);
     const fingerprint = await fingerprintFile(file);
@@ -68,7 +72,8 @@ export async function publishMysqlPreinitScripts(input: {
     const target = path.join(serverRoot, source.name);
     const info = await inspect(target);
     if (!info) missing.push(source);
-    else if (!info.isFile() || !sameFingerprint(await fingerprintFile(target), source.fingerprint)) {
+    else if (!info.isFile() || !sameFingerprint(await fingerprintFile(target), source.fingerprint) ||
+        (source.name.endsWith(".sh") && (info.mode & 0o111) === 0)) {
       result.preserved.push(source.name);
     } else result.unchanged.push(source.name);
   }
@@ -102,6 +107,7 @@ export async function publishMysqlPreinitScripts(input: {
         stage.dev = info.dev;
         stage.ino = info.ino;
         await handle.writeFile(source.bytes);
+        if (source.name.endsWith(".sh")) await handle.chmod(0o755);
         await handle.sync();
       } catch (error) {
         stagingError = error;

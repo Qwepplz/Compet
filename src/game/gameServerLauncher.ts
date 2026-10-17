@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 
 import type { RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
+import type { GameProcessIdentity } from "./linuxProcess.js";
 
 export interface GameServerExitInfo {
   code: number | null;
@@ -10,6 +11,8 @@ export interface GameServerExitInfo {
 
 export interface LaunchedGameServer {
   pid?: number;
+  wrapperPid?: number;
+  identity?: GameProcessIdentity;
   port: number;
   clientPort: number;
   stop(): Promise<void>;
@@ -18,6 +21,7 @@ export interface LaunchedGameServer {
 }
 
 export interface GameServerLauncher {
+  getIdentity?(serverRoot: string): GameProcessIdentity | undefined;
   launch(spec: RunCsgoLaunchSpec): Promise<LaunchedGameServer>;
 }
 

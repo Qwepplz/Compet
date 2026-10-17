@@ -22,6 +22,11 @@ const schema = z.object({
   steamAccountToken: z.string().default(""),
 });
 
+export function parseManagerConfig(raw: unknown, appRoot: string): ManagerConfig {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new TypeError("Invalid Manager configuration");
+  return schema.parse({ dataDir: path.join(appRoot, "server-data"), ...raw });
+}
+
 class ServerRootValidationError extends Error {
   constructor(readonly code: ServerRootValidationErrorCode) {
     super(code);
@@ -74,7 +79,7 @@ export class FileConfigStore {
   async load(): Promise<ManagerConfig> {
     try {
       const raw = JSON.parse(await readFile(this.filePath, "utf8"));
-      return this.normalizeLoadedConfig(schema.parse({ dataDir: path.join(this.appRoot, "server-data"), ...raw }));
+      return this.normalizeLoadedConfig(parseManagerConfig(raw, this.appRoot));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       return this.defaultConfig();
@@ -99,6 +104,8 @@ export class FileConfigStore {
   }
 
   private defaultServerCommand(): string {
+    const rootNode = path.resolve(this.appRoot, "../../../../runtime/node/node.exe");
+    if (existsSync(rootNode)) return rootNode;
     const bundledNode = path.join(this.appRoot, "runtime", "node", "node.exe");
     return existsSync(bundledNode) ? bundledNode : "node";
   }

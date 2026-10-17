@@ -9,13 +9,16 @@ import { SessionRepository } from "../auth/sessionRepository.js";
 import { SessionService } from "../auth/sessionService.js";
 import { bootstrapAdmin } from "../bootstrap/bootstrapAdmin.js";
 import { loadBotCatalog, type BotCatalog } from "../bots/botCatalog.js";
-import type { ServerConfig } from "../config/config.js";
+import { assertServerConfigPaths, type ServerConfig } from "../config/config.js";
+import { resolveServerLayout, type ServerLayout } from "../shared/serverPackageLayout.js";
+import { isServerUpdateBlocked } from "../update/serverUpdate.js";
 import { FriendService } from "../friends/friendService.js";
 import { FriendStore } from "../friends/friendStore.js";
 import { MatchExecutor } from "../game/matchExecutor.js";
 import { loadRunCsgoSource } from "../game/runCsgoAssets.js";
 import { publishMysqlPreinitScripts } from "../game/mysqlPreinitScripts.js";
 import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
+import { LinuxGameServerLauncher } from "../game/linuxGameServerLauncher.js";
 import { MysqlDatabaseBackup } from "../game/mysqlDatabaseBackup.js";
 import { prepareSourceModForServerStartup } from "../game/sourceModStartup.js";
 import { MatchmakingService, type ServiceShutdownSummary } from "../matchmaking/matchmakingService.js";
@@ -46,12 +49,13 @@ export interface Runtime {
 
 const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
 
-export async function createRuntime(config: ServerConfig): Promise<Runtime> {
+export async function createRuntime(config: ServerConfig, layout?: ServerLayout): Promise<Runtime> {
   if (!isSemver(config.requiredClientVersion)) throw new Error("Invalid requiredClientVersion");
+  if (layout) assertServerConfigPaths(config, layout);
   await prepareSourceModForServerStartup(config.gameServer.serverRoot);
   const runtimeEntry = path.resolve(process.argv[1] ?? "src/main.ts");
-  const packaged = path.basename(runtimeEntry) === "main.cjs" && path.basename(path.dirname(runtimeEntry)) === "dist";
-  const assetAppRoot = packaged ? path.dirname(path.dirname(runtimeEntry)) : process.cwd();
+  const packaged = layout !== undefined || (path.basename(runtimeEntry) === "main.cjs" && path.basename(path.dirname(runtimeEntry)) === "dist");
+  const assetAppRoot = layout?.appRoot ?? (packaged ? path.dirname(path.dirname(runtimeEntry)) : process.cwd());
   const scripts = await publishMysqlPreinitScripts({
     sourceRoot: path.join(assetAppRoot, packaged ? "mysql_preinit" : "src/mysql_preinit"),
     serverRoot: config.gameServer.serverRoot,
@@ -105,7 +109,7 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     });
     const steamPersonas = await ServerSteamPersonaDirectory.create({
       baseUrl: config.profileBaseUrl,
-      seedPath: path.join(process.cwd(), "runtime", "profiles", "human-index.json"),
+      seedPath: path.join(layout?.installRoot ?? process.cwd(), "runtime", "profiles", "human-index.json"),
       cachePath: path.join(recordsDir, "profiles", "human-index.json"),
       onLog: (message) => writeActivityLog({ source: "server", level: "info", message: `Steam profile directory: ${message}` }),
     });
@@ -114,9 +118,9 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
     };
     let matchmaking: MatchmakingService | undefined;
     const executor = new MatchExecutor({
-      assets: () => loadRunCsgoSource({ appRoot: assetAppRoot,
+      assets: () => loadRunCsgoSource({ appRoot: assetAppRoot, ...(layout ? { layout } : {}),
         ...(packaged ? {} : { developmentRoot: path.join(assetAppRoot, "src/run_csgo") }) }),
-      launcher: new NodeGameServerLauncher({
+      launcher: process.platform === "linux" ? new LinuxGameServerLauncher({ onStdout: gameStdoutHandler }) : new NodeGameServerLauncher({
         onStdout: gameStdoutHandler,
         onStderr: (chunk) => process.stderr.write(chunk),
       }),
@@ -143,6 +147,11 @@ export async function createRuntime(config: ServerConfig): Promise<Runtime> {
       events,
       steamPersonas,
       presence,
+      isServerUpdateBlocked: async () => {
+        const updateLayout = layout ?? (packaged && process.platform === "win32"
+          ? resolveServerLayout({ platform: "win32-x64", installRoot: path.resolve(assetAppRoot, "../../../..") }) : undefined);
+        return updateLayout ? isServerUpdateBlocked(updateLayout, config) : true;
+      },
     });
     await matchmakingService.recoverCompletedMatches();
     matchmaking = matchmakingService;

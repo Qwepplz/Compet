@@ -26,7 +26,7 @@ export interface RouteDeps {
   auth: AuthService;
   friends?: FriendService;
   matchmaking?: MatchmakingService;
-  records?: Pick<MatchRecordStore, "listPlayerCompletedMatches" | "readPlayerCompletedMatch">;
+  records?: Pick<MatchRecordStore, "listPlayerCompletedMatches" | "readPlayerCompletedMatch"> & Partial<Pick<MatchRecordStore, "readCompletedMatch">>;
   rankme?: RankmeScoreReader;
   events?: RealtimeEventBus;
   presence?: PresenceService;
@@ -372,6 +372,40 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
       throw error;
     }
     return { ready: true };
+  });
+
+  app.get("/admin/server/status", { config: { logSuccessfulActivity: false } }, async request => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    return requireMatchmaking(deps).getAdminServerStatus();
+  });
+
+  app.get("/admin/matches/:id", async request => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    const { id } = z.object({ id: matchHistoryMatchIdSchema }).parse(request.params);
+    const completed = await deps.records?.readCompletedMatch?.(id);
+    if (completed) return { result: completed.result };
+    const match = (await requireMatchmaking(deps).getAdminServerStatus()).matches.find(room => room.id === id);
+    if (!match) throw notFound("resource_not_found");
+    return { match };
+  });
+
+  app.get("/admin/maintenance", { config: { logSuccessfulActivity: false } }, async request => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    return requireMatchmaking(deps).getMaintenanceStatus();
+  });
+
+  app.delete("/admin/maintenance", async request => {
+    await authenticateRequest(request, deps);
+    requireAdmin(request);
+    try { await requireMatchmaking(deps).leaveMaintenance(); }
+    catch (error) {
+      if ((error as { code?: string }).code === "maintenance_update_in_progress") throw conflict("maintenance_update_in_progress");
+      throw error;
+    }
+    return { released: true };
   });
 
   app.get("/admin/matchmaking/occupancy", { config: { logSuccessfulActivity: false } }, async (request) => {

@@ -1,20 +1,21 @@
 import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
+import type { ServerLayout } from "../shared/serverPackageLayout.js";
 import { assertPlainPath, fingerprintFile, listUnmanagedProgramPaths, validatePackageInventory, type PackageFile, type PackageInventory } from "../desktop/main/serverManagedFiles.js";
 import { beginRunCsgoAssets, type AssetInstallInput, type RunCsgoAssetTransaction } from "./runCsgoAssetState.js";
 export interface RunCsgoSource { root: string; files: PackageFile[]; version: string }
 
-export function resolveRunCsgoSource(input: { appRoot: string; developmentRoot?: string; inventory: PackageInventory }): RunCsgoSource {
+export function resolveRunCsgoSource(input: { appRoot: string; developmentRoot?: string; inventory: PackageInventory; layout?: ServerLayout }): RunCsgoSource {
   const inventory = validatePackageInventory(input.inventory);
   if (!path.isAbsolute(input.appRoot) || (input.developmentRoot && !path.isAbsolute(input.developmentRoot))) throw new Error("asset_source_invalid");
-  const prefix = "runtime/electron/resources/app/run_csgo/";
+  const prefix = input.layout?.runCsgoPrefix ?? "runtime/electron/resources/app/run_csgo/";
   const files = inventory.files.filter(file => file.path.startsWith(prefix)).map(file => ({ ...file, path: file.path.slice(prefix.length) }));
   if (!files.length) throw new Error("asset_source_empty");
   return { root: input.developmentRoot ?? path.join(input.appRoot, "run_csgo"), files, version: inventory.version };
 }
-export async function loadRunCsgoSource(input: { appRoot: string; developmentRoot?: string }): Promise<RunCsgoSource> {
+export async function loadRunCsgoSource(input: { appRoot: string; developmentRoot?: string; layout?: ServerLayout }): Promise<RunCsgoSource> {
   let inventory: PackageInventory;
-  const prefix = "runtime/electron/resources/app/run_csgo/";
+  const prefix = input.layout?.runCsgoPrefix ?? "runtime/electron/resources/app/run_csgo/";
   if (input.developmentRoot) {
     const files: PackageFile[] = [];
     async function visit(directory: string): Promise<void> {
@@ -34,7 +35,7 @@ export async function loadRunCsgoSource(input: { appRoot: string; developmentRoo
     const identity = JSON.parse(await readFile(path.join(input.appRoot, "packaging/server/app-package.json"), "utf8")) as { version: string };
     inventory = validatePackageInventory({ schemaVersion: 1, appId: "compet-server-manager", version: identity.version, files });
   } else {
-    const installRoot = path.resolve(input.appRoot, "../../../..");
+    const installRoot = input.layout?.installRoot ?? path.resolve(input.appRoot, "../../../..");
     await assertPlainPath(input.appRoot);
     const identity = JSON.parse((await readFile(path.join(input.appRoot, "package.json"), "utf8")).replace(/^\uFEFF/, "")) as { name?: unknown; version?: unknown };
     inventory = validatePackageInventory(JSON.parse(await readFile(path.join(installRoot, "compet-package-manifest.json"), "utf8")));

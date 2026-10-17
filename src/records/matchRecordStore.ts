@@ -174,6 +174,11 @@ export class MatchRecordStore {
       .filter((map) => map.length > 0);
   }
 
+  async readServer(matchId: string): Promise<unknown> {
+    this.assertSafeMatchId(matchId);
+    return this.readOptionalMatchFile(matchId, "server.json");
+  }
+
   async saveServer(matchId: string, server: unknown): Promise<void> {
     this.assertSafeMatchId(matchId);
     await this.saveMatchFile(matchId, "server.json", server);

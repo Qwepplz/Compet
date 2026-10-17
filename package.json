@@ -8,8 +8,8 @@
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
     "icon:generate": "tsx scripts/generate-app-icon.ts",
-    "sourcemod:build": "pwsh -NoProfile -File scripts/build-sourcemod.ps1",
-    "build": "pwsh -NoProfile -File scripts/clean-server-build.ps1 && tsc -p tsconfig.build.json",
+    "sourcemod:build": "tsx scripts/build-sourcemod.ts",
+    "build": "tsx scripts/build-server.ts",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.quality.json",
     "quality:check": "npm run typecheck",
     "manager:dev": "electron-vite dev",
@@ -18,11 +18,13 @@
     "player:dev": "cross-env ELECTRON_ENTRY=out-player/main/index.cjs electron-vite dev --config electron.player.vite.config.ts",
     "player:build": "electron-vite build --config electron.player.vite.config.ts",
     "player:preview": "cross-env ELECTRON_ENTRY=out-player/main/index.cjs electron-vite preview --config electron.player.vite.config.ts",
-    "package:server": "npm run quality:check && npm run package:server:build",
-    "package:server:build": "npm run build && npm run manager:build && pwsh -NoProfile -File scripts/package-server.ps1",
+    "package:server": "npm run quality:check && tsx scripts/package-server.ts",
+    "package:server:build": "tsx scripts/package-server.ts",
+    "package:server:windows": "npm run quality:check && tsx scripts/package-server.ts --platform win32-x64",
+    "package:server:linux": "npm run quality:check && tsx scripts/package-server.ts --platform linux-x64",
     "package:client": "npm run quality:check && npm run package:client:build",
     "package:client:build": "npm run player:build && pwsh -NoProfile -File scripts/package-client.ps1",
-    "package:7z": "npm run quality:check && npm run package:server:build && npm run package:client:build",
+    "package:7z": "npm run quality:check && tsx scripts/package-all.ts",
     "package:archive": "npm run package:7z",
     "package:zip": "npm run package:7z"
   },
@@ -57,5 +59,8 @@
   },
   "overrides": {
     "fast-uri": "3.1.2"
+  },
+  "optionalDependencies": {
+    "node-pty": "1.1.0"
   }
 }

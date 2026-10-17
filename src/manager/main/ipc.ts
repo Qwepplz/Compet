@@ -1,9 +1,11 @@
 import { dialog, ipcMain } from "electron";
 import path from "node:path";
 import { z } from "zod";
-import { prepareServerMaintenance, preparePendingServerMaintenance, clearRolledBackServerMaintenance, handoffServerMaintenance } from "../../desktop/main/serverMaintenance.js";
+import { executeServerUpdate, isServerUpdateBlocked } from "../../update/serverUpdate.js";
+import { resolveServerLayout } from "../../shared/serverPackageLayout.js";
+import { loadManagerServerConfig } from "../../update/windowsManagerConfig.js";
+import { WindowsManagerLifecycle } from "../../update/windowsLifecycle.js";
 import { getInstallRoot } from "../../desktop/main/installLayout.js";
-import { compareSemver } from "../../shared/version.js";
 import { assertServicePortClosed } from "./serviceProcess.js";
 import type { FileConfigStore } from "./configStore.js";
 import type { FileLogStore } from "./logStore.js";
@@ -12,7 +14,7 @@ import type { AccountMatchDetail, AccountMatchHistory, AccountView, CreateAccoun
 import { ServiceApiClient, ServiceApiError } from "./serviceApiClient.js";
 import { writeBootstrapAdminFile } from "./bootstrapFile.js";
 import { delay } from "../../shared/async.js";
-import { checkForUpdates, getCurrentVersion, loadServerRelease } from "../../desktop/main/updateCheck.js";
+import { checkForUpdates, getCurrentVersion } from "../../desktop/main/updateCheck.js";
 import { AccountService } from "../../accounts/accountService.js";
 import { accountIdSchema, createAccountSchema, patchAccountSchema, passwordSchema } from "../../accounts/accountInputSchemas.js";
 import { AccountRepository } from "../../accounts/accountRepository.js";
@@ -496,65 +498,33 @@ export function registerManagerIpc(deps: IpcDeps): ManagerIpcLifecycle {
   ipcMain.handle("updates:version", () => getCurrentVersion());
   ipcMain.handle("updates:check", () => checkForUpdates("compet-server-manager"));
   ipcMain.handle("updates:install", async (): Promise<import("../shared/types.js").ManagerUpdateInstallResult> => {
-    if (updatePending || !deps.maintenance) return { status: "blocked", installing: false, error: "maintenance_unavailable" };
+    if (updatePending || !deps.maintenance) return { status: "blocked", code: "maintenance_unavailable" };
     updatePending = true;
-    let terminalCleared = false, handedOff = false;
     try {
       return await offlineAccountsLifecycle.enqueue(async () => {
-        const initialStatus = deps.service.status();
-        if (initialStatus.state === "starting" || initialStatus.state === "stopping") throw new Error("maintenance_service_busy");
-        const config = await deps.configStore.load();
-        const appRoot = deps.maintenance!.appRoot;
-        const pending = await preparePendingServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config });
-        let release = pending ? undefined : await loadServerRelease();
-        if (release && compareSemver(release.latestVersion, release.currentVersion) <= 0) return {
-          currentVersion: release.currentVersion, latestVersion: release.latestVersion, manifestUrl: release.manifestUrl,
-          updateAvailable: false, changedFiles: 0, changedBytes: 0, installing: false, status: "no_changes" as const,
-        };
-        let prepared = pending ?? await prepareServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config, target: release!.target });
-        if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
-        const state = deps.service.status();
-        if (state.state === "running") {
-          if (!state.pid || !deps.getApiClient().sessionToken()) throw new Error("maintenance_manager_login_required");
-          await withAuthBoundary(() => deps.getApiClient().prepareMaintenance());
+        const initial = deps.service.status();
+        if (!["running", "stopped"].includes(initial.state)) throw new Error("maintenance_service_busy");
+        const layout = resolveServerLayout({ platform: "win32-x64", installRoot: getInstallRoot(deps.maintenance!.appRoot) });
+        const configPath = path.join(layout.appRoot, "user-data/manager-config.json");
+        const config = await loadManagerServerConfig({ layout, configPath });
+        const lifecycle = new WindowsManagerLifecycle({ layout, config, service: deps.service,
+          closeOfflineAccounts: async () => { maintenanceBlocked = true; closeOfflineAccountsNow(); } });
+        const result = await executeServerUpdate({ action: "apply", layout, configPath, config, lifecycle,
+          authorizeOnline: async () => {
+            if (!deps.service.status().pid || !deps.getApiClient().sessionToken()) throw new Error("maintenance_manager_login_required");
+            await withAuthBoundary(() => deps.getApiClient().prepareMaintenance());
+            maintenanceBlocked = true;
+          } });
+        if (result.status === "handed_off") {
           maintenanceBlocked = true;
-          closeOfflineAccountsNow();
-          const stopped = await deps.service.stop();
-          if (stopped.state !== "stopped") throw new Error("maintenance_stop_failed");
-        } else if (state.state !== "stopped") throw new Error("maintenance_service_busy");
-        closeOfflineAccountsNow();
-        await assertServicePortClosed(config);
-        if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
-        if (pending && await clearRolledBackServerMaintenance(pending)) {
-          terminalCleared = true;
-          maintenanceBlocked = true;
-          release = await loadServerRelease();
-          if (compareSemver(release.latestVersion, release.currentVersion) <= 0) {
-            maintenanceBlocked = false;
-            return {
-              currentVersion: release.currentVersion, latestVersion: release.latestVersion, manifestUrl: release.manifestUrl,
-              updateAvailable: false, changedFiles: 0, changedBytes: 0, installing: false, status: "no_changes" as const,
-            };
-          }
-          prepared = await prepareServerMaintenance({ installRoot: getInstallRoot(appRoot), appRoot, config, target: release.target });
-          if (JSON.stringify(await deps.configStore.load()) !== JSON.stringify(config)) throw new Error("maintenance_config_changed");
-          if (deps.service.status().state !== "stopped") throw new Error("maintenance_service_busy");
-          await assertServicePortClosed(config);
-        }
-        await handoffServerMaintenance(prepared);
-        handedOff = true;
-        maintenanceBlocked = true;
-        deps.maintenance!.onHandoff();
-        return { currentVersion: release?.currentVersion ?? getCurrentVersion(), latestVersion: prepared.plan?.targetVersion ?? getCurrentVersion(),
-          manifestUrl: release?.manifestUrl ?? "",
-          updateAvailable: true, changedFiles: prepared.plan?.operations.length ?? 0,
-          changedBytes: prepared.plan?.operations.reduce((sum, op) => sum + (op.kind === "replace" ? op.size : 0), 0) ?? 0, installing: true, status: "installing" as const };
+          deps.maintenance!.onHandoff();
+        } else maintenanceBlocked = await isServerUpdateBlocked(layout, config);
+        return result;
       });
     } catch (error) {
-      if (terminalCleared && !handedOff) maintenanceBlocked = false;
       const code = (error as { code?: string }).code ?? (error instanceof Error ? error.message : "maintenance_failed");
-      return { status: /busy|conflict|modified|unknown|protected|changed|login_required|external_service|unavailable|inventory_missing/.test(code) ? "blocked" : "failed",
-        installing: false, error: /^[a-z0-9_]+$/.test(code) ? code : "maintenance_failed" };
+      return { status: /busy|conflict|modified|unknown|protected|changed|login_required|external_service|unavailable/.test(code) ? "blocked" : "failed",
+        code: /^[a-z0-9_]+$/.test(code) ? code : "maintenance_failed" };
     } finally { updatePending = false; }
   });
 

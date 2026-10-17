@@ -5,7 +5,7 @@ import path from "node:path";
 import { isSemver } from "../../shared/version.js";
 
 export interface FileFingerprint { size: number; sha256: string }
-export interface PackageFile extends FileFingerprint { path: string }
+export interface PackageFile extends FileFingerprint { path: string; mode?: number }
 export interface PackageInventory {
   schemaVersion: 1;
   appId: "compet-server-manager";
@@ -46,7 +46,9 @@ export function validatePackageInventory(raw: unknown, serverProgram = false): P
         !Number.isSafeInteger(item.size) || item.size! < 0 ||
         typeof item.sha256 !== "string" || !/^[a-fA-F0-9]{64}$/.test(item.sha256)) invalid();
     seen.add(key);
-    return { path: item.path, size: item.size!, sha256: item.sha256.toUpperCase() };
+    if (item.mode !== undefined && item.mode !== 0o644 && item.mode !== 0o755) invalid();
+    return { path: item.path, size: item.size!, sha256: item.sha256.toUpperCase(),
+      ...(item.mode === undefined ? {} : { mode: item.mode }) };
   });
   for (const key of seen) {
     const parts = key.split("/");
