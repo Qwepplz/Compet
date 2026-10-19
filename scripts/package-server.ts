@@ -183,7 +183,7 @@ export async function packageServer(options: PackageOptions): Promise<void> {
   if (options.platform === "linux-x64") {
     const release = await fs.readFile("/etc/os-release", "utf8");
     const version = /VERSION_ID="([0-9.]+)"/.exec(release)?.[1];
-    if (!release.includes("ID=ubuntu") || !version || Number(version) > 24.04) throw new Error("Linux release build requires Ubuntu baseline <=24.04");
+    if (!release.includes("ID=ubuntu") || !version || Number(version) > 26.04) throw new Error("Linux release build requires Ubuntu baseline <=26.04");
   } else run(process.execPath, [path.join(repositoryRoot, "node_modules/electron-vite/bin/electron-vite.js"), "build"]);
   await fs.rm(stage, { recursive: true, force: true }); await fs.mkdir(stage, { recursive: true });
   const layout = resolveServerLayout({ platform: options.platform, installRoot: stage });
