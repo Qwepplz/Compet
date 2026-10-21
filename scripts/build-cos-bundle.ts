@@ -15,17 +15,8 @@ const STEAM_FETCH_HEADERS = {
   "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Compet/0.1",
 };
 
-const botInfoPath = process.env.COMPET_BOT_INFO_PATH
-  ?? "E:/EXCHANGE/Git/BetterBots/addons/sourcemod/data/bot_info.json";
-const outDir = path.join(REPO_ROOT, "artifacts/cos-upload");
-const avatarsDir = path.join(outDir, "avatars");
-const profileSeedPath = path.join(REPO_ROOT, "packaging/server/profile-seed/human-index.json");
 const STEAM64_ACCOUNT_ID_OFFSET = 76561197960265728n;
 const SUMMARIES_BATCH = 100;
-const apiKey = process.env.COMPET_STEAM_WEB_API_KEY
-  ?? process.env.STEAM_WEB_API_KEY
-  ?? process.env.STEAM_API_KEY
-  ?? "";
 
 // The 4 real humans. vanity entries get resolved to steam64 once via Steam.
 const HUMAN_INPUTS: Array<{ kind: "steam64"; value: string } | { kind: "vanity"; value: string }> = [
@@ -82,7 +73,7 @@ async function fetchWithRetry(url: string, attempts = 4): Promise<Response | und
   return undefined;
 }
 
-async function resolveVanity(vanity: string): Promise<string | undefined> {
+async function resolveVanity(vanity: string, apiKey: string): Promise<string | undefined> {
   const url = new URL("https://api.steampowered.com/ISteamUser/ResolveVanityURL/v1/");
   url.searchParams.set("key", apiKey);
   url.searchParams.set("vanityurl", vanity);
@@ -92,7 +83,7 @@ async function resolveVanity(vanity: string): Promise<string | undefined> {
   return data.response?.success === 1 ? data.response.steamid : undefined;
 }
 
-async function fetchSummaries(steam64s: string[]): Promise<Map<string, SteamPlayerSummary>> {
+async function fetchSummaries(steam64s: string[], apiKey: string): Promise<Map<string, SteamPlayerSummary>> {
   const result = new Map<string, SteamPlayerSummary>();
   for (const batch of chunk(steam64s, SUMMARIES_BATCH)) {
     const url = new URL("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/");
@@ -115,19 +106,25 @@ async function fetchAvatarBuffer(avatarUrl: string): Promise<Buffer | undefined>
   return buffer.length > 0 ? buffer : undefined;
 }
 
-async function buildBotIndex(): Promise<Record<string, IndexEntry>> {
-  const raw = await readFile(botInfoPath, "utf8");
-  const parsed = JSON.parse(raw) as Record<string, { steamid?: number }>;
+export async function readBotSteam64Names(botInfoPath?: string): Promise<Map<string, string>> {
+  if (!botInfoPath || !path.isAbsolute(botInfoPath)) throw new Error("absolute_bot_info_path_required");
+  let parsed: unknown;
+  try { parsed = JSON.parse(await readFile(botInfoPath, "utf8")); }
+  catch { throw new Error("bot_info_read_invalid"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("bot_info_object_required");
   const steam64ToName = new Map<string, string>();
   for (const [name, value] of Object.entries(parsed)) {
-    if (typeof value.steamid !== "number") continue;
+    if (!value || typeof value !== "object" || !("steamid" in value) || typeof value.steamid !== "number") continue;
     const steam64 = accountIdToSteam64(value.steamid);
     if (steam64 && !steam64ToName.has(steam64)) steam64ToName.set(steam64, name);
   }
-  const steam64s = [...steam64ToName.keys()];
-  console.log(`  resolved ${steam64s.length} bot steam64 ids from ${botInfoPath}`);
+  if (!steam64ToName.size) throw new Error("bot_info_entries_required");
+  return steam64ToName;
+}
 
-  const summaries = await fetchSummaries(steam64s);
+async function buildBotIndex(steam64ToName: Map<string, string>, apiKey: string, avatarsDir: string): Promise<Record<string, IndexEntry>> {
+  const steam64s = [...steam64ToName.keys()];
+  const summaries = await fetchSummaries(steam64s, apiKey);
   const index: Record<string, IndexEntry> = {};
   let done = 0;
   let skipped = 0;
@@ -149,14 +146,14 @@ async function buildBotIndex(): Promise<Record<string, IndexEntry>> {
   return index;
 }
 
-async function buildHumanIndex(): Promise<Record<string, IndexEntry>> {
+async function buildHumanIndex(apiKey: string, avatarsDir: string): Promise<Record<string, IndexEntry>> {
   const steam64s: string[] = [];
   for (const input of HUMAN_INPUTS) {
     if (input.kind === "steam64") {
       steam64s.push(input.value);
       continue;
     }
-    const resolved = await resolveVanity(input.value);
+    const resolved = await resolveVanity(input.value, apiKey);
     if (!resolved) {
       console.warn(`  WARN: vanity not resolved: ${input.value}`);
       continue;
@@ -165,7 +162,7 @@ async function buildHumanIndex(): Promise<Record<string, IndexEntry>> {
     steam64s.push(resolved);
   }
 
-  const summaries = await fetchSummaries(steam64s);
+  const summaries = await fetchSummaries(steam64s, apiKey);
   const index: Record<string, IndexEntry> = {};
   for (const steam64 of steam64s) {
     const summary = summaries.get(steam64);
@@ -188,21 +185,26 @@ async function buildHumanIndex(): Promise<Record<string, IndexEntry>> {
   return index;
 }
 
-async function run(): Promise<number> {
+export async function buildCosBundle(input: { env: NodeJS.ProcessEnv; repositoryRoot: string }): Promise<number> {
+  const outDir = path.join(input.repositoryRoot, "artifacts/cos-upload");
+  const avatarsDir = path.join(outDir, "avatars");
+  const profileSeedPath = path.join(input.repositoryRoot, "packaging/server/profile-seed/human-index.json");
+  const apiKey = input.env.COMPET_STEAM_WEB_API_KEY ?? input.env.STEAM_WEB_API_KEY ?? input.env.STEAM_API_KEY ?? "";
   if (!apiKey) {
     console.error("COMPET_STEAM_WEB_API_KEY is not set. Aborting.");
     return 1;
   }
 
+  const steam64ToName = await readBotSteam64Names(input.env.COMPET_BOT_INFO_PATH);
   await rm(outDir, { recursive: true, force: true });
   await mkdir(avatarsDir, { recursive: true });
 
   console.log("Building bot index from BetterBots bot_info.json + Steam ...");
-  const botIndex = await buildBotIndex();
+  const botIndex = await buildBotIndex(steam64ToName, apiKey, avatarsDir);
   console.log(`  bot entries: ${Object.keys(botIndex).length}`);
 
   console.log("Building human index (resolving vanity + fetching avatars) ...");
-  const humanIndex = await buildHumanIndex();
+  const humanIndex = await buildHumanIndex(apiKey, avatarsDir);
   console.log(`  human entries: ${Object.keys(humanIndex).length}`);
   parseHumanProfileIndex(humanIndex);
 
@@ -216,7 +218,8 @@ async function run(): Promise<number> {
 }
 
 async function main(): Promise<void> {
-  process.exit(await run());
+  try { process.exitCode = await buildCosBundle({ env: process.env, repositoryRoot: REPO_ROOT }); }
+  catch { console.error("cos_bundle_build_failed"); process.exitCode = 1; }
 }
 
-void main();
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) void main();

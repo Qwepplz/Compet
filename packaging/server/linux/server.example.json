@@ -6,8 +6,8 @@
   "tokenTtlMinutes": 1440,
   "profileBaseUrl": "https://qwepplz111.site/cos-upload",
   "gameServer": {
-    "serverRoot": "/home/qwe/csgo-server",
-    "publicConnectHost": "127.0.0.1",
+    "serverRoot": "REPLACE_WITH_ABSOLUTE_GAME_SERVER_ROOT",
+    "publicConnectHost": "REPLACE_WITH_PLAYER_REACHABLE_HOST",
     "portRange": {
       "start": 27015,
       "end": 27030

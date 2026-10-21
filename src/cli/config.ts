@@ -7,6 +7,9 @@ function invalid(code: string): never {
   throw Object.assign(new Error(code), { code });
 }
 
+export const HEADLESS_TEMPLATE_SERVER_ROOT = "REPLACE_WITH_ABSOLUTE_GAME_SERVER_ROOT";
+export const HEADLESS_TEMPLATE_CONNECT_HOST = "REPLACE_WITH_PLAYER_REACHABLE_HOST";
+
 export async function loadHeadlessConfig(input: {
   configPath: string; env: NodeJS.ProcessEnv;
 }): Promise<ServerConfig> {
@@ -31,6 +34,10 @@ export async function loadHeadlessConfig(input: {
     };
     for (const key of Object.keys(values)) {
       if (input.env[key] !== undefined) values[key] = input.env[key];
+    }
+    if (values.COMPET_CSGO_SERVER_ROOT?.trim() === HEADLESS_TEMPLATE_SERVER_ROOT
+      || values.COMPET_PUBLIC_CONNECT_HOST?.trim() === HEADLESS_TEMPLATE_CONNECT_HOST) {
+      invalid("config_invalid");
     }
     if (process.arch !== "x64" || !["win32", "linux"].includes(process.platform)) invalid("config_invalid");
     const platform = (process.platform + "-x64") as ServerPlatform;
