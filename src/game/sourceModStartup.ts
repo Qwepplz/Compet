@@ -4,10 +4,11 @@ import type { FileHandle } from "node:fs/promises";
 import path from "node:path";
 
 const GUIDELINES_KEY = "FollowCSGOServerGuidelines";
+const AUTO_UPDATE_KEY = "DisableAutoUpdate";
 
 type Token =
   | { kind: "string"; value: string; valueStart: number; valueEnd: number }
-  | { kind: "open" | "close" };
+  | { kind: "open" | "close"; position: number };
 
 export async function prepareSourceModForServerStartup(serverRoot: string): Promise<void> {
   if (!serverRoot.trim()) throw new Error("SourceMod serverRoot must not be blank");
@@ -67,26 +68,35 @@ function updatedCoreConfig(original: Buffer): Buffer | undefined {
   const tokens = scanKeyValues(text);
   let index = 0;
   let coreBlocks = 0;
+  let coreOpen: number | undefined;
+  let coreClose: number | undefined;
   const guidelines: Extract<Token, { kind: "string" }>[] = [];
+  const autoUpdates: Extract<Token, { kind: "string" }>[] = [];
+  const edits: { start: number; end: number; value: string }[] = [];
 
   function parseScope(depth: number, directCore: boolean): void {
     while (index < tokens.length) {
       const key = tokens[index++]!;
       if (key.kind === "close") {
         if (depth === 0) throw new Error("Unexpected closing brace");
+        if (depth === 1 && directCore) coreClose = key.position;
         return;
       }
       if (key.kind !== "string") throw new Error("Expected a configuration key");
       const value = tokens[index++];
-      if (!value || value.kind === "close") throw new Error("Missing value for " + key.value);
-
+      if (!value || value.kind === "close") {
+        throw new Error("Missing value for " + key.value);
+      }
       if (depth === 0 && key.value === "Core") {
         if (value.kind !== "open") throw new Error("Core must be a block");
         coreBlocks++;
+        coreOpen = value.position;
       }
-      if (depth === 1 && directCore && key.value === GUIDELINES_KEY) {
-        if (value.kind !== "string") throw new Error(GUIDELINES_KEY + " must be a string");
-        guidelines.push(value);
+      if (depth === 1 && directCore) {
+        if (key.value === GUIDELINES_KEY || key.value === AUTO_UPDATE_KEY) {
+          if (value.kind !== "string") throw new Error(key.value + " must be a string");
+          (key.value === GUIDELINES_KEY ? guidelines : autoUpdates).push(value);
+        }
       }
       if (value.kind === "open") {
         parseScope(depth + 1, depth === 0 && key.value === "Core");
@@ -96,16 +106,57 @@ function updatedCoreConfig(original: Buffer): Buffer | undefined {
   }
 
   parseScope(0, false);
-  if (coreBlocks !== 1) throw new Error("Expected exactly one Core block");
-  if (guidelines.length !== 1) throw new Error("Expected exactly one direct " + GUIDELINES_KEY + " key");
-  const token = guidelines[0]!;
-  const rawValue = text.slice(token.valueStart, token.valueEnd);
-  if (rawValue === "no") return undefined;
-  if (rawValue !== "yes") throw new Error(GUIDELINES_KEY + " must be yes or no");
+  if (coreBlocks !== 1 || coreOpen === undefined || coreClose === undefined) {
+    throw new Error("Expected exactly one Core block");
+  }
+  if (guidelines.length !== 1) {
+    throw new Error("Expected exactly one direct " + GUIDELINES_KEY + " key");
+  }
+  if (autoUpdates.length > 1) {
+    throw new Error("Expected at most one direct " + AUTO_UPDATE_KEY + " key");
+  }
 
-  const start = Buffer.byteLength(text.slice(0, token.valueStart), "utf8");
-  const end = Buffer.byteLength(text.slice(0, token.valueEnd), "utf8");
-  return Buffer.concat([original.subarray(0, start), Buffer.from("no"), original.subarray(end)]);
+  const guideline = guidelines[0]!;
+  const guidelineValue = text.slice(guideline.valueStart, guideline.valueEnd);
+  if (guidelineValue !== "yes" && guidelineValue !== "no") {
+    throw new Error(GUIDELINES_KEY + " must be yes or no");
+  }
+  if (guidelineValue === "yes") {
+    edits.push({ start: guideline.valueStart, end: guideline.valueEnd, value: "no" });
+  }
+
+  const autoUpdate = autoUpdates[0];
+  if (autoUpdate) {
+    if (text.slice(autoUpdate.valueStart, autoUpdate.valueEnd) !== "yes") {
+      edits.push({ start: autoUpdate.valueStart, end: autoUpdate.valueEnd, value: "yes" });
+    }
+  } else {
+    const newline = text.slice(coreOpen, coreClose).match(/\r\n|\n|\r/)?.[0] ?? "\n";
+    const lineStart = Math.max(
+      text.lastIndexOf("\n", coreClose - 1),
+      text.lastIndexOf("\r", coreClose - 1),
+    ) + 1;
+    const prefix = text.slice(lineStart, coreClose);
+    const onOwnLine = /^[\t ]*$/.test(prefix);
+    const insertAt = onOwnLine ? lineStart : coreClose;
+    const indent = (onOwnLine ? prefix : "") + "  ";
+    const value = (onOwnLine ? "" : newline) + indent +
+      '"' + AUTO_UPDATE_KEY + '" "yes"' + newline;
+    edits.push({ start: insertAt, end: insertAt, value });
+  }
+
+  if (!edits.length) return undefined;
+  let updated = original;
+  for (const edit of edits.sort((a, b) => b.start - a.start)) {
+    const start = Buffer.byteLength(text.slice(0, edit.start), "utf8");
+    const end = Buffer.byteLength(text.slice(0, edit.end), "utf8");
+    updated = Buffer.concat([
+      updated.subarray(0, start),
+      Buffer.from(edit.value, "utf8"),
+      updated.subarray(end),
+    ]);
+  }
+  return updated;
 }
 
 function scanKeyValues(text: string): Token[] {
@@ -129,7 +180,7 @@ function scanKeyValues(text: string): Token[] {
       continue;
     }
     if (char === "{" || char === "}") {
-      tokens.push({ kind: char === "{" ? "open" : "close" });
+      tokens.push({ kind: char === "{" ? "open" : "close", position: index });
       index++;
       continue;
     }

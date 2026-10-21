@@ -8,7 +8,6 @@ import { RankmeBadges } from "../components/RankmeBadges.js";
 import { formatMapName, mapImageUrl, preloadMapImages } from "../mapAssets.js";
 import { formatReadyCountdown } from "../matchTimers.js";
 import { getSelectedMap, getMatchPresentationPhase, isAccountInReadyRoom } from "../matchRoomState.js";
-import { RandomMapReel } from "../components/RandomMapReel.js";
 import { participantDisplayName } from "../playerDisplay.js";
 import { useLanguage, type LanguageContextValue } from "../../../../language/react.js";
 
@@ -27,19 +26,12 @@ interface MatchRoomPageProps {
   onCopyText?: (text: string) => Promise<void>;
 }
 
-type RevealedTimeline = {
-  key: string;
-  revealAtMs: number;
-};
-
 function phaseLabel(phase: PlayerLiveMatchStateDto["phase"] | undefined, t: LanguageContextValue["t"]): string | null {
   switch (phase) {
     case "ready":
       return t("player.match.phase.ready");
     case "match_room":
       return t("player.match.phase.matchRoom");
-    case "map_randomizing":
-      return t("player.match.phase.mapRandomizing");
     case "server_prepare":
       return t("player.match.phase.serverPrepare");
     case "connect":
@@ -147,10 +139,9 @@ export function MatchRoomPage({
   const callbacks = useRef({ onPreloadReady, onReadyViewReady, onPreloadFailure });
   callbacks.current = { onPreloadReady, onReadyViewReady, onPreloadFailure };
   const reported = useRef(new Set<string>());
-  const requiredMaps = [...new Set([
-    ...(room?.mapSelection?.reel ?? []),
-    ...(room?.mapSelection?.finalMap ? [room.mapSelection.finalMap] : []),
-  ])].sort();
+  const requiredMaps = room?.mapSelection?.finalMap
+    ? [room.mapSelection.finalMap]
+    : [];
   const requiredMapKey = JSON.stringify(requiredMaps);
   useEffect(() => {
     if (connection && connection !== "connected") {
@@ -182,7 +173,7 @@ export function MatchRoomPage({
           if (stopped) return;
           const panels = [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-flow-panel]") ?? [])];
           const bounds = rootRef.current?.getBoundingClientRect();
-          if (!bounds || bounds.width <= 0 || bounds.height <= 0 || panels.length !== 5 || panels.some((panel) => { const rect = panel.getBoundingClientRect(); return rect.width <= 0 || rect.height <= 0 || rect.width > bounds.width; })) {
+          if (!bounds || bounds.width <= 0 || bounds.height <= 0 || panels.length !== 4 || panels.some((panel) => { const rect = panel.getBoundingClientRect(); return rect.width <= 0 || rect.height <= 0 || rect.width > bounds.width; })) {
             retry = setTimeout(() => void load(), 250);
             return;
           }
@@ -202,30 +193,14 @@ export function MatchRoomPage({
     return () => { stopped = true; cancelAnimationFrame(frame); if (retry) clearTimeout(retry); };
   }, [room?.id, Boolean(room?.mapSelection), requiredMapKey, preloadVersion, active, room?.phase, room?.readyPresentation?.token, room?.readyStartsAt, connection]);
   const selection = room?.mapSelection;
-  const timelineKey = room && selection?.startedAt && selection.revealAt
-    ? [room.id, selection.startedAt, selection.revealAt, selection.finalMap].join("|")
-    : undefined;
-  const revealAtMs = Date.parse(selection?.revealAt ?? "");
-  const [revealedTimeline, setRevealedTimeline] = useState<RevealedTimeline | null>(null);
-  const presentationNowMs = timelineKey && revealedTimeline?.key === timelineKey
-    ? Math.max(nowMs, revealedTimeline.revealAtMs)
-    : nowMs;
-  const markRevealBoundary = (boundaryMs: number) => {
-    if (!timelineKey || !Number.isFinite(revealAtMs) || boundaryMs !== revealAtMs) return;
-    setRevealedTimeline((current) => (
-      current?.key === timelineKey && current.revealAtMs >= boundaryMs
-        ? current
-        : { key: timelineKey, revealAtMs: boundaryMs }
-    ));
-  };
   const panelProps = (name: string, visible: boolean) => ({
     "data-flow-panel": name,
     inert: !active || !visible,
     className: `match-flow-panel${active && visible ? " is-active" : ""}`,
   });
   const connect = room?.connect;
-  const selectedMap = getSelectedMap(room, presentationNowMs);
-  const presentationPhase = getMatchPresentationPhase(room, presentationNowMs);
+  const selectedMap = getSelectedMap(room);
+  const presentationPhase = getMatchPresentationPhase(room);
   const roomPhase = phaseLabel(presentationPhase, t);
   const readyCountdownStarted = active && room?.phase === "ready" && Boolean(room.readyStartsAt && room.readyDeadlineAt) && nowMs >= Date.parse(room.readyStartsAt!) && nowMs < Date.parse(room.readyDeadlineAt!);
   const canUseReadyActions = isAccountInReadyRoom(room, account?.id);
@@ -329,19 +304,6 @@ export function MatchRoomPage({
                   </div>
                 ) : null}
               </section>
-            </div>
-
-            <div {...panelProps("reel", presentationPhase === "map_randomizing")}>
-              {room.mapSelection
-                ? <RandomMapReel mapSelection={room.mapSelection} nowMs={presentationNowMs} active={active && presentationPhase === "map_randomizing"} onRevealBoundary={markRevealBoundary} />
-                : (
-                    <section className="faceit-connect-panel">
-                      <span>{t("player.match.mapStage")}</span>
-                      <strong>{t("player.match.waitingPlayers")}</strong>
-                      <small>{t("player.match.mapStageWaiting")}</small>
-                    </section>
-                  )
-              }
             </div>
 
             <div {...panelProps("waiting", presentationPhase === "match_room" || presentationPhase === "server_prepare")}>

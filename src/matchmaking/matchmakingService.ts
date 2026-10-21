@@ -33,7 +33,6 @@ import {
 
 const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_cache", "de_dust2", "de_ancient", "de_anubis"];
 const MAP_RANDOMIZATION_MS = 7_000;
-const MAP_RANDOMIZATION_REEL_LENGTH = 20;
 const RECENT_MAP_EXCLUSION_COUNT = 3;
 const MAX_PARTY_HUMANS = 5;
 const PRELOAD_TIMEOUT_MS = 45_000;
@@ -2972,18 +2971,7 @@ export class MatchmakingService {
     const recentMatchMaps = await this.listRecentMatchMaps();
     const finalMapPool = this.getFinalMapPool(mapPool, recentMatchMaps);
     const finalMap = finalMapPool[this.chooseRandomIndex(finalMapPool.length)]!;
-    const nonFinalPool = mapPool.filter((map) => map !== finalMap);
-    const reelPool = nonFinalPool.length > 0 ? nonFinalPool : mapPool;
-    const reel: string[] = [];
-    while (reel.length < MAP_RANDOMIZATION_REEL_LENGTH - 1) {
-      reel.push(reelPool[this.chooseRandomIndex(reelPool.length)]!);
-    }
-    reel.push(finalMap);
-    return {
-      mapPool: mapPool.slice(),
-      reel,
-      finalMap,
-    };
+    return { mapPool: mapPool.slice(), reel: [finalMap], finalMap };
   }
 
   private getFinalMapPool(mapPool: string[], recentMatchMaps: string[]): string[] {

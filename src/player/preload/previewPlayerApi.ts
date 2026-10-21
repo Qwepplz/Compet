@@ -318,7 +318,7 @@ export function createPreviewPlayerApi() {
       const now = new Date().toISOString();
       const nextParty = { ...ensureParty(), lockedMatchId: `preview-${Date.now()}`, matchmakingPendingAt: now, preload: { resourceVersion: PRELOAD_RESOURCE_VERSION, completedAccountIds: [], deadlineAt: new Date(Date.now() + 45_000).toISOString() }, updatedAt: now };
       party = nextParty;
-      party.mapSelection = { mapPool: ["de_mirage", "de_inferno", "de_nuke"], reel: ["de_inferno", "de_nuke", "de_mirage"], finalMap: "de_mirage" };
+      party.mapSelection = { mapPool: ["de_mirage", "de_inferno", "de_nuke"], reel: ["de_mirage"], finalMap: "de_mirage" };
       publishSnapshot();
       return nextParty;
     },

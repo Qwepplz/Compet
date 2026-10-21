@@ -1,5 +1,4 @@
 import type { PlayerLiveMatchStateDto, PlayerMatchmakingStateDto } from "../../shared/types.js";
-import { isMapRandomizingRevealed } from "./randomMapAnimation.js";
 
 export function isTerminalMatchPhase(phase: PlayerLiveMatchStateDto["phase"] | undefined): boolean {
   return phase === "completed" || phase === "failed";
@@ -121,18 +120,23 @@ export function isAccountInReadyRoom(room: PlayerLiveMatchStateDto | null, accou
     .some((participant) => participant.kind === "human" && participant.accountId === accountId);
 }
 
-export function getSelectedMap(room: PlayerLiveMatchStateDto | null, nowMs: number): string | undefined {
-  if (!room || isTerminalMatchPhase(room.phase)) return undefined;
-  return isMapRandomizingRevealed(room.mapSelection, nowMs) ? room.mapSelection!.finalMap : undefined;
+export function getSelectedMap(
+  room: PlayerLiveMatchStateDto | null,
+): string | undefined {
+  if (!room?.mapSelection) return undefined;
+  switch (room.phase) {
+    case "map_randomizing":
+    case "server_prepare":
+    case "connect":
+    case "live":
+      return room.mapSelection.finalMap || undefined;
+    default:
+      return undefined;
+  }
 }
 
-export function getMatchPresentationPhase(room: PlayerLiveMatchStateDto | null, nowMs: number): PlayerLiveMatchStateDto["phase"] | undefined {
-  if (!room || isTerminalMatchPhase(room.phase)) return room?.phase;
-  const selection = room.mapSelection;
-  if (!selection) return room.phase;
-  const start = Date.parse(selection.startedAt ?? "");
-  const end = Date.parse(selection.revealAt ?? "");
-  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start || nowMs < start) return "ready";
-  if (nowMs < end) return "map_randomizing";
-  return room.phase === "map_randomizing" ? "server_prepare" : room.phase;
+export function getMatchPresentationPhase(
+  room: PlayerLiveMatchStateDto | null,
+): PlayerLiveMatchStateDto["phase"] | undefined {
+  return room?.phase === "map_randomizing" ? "server_prepare" : room?.phase;
 }
