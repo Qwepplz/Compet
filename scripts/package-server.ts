@@ -7,6 +7,7 @@ import { createHash } from "node:crypto";
 import { build } from "esbuild";
 import { repositoryRoot } from "./build-sourcemod.js";
 import { buildServer } from "./build-server.js";
+import { buildLogCompressor, fingerprintLzmaSdkRoot, LZMA_SDK_SOURCE_SHA256, probeLogCompressor, validateLzmaSdkRoot } from "./build-log-compressor.js";
 import { createPackageInventory, verifyPackageInventory } from "./create-package-inventory.js";
 import { createServerUpdateFeed } from "./create-server-update-feed.js";
 import { assertPlainPath, fingerprintFile } from "../src/desktop/main/serverManagedFiles.js";
@@ -161,6 +162,7 @@ async function probePackage(root: string, platform: ServerPlatform): Promise<voi
   const env = { ...process.env }; for (const key of ["NODE_OPTIONS", "NODE_PATH", "ELECTRON_RUN_AS_NODE"]) delete env[key];
   process.stdout.write(run(layout.nodePath, ["-e", source], layout.appRoot, env));
   if (platform === "linux-x64") {
+    await probeLogCompressor(path.join(root, "runtime/7z/7zr"));
     const pty = 'const p=require("node-pty").spawn("/bin/sh",["-c","test -t 0 && printf COMPET_PTY_OK"],{name:"xterm",cols:80,rows:24,cwd:process.cwd(),env:process.env});let text="";p.onData(s=>text+=s);p.onExit(e=>{if(e.exitCode!==0||!text.includes("COMPET_PTY_OK"))process.exitCode=1;else console.log("COMPET_PTY_OK")});';
     process.stdout.write(run(layout.nodePath, ["-e", pty], layout.appRoot, env));
   }
@@ -196,6 +198,11 @@ export async function packageServer(options: PackageOptions): Promise<void> {
   const stage = path.join(options.artifactsDir, "staging", options.platform);
   await assertPlainPath(stage);
   await validatePackageSources(repositoryRoot, options.platform);
+  const sdkRoot = options.platform === "linux-x64" ? process.env.COMPET_LZMA_SDK_ROOT ?? "" : undefined;
+  if (sdkRoot !== undefined) {
+    await validateLzmaSdkRoot(sdkRoot);
+    if (await fingerprintLzmaSdkRoot(sdkRoot) !== LZMA_SDK_SOURCE_SHA256) throw new Error("lzma_sdk_source_mismatch");
+  }
   const metadata = await readServerPackageMetadata(options.requiredClientVersion);
   // SourcePawn must complete before build output, staging or existing archives are removed.
   await buildServer();
@@ -205,60 +212,66 @@ export async function packageServer(options: PackageOptions): Promise<void> {
     const version = /VERSION_ID="([0-9.]+)"/.exec(release)?.[1];
     if (!release.includes("ID=ubuntu") || !version || Number(version) > 26.04) throw new Error("Linux release build requires Ubuntu baseline <=26.04");
   } else run(process.execPath, [path.join(repositoryRoot, "node_modules/electron-vite/bin/electron-vite.js"), "build"]);
-  await fs.rm(stage, { recursive: true, force: true }); await fs.mkdir(stage, { recursive: true });
-  const layout = resolveServerLayout({ platform: options.platform, installRoot: stage });
-  await fs.mkdir(path.dirname(layout.nodePath), { recursive: true }); await copy(node, layout.nodePath);
-  await fs.mkdir(path.dirname(layout.workerEntry), { recursive: true });
-  if (options.platform === "win32-x64") {
-    const electron = path.join(stage, "runtime/electron");
-    await copy(path.join(repositoryRoot, "node_modules/electron/dist"), electron);
-    await fs.rm(path.join(electron, "resources/default_app.asar"), { force: true });
-    const locales = path.join(electron, "locales");
-    for (const name of await fs.readdir(locales)) if (!["en-US.pak", "zh-CN.pak"].includes(name)) await fs.unlink(path.join(locales, name));
-    await copy(path.join(repositoryRoot, "out"), path.join(layout.appRoot, "out"));
-    await copy(path.join(repositoryRoot, "packaging/server/runtime/7zr.exe"), path.join(layout.appRoot, "runtime/7z/7zr.exe"));
-    run("pwsh", ["-NoProfile", "-File", path.join(repositoryRoot, "scripts/package-server-windows-resources.ps1"), "-Stage", stage, "-Version", JSON.parse(await fs.readFile(path.join(repositoryRoot, "packaging/server/app-package.json"), "utf8")).version]);
-    await copy(path.join(repositoryRoot, "packaging/server/windows/compet.cmd"), path.join(stage, "compet.cmd"));
-  } else {
-    await copy(path.join(repositoryRoot, "packaging/server/linux/compet"), path.join(stage, "bin/compet"));
-    await copy(path.join(repositoryRoot, "packaging/server/linux/compet.service"), path.join(stage, "systemd/compet.service"));
-    await copy(path.join(repositoryRoot, "packaging/server/linux/server.example.json"), path.join(stage, "server.example.json"));
-  }
-  await fs.mkdir(layout.appRoot, { recursive: true });
-  await fs.writeFile(path.join(layout.appRoot, "package.json"), JSON.stringify(metadata, null, 2) + "\n");
-  await copy(path.join(repositoryRoot, "packaging/server/profile-seed/human-index.json"), path.join(layout.appRoot, "runtime/profiles/human-index.json"));
-  await copy(path.join(repositoryRoot, "src/sourcemod/compet_match_lock.smx"), path.join(layout.appRoot, "sourcemod/compet_match_lock.smx"));
-  await copy(path.join(repositoryRoot, "src/run_csgo"), path.join(layout.appRoot, "run_csgo"));
-  const otherExtension = options.platform === "linux-x64" ? ".ps1" : ".sh";
-  await fs.unlink(path.join(layout.appRoot, "run_csgo/run_csgo" + otherExtension));
-  await copyManualMysqlEntries(repositoryRoot, layout.appRoot, options.platform);
-  for (const [entry, outfile] of [["src/main.ts", layout.serviceEntry], ["src/cli/main.ts", layout.cliEntry], ["scripts/server-worker-entry.ts", layout.workerEntry]]) {
-    await build({ entryPoints: [path.join(repositoryRoot, entry!)], outfile, bundle: true, platform: "node", format: "cjs", target: "node24", external: ["argon2", "node-pty"], logLevel: "warning" });
-  }
-  await copyRuntimeModules(layout.appRoot, options.platform);
-  if (options.platform === "linux-x64") await normalizeModes(stage);
-  await probePackage(stage, options.platform);
-  await createPackageInventory(stage, metadata.version, options.platform);
-  await verifyPackageInventory(stage, metadata.version, options.platform);
-  const archive = path.join(options.artifactsDir, options.platform === "win32-x64" ? "Compet-Server-win32-x64.7z" : "Compet-Server-linux-x64.tar.gz");
-  const temporary = archive + ".tmp";
-  await assertPlainPath(archive); await assertPlainPath(temporary); await fs.rm(temporary, { force: true });
+  const built = sdkRoot === undefined ? undefined : await buildLogCompressor({ sdkRoot, repositoryRoot });
   try {
+    await fs.rm(stage, { recursive: true, force: true }); await fs.mkdir(stage, { recursive: true });
+    const layout = resolveServerLayout({ platform: options.platform, installRoot: stage });
+    await fs.mkdir(path.dirname(layout.nodePath), { recursive: true }); await copy(node, layout.nodePath);
+    await fs.mkdir(path.dirname(layout.workerEntry), { recursive: true });
     if (options.platform === "win32-x64") {
-      const sevenZip = path.join(repositoryRoot, ".local-tools/7zr.exe");
-      run(sevenZip, ["a", "-t7z", temporary, ".", "-r", "-mx=7", "-bb0", "-bd", "-y"], stage);
-      run(sevenZip, ["t", temporary, "-bb0", "-bd", "-y"]);
-    } else run("tar", ["-czf", temporary, "-C", stage, "."]);
-    const unpack = await fs.mkdtemp(path.join(options.artifactsDir, "package-verify-"));
+      const electron = path.join(stage, "runtime/electron");
+      await copy(path.join(repositoryRoot, "node_modules/electron/dist"), electron);
+      await fs.rm(path.join(electron, "resources/default_app.asar"), { force: true });
+      const locales = path.join(electron, "locales");
+      for (const name of await fs.readdir(locales)) if (!["en-US.pak", "zh-CN.pak"].includes(name)) await fs.unlink(path.join(locales, name));
+      await copy(path.join(repositoryRoot, "out"), path.join(layout.appRoot, "out"));
+      await copy(path.join(repositoryRoot, "packaging/server/runtime/7zr.exe"), path.join(layout.appRoot, "runtime/7z/7zr.exe"));
+      run("pwsh", ["-NoProfile", "-File", path.join(repositoryRoot, "scripts/package-server-windows-resources.ps1"), "-Stage", stage, "-Version", JSON.parse(await fs.readFile(path.join(repositoryRoot, "packaging/server/app-package.json"), "utf8")).version]);
+      await copy(path.join(repositoryRoot, "packaging/server/windows/compet.cmd"), path.join(stage, "compet.cmd"));
+    } else {
+      await copy(path.join(repositoryRoot, "packaging/server/linux/compet"), path.join(stage, "bin/compet"));
+      await copy(path.join(repositoryRoot, "packaging/server/linux/compet.service"), path.join(stage, "systemd/compet.service"));
+      await copy(path.join(repositoryRoot, "packaging/server/linux/server.example.json"), path.join(stage, "server.example.json"));
+      if (!built) throw new Error("log_compressor_build_missing");
+      await copy(built.binaryPath, path.join(stage, "runtime/7z/7zr"));
+      await copy(built.licensePath, path.join(stage, "runtime/7z/lzma-sdk.txt"));
+    }
+    await fs.mkdir(layout.appRoot, { recursive: true });
+    await fs.writeFile(path.join(layout.appRoot, "package.json"), JSON.stringify(metadata, null, 2) + "\n");
+    await copy(path.join(repositoryRoot, "packaging/server/profile-seed/human-index.json"), path.join(layout.appRoot, "runtime/profiles/human-index.json"));
+    await copy(path.join(repositoryRoot, "src/sourcemod/compet_match_lock.smx"), path.join(layout.appRoot, "sourcemod/compet_match_lock.smx"));
+    await copy(path.join(repositoryRoot, "src/run_csgo"), path.join(layout.appRoot, "run_csgo"));
+    const otherExtension = options.platform === "linux-x64" ? ".ps1" : ".sh";
+    await fs.unlink(path.join(layout.appRoot, "run_csgo/run_csgo" + otherExtension));
+    await copyManualMysqlEntries(repositoryRoot, layout.appRoot, options.platform);
+    for (const [entry, outfile] of [["src/main.ts", layout.serviceEntry], ["src/cli/main.ts", layout.cliEntry], ["scripts/server-worker-entry.ts", layout.workerEntry]]) {
+      await build({ entryPoints: [path.join(repositoryRoot, entry!)], outfile, bundle: true, platform: "node", format: "cjs", target: "node24", external: ["argon2", "node-pty"], logLevel: "warning" });
+    }
+    await copyRuntimeModules(layout.appRoot, options.platform);
+    if (options.platform === "linux-x64") await normalizeModes(stage);
+    await probePackage(stage, options.platform);
+    await createPackageInventory(stage, metadata.version, options.platform);
+    await verifyPackageInventory(stage, metadata.version, options.platform);
+    const archive = path.join(options.artifactsDir, options.platform === "win32-x64" ? "Compet-Server-win32-x64.7z" : "Compet-Server-linux-x64.tar.gz");
+    const temporary = archive + ".tmp";
+    await assertPlainPath(archive); await assertPlainPath(temporary); await fs.rm(temporary, { force: true });
     try {
-      if (options.platform === "win32-x64") run(path.join(repositoryRoot, ".local-tools/7zr.exe"), ["x", temporary, "-o" + unpack, "-y"]);
-      else run("tar", ["-xzf", temporary, "-C", unpack]);
-      await verifyPackageInventory(unpack, metadata.version, options.platform);
-      await probePackage(unpack, options.platform);
-    } finally { await fs.rm(unpack, { recursive: true, force: true }); }
-    await createServerUpdateFeed({ packageRoot: stage, outputRoot: path.join(options.artifactsDir, "update/server"), platform: options.platform, version: metadata.version, baseUrl: process.env.COMPET_SERVER_UPDATE_BASE_URL ?? "https://qwepplz111.site/update/server/" });
-    await fs.rename(temporary, archive);
-    process.stdout.write(JSON.stringify({ archive, ...(await fingerprintFile(archive)), platform: options.platform, requiredClientVersion: options.requiredClientVersion }) + "\n");
-  } finally { await fs.rm(temporary, { force: true }); }
+      if (options.platform === "win32-x64") {
+        const sevenZip = path.join(repositoryRoot, ".local-tools/7zr.exe");
+        run(sevenZip, ["a", "-t7z", temporary, ".", "-r", "-mx=7", "-bb0", "-bd", "-y"], stage);
+        run(sevenZip, ["t", temporary, "-bb0", "-bd", "-y"]);
+      } else run("tar", ["-czf", temporary, "-C", stage, "."]);
+      const unpack = await fs.mkdtemp(path.join(options.artifactsDir, "package-verify-"));
+      try {
+        if (options.platform === "win32-x64") run(path.join(repositoryRoot, ".local-tools/7zr.exe"), ["x", temporary, "-o" + unpack, "-y"]);
+        else run("tar", ["-xzf", temporary, "-C", unpack]);
+        await verifyPackageInventory(unpack, metadata.version, options.platform);
+        await probePackage(unpack, options.platform);
+      } finally { await fs.rm(unpack, { recursive: true, force: true }); }
+      await createServerUpdateFeed({ packageRoot: stage, outputRoot: path.join(options.artifactsDir, "update/server"), platform: options.platform, version: metadata.version, baseUrl: process.env.COMPET_SERVER_UPDATE_BASE_URL ?? "https://qwepplz111.site/update/server/" });
+      await fs.rename(temporary, archive);
+      process.stdout.write(JSON.stringify({ archive, ...(await fingerprintFile(archive)), platform: options.platform, requiredClientVersion: options.requiredClientVersion }) + "\n");
+    } finally { await fs.rm(temporary, { force: true }); }
+  } finally { await built?.dispose().catch(error => process.stderr.write("Log compressor cleanup failed: " + String(error) + "\n")); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await packageServer(parsePackageOptions(process.argv.slice(2)));

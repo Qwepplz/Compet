@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, lstat, mkdir, open } from "node:fs/promises";
+import { constants } from "node:fs";
+import { assertPlainPath } from "../../desktop/main/serverManagedFiles.js";
 import path from "node:path";
 import { type ActivityLogInput, type LogActor } from "../../shared/activityLog.js";
 import type { LogEntry } from "../shared/types.js";
@@ -9,9 +11,15 @@ import { redactSensitiveText } from "../../shared/redactSensitiveText.js";
 
 type LogContext = NonNullable<LogEntry["context"]>;
 
-interface FileLogStoreOptions {
+export interface LogArchiver {
+  archiveBefore(utcDay: string): Promise<void>;
+}
+
+export interface FileLogStoreOptions {
   maxRecent?: number;
   sevenZipPath?: string;
+  archiver?: LogArchiver;
+  strictFiles?: boolean;
   now?: () => Date;
 }
 
@@ -20,22 +28,26 @@ export class FileLogStore extends EventEmitter {
   private writeQueue = Promise.resolve();
   private readonly maxRecent: number;
   private readonly now: () => Date;
-  private readonly archiver?: SevenZipLogArchiver;
+  private readonly archiver?: LogArchiver;
+  private readonly strictFiles: boolean;
   private archiveAttemptedUtcDay?: string;
 
   constructor(private readonly logDir: string, options: FileLogStoreOptions = {}) {
     super();
     this.maxRecent = options.maxRecent ?? 2_000;
     this.now = options.now ?? (() => new Date());
-    if (options.sevenZipPath) this.archiver = new SevenZipLogArchiver(logDir, options.sevenZipPath);
+    if (options.archiver && options.sevenZipPath) throw new Error("log_archiver_conflict");
+    this.strictFiles = options.strictFiles ?? false;
+    if (this.strictFiles && (process.platform !== "linux" || !constants.O_NOFOLLOW)) throw new Error("log_strict_files_unsupported");
+    this.archiver = options.archiver ?? (options.sevenZipPath ? new SevenZipLogArchiver(logDir, options.sevenZipPath) : undefined);
   }
 
-  append(input: ActivityLogInput): Promise<LogEntry> {
+  append(input: ActivityLogInput, options: { preserveWhitespace?: boolean } = {}): Promise<LogEntry> {
     const entry: LogEntry = {
       ...input,
       id: randomUUID(),
       timestamp: input.timestamp ?? this.now().toISOString(),
-      message: redactSensitiveText(input.message.trim()),
+      message: redactSensitiveText(options.preserveWhitespace ? input.message : input.message.trim()),
       ...(input.context ? {
         context: Object.fromEntries(Object.entries(input.context).map(([key, value]) => [
           key,
@@ -69,6 +81,10 @@ export class FileLogStore extends EventEmitter {
     return operation;
   }
 
+  flush(): Promise<void> {
+    return this.writeQueue;
+  }
+
   recent(): LogEntry[] {
     return [...this.entries];
   }
@@ -88,9 +104,23 @@ export class FileLogStore extends EventEmitter {
   }
 
   private async writeEntry(entry: LogEntry): Promise<void> {
-    await mkdir(this.logDir, { recursive: true });
+    if (this.strictFiles) await assertPlainPath(this.logDir);
+    await mkdir(this.logDir, { recursive: true, ...(this.strictFiles ? { mode: 0o700 } : {}) });
     const day = entry.timestamp.slice(0, 10);
-    await appendFile(path.join(this.logDir, `${day}.log`), `${formatReadableEntry(entry)}\n`, "utf8");
+    const target = path.join(this.logDir, `${day}.log`);
+    if (!this.strictFiles) {
+      await appendFile(target, `${formatReadableEntry(entry)}\n`, "utf8");
+      return;
+    }
+    await assertPlainPath(target);
+    const before = await lstat(target).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+    if (before && (!before.isFile() || before.nlink !== 1)) throw new Error("log_file_type_invalid");
+    const handle = await open(target, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+    try {
+      const info = await handle.stat();
+      if (!info.isFile() || info.nlink !== 1) throw new Error("log_file_type_invalid");
+      await handle.appendFile(`${formatReadableEntry(entry)}\n`, "utf8");
+    } finally { await handle.close(); }
   }
 }
 

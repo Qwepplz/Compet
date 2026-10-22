@@ -2,8 +2,16 @@ import type { ServerConfig } from "../config/config.js";
 import type { ServerLayout } from "../shared/serverPackageLayout.js";
 import { installGracefulShutdown } from "./gracefulShutdown.js";
 import { createRuntime } from "./runtime.js";
+import { withLinuxFileLogging } from "./linuxFileLogging.js";
 
 export async function runServer(config: ServerConfig, layout?: ServerLayout): Promise<void> {
+  if (process.platform === "linux" && layout?.platform === "linux-x64") {
+    return withLinuxFileLogging({ dataDir: config.dataDir, installRoot: layout.installRoot }, () => runServerRuntime(config, layout));
+  }
+  return runServerRuntime(config, layout);
+}
+
+async function runServerRuntime(config: ServerConfig, layout?: ServerLayout): Promise<void> {
   const runtime = await createRuntime(config, layout);
   let shutdown: ReturnType<typeof installGracefulShutdown> | undefined;
   let resolveClosed!: () => void;
