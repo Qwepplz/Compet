@@ -1,4 +1,3 @@
-import { PRELOAD_RESOURCE_VERSION } from "../../realtime/realtimeTypes.js";
 import type { AccountView } from "../../manager/shared/types.js";
 import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult, UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
 import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../language/translate.js";
@@ -121,6 +120,7 @@ function makeParty(): PlayerPartyDto {
 }
 
 function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
+  const startMs = Date.now() + 1000;
   return {
     id: party.lockedMatchId!,
     phase: "ready",
@@ -128,8 +128,9 @@ function makeReadyRoom(party: PlayerPartyDto): PlayerLiveMatchStateDto {
     humanAccountIds: [previewAccount.id],
     botParticipantIds: ["preview-bot-1", "preview-bot-2"],
     ready: [{ accountId: previewAccount.id, ready: false }],
-    readyPresentation: { token: crypto.randomUUID(), completedAccountIds: [], deadlineAt: new Date(Date.now() + 45_000).toISOString() },
-    mapSelection: party.mapSelection,
+    readyStartsAt: new Date(startMs).toISOString(),
+    readyDeadlineAt: new Date(startMs + 45_000).toISOString(),
+    mapSelection: { mapPool: ["de_mirage", "de_inferno", "de_nuke"], reel: ["de_mirage"], finalMap: "de_mirage" },
     teamA: {
       id: "teamA",
       gameSide: "t",
@@ -223,6 +224,7 @@ export function createPreviewPlayerApi() {
       account: previewAccount,
       matchmaking: matchmaking(),
     }),
+    suspendSession: async (): Promise<void> => undefined,
     logout: async (): Promise<void> => undefined,
     changePassword: async (): Promise<void> => undefined,
     restoreSession: async (_timeoutMs?: number): Promise<RestoreSessionResult> => ({
@@ -314,43 +316,24 @@ export function createPreviewPlayerApi() {
       publishSnapshot();
     },
     beginPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerPartyDto>> => {
-      if (party?.preload) return party;
-      const now = new Date().toISOString();
-      const nextParty = { ...ensureParty(), lockedMatchId: `preview-${Date.now()}`, matchmakingPendingAt: now, preload: { resourceVersion: PRELOAD_RESOURCE_VERSION, completedAccountIds: [], deadlineAt: new Date(Date.now() + 45_000).toISOString() }, updatedAt: now };
-      party = nextParty;
-      party.mapSelection = { mapPool: ["de_mirage", "de_inferno", "de_nuke"], reel: ["de_mirage"], finalMap: "de_mirage" };
-      publishSnapshot();
-      return nextParty;
-    },
-    acknowledgePreload: async (matchId: string, resourceVersion: string): Promise<void> => {
-      if (room?.id === matchId && party?.lockedMatchId === matchId && resourceVersion === PRELOAD_RESOURCE_VERSION) return;
-      if (!party?.preload || party.lockedMatchId !== matchId || party.preload.resourceVersion !== resourceVersion) throw new Error("match preload is not active");
+      if (party?.lockedMatchId && room) return party;
+      party = { ...ensureParty(), status: "matchmaking", lockedMatchId: crypto.randomUUID(), updatedAt: new Date().toISOString() };
       room = makeReadyRoom(party);
-      party = { ...party, status: "matchmaking", lockedMatchId: room.id, preload: undefined, mapSelection: undefined, matchmakingPendingAt: undefined };
-      publishSnapshot();
-    },
-    acknowledgeReadyView: async (matchId: string, token: string): Promise<void> => {
-      if (!room || room.id !== matchId || room.phase !== "ready" || room.readyPresentation?.token !== token) throw new Error("ready presentation is not active");
-      if (room.readyStartsAt) return;
-      if (Date.now() >= Date.parse(room.readyPresentation.deadlineAt)) throw new Error("ready presentation expired");
-      const startMs = Date.now() + 1000;
-      room = { ...room, readyPresentation: { ...room.readyPresentation, completedAccountIds: [previewAccount.id] },
-        readyStartsAt: new Date(startMs).toISOString(), readyDeadlineAt: new Date(startMs + 45_000).toISOString() };
-      publishSnapshot();
-    },
-    cancelPartyMatchmaking: async (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => {
-      if (!party) return undefined;
-      party = { ...party, lockedMatchId: undefined, preload: undefined, mapSelection: undefined, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
       publishSnapshot();
       return party;
     },
-    startPartyMatchmaking: async (_options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
-      if (!room) throw new Error("match preload is incomplete");
-      return room;
+    cancelPartyMatchmaking: async (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => {
+      if (!party) return undefined;
+      party = { ...party, lockedMatchId: undefined, matchmakingPendingAt: undefined, updatedAt: new Date().toISOString() };
+      publishSnapshot();
+      return party;
     },
     getMatchmakingState: async (): Promise<PlayerMatchmakingStateDto> => matchmaking(),
-    acceptReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
-      if (!room?.readyStartsAt || !room.readyDeadlineAt || Date.now() < Date.parse(room.readyStartsAt)) throw new Error("ready check has not started");
+    acceptReady: async (matchId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
+      if (!room || room.id !== matchId) throw new Error("ready room not found");
+      if (room.ready?.some(entry => entry.accountId === previewAccount.id && entry.ready)) return room;
+      if (room.phase !== "ready") throw new Error("match room is closed");
+      if (!room.readyStartsAt || !room.readyDeadlineAt || Date.now() < Date.parse(room.readyStartsAt)) throw new Error("ready check has not started");
       if (Date.now() >= Date.parse(room.readyDeadlineAt)) throw new Error("ready check expired");
       const startMs = Date.now() + 1000;
       room = {
@@ -367,8 +350,12 @@ export function createPreviewPlayerApi() {
       publishSnapshot();
       return room;
     },
-    declineReady: async (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
-      if (!room?.readyStartsAt || !room.readyDeadlineAt || Date.now() < Date.parse(room.readyStartsAt)) throw new Error("ready check has not started");
+    declineReady: async (matchId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => {
+      if (!room || room.id !== matchId) throw new Error("ready room not found");
+      if (room.phase === "failed") return room;
+      if (room.ready?.some(entry => entry.accountId === previewAccount.id && entry.ready)) throw new Error("ready response is already accepted");
+      if (room.phase !== "ready") throw new Error("match room is closed");
+      if (!room.readyStartsAt || !room.readyDeadlineAt || Date.now() < Date.parse(room.readyStartsAt)) throw new Error("ready check has not started");
       if (Date.now() >= Date.parse(room.readyDeadlineAt)) throw new Error("ready check expired");
       room = { ...room, phase: "failed" };
       publishSnapshot();

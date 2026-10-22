@@ -36,28 +36,3 @@ export function mapBadgeUrl(map: string): string | undefined {
   const normalized = map.toLowerCase();
   return MAP_BADGE_URLS[normalized.startsWith("de_") ? normalized : `de_${normalized}`];
 }
-
-const preloadByUrl = new Map<string, Promise<void>>();
-
-export async function preloadMapImages(maps: readonly string[] = Object.keys(MAP_IMAGE_URLS)): Promise<void> {
-  const urls = [...new Set(maps.map((map) => {
-    const url = mapImageUrl(map);
-    if (!url) throw new Error("Missing map image: " + map);
-    return url;
-  }))];
-  await Promise.all(urls.map((url) => {
-    let pending = preloadByUrl.get(url);
-    if (!pending) {
-      pending = Promise.resolve().then(async () => {
-        const image = new Image();
-        image.src = url;
-        await image.decode();
-      }).catch((error: unknown) => {
-        preloadByUrl.delete(url);
-        throw error;
-      });
-      preloadByUrl.set(url, pending);
-    }
-    return pending;
-  }));
-}

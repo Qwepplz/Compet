@@ -47,6 +47,7 @@ export interface PlayerMatchHistoryDto {
 export interface PlayerRealtimeStatusDto {
   connection: PlayerRealtimeConnection;
   stale: boolean;
+  errorCode?: "service_unavailable";
 }
 
 export interface PlayerMatchmakingOccupancyDto {

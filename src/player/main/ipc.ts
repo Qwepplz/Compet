@@ -216,7 +216,7 @@ function isActiveRoom(room: PlayerLiveMatchStateDto): boolean {
 function ownPartyActive(party: PlayerPartyDto | null, accountId: string): boolean {
   return party?.memberAccountIds.includes(accountId) === true &&
     (party.status === "matchmaking" || party.status === "in_match" ||
-      Boolean(party.matchmakingPendingAt || party.preload || party.lockedMatchId));
+      Boolean(party.matchmakingPendingAt || party.lockedMatchId));
 }
 
 function ownMatchActive(state: PlayerMatchmakingStateDto, accountId: string): boolean {
@@ -330,6 +330,14 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
       return operation(client);
     });
   };
+  const assertMaintenanceAllowsAuth = async (): Promise<void> => {
+    if (maintenanceBusy()) throw playerOperationError("update_busy", "Client maintenance is active");
+    const result = await getMaintenanceResult();
+    if (maintenanceBusy()) throw playerOperationError("update_busy", "Client maintenance is active");
+    if (result && (result.status !== "passed" || result.error)) {
+      throw playerOperationError("maintenance_blocked", "Client maintenance is incomplete");
+    }
+  };
   const maintenanceBlock = async (): Promise<string | null> => {
     let client: PlayerApiClient | undefined;
     try { client = deps.getApiClient(); } catch { /* No active authenticated client. */ }
@@ -365,6 +373,7 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
       if (versionBlock) return { ok: false, error: versionErrorData(versionBlock) };
       return await controller.authenticate(async (assertCurrent, previous) => {
         await previous;
+        await assertMaintenanceAllowsAuth();
         return withSavedSession(deps, assertCurrent, async (persisted) => {
           const persistedToken = persisted?.token;
           if (
@@ -396,7 +405,7 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
       const rawCode = typeof details.code === "string" ? details.code : "";
       const knownCode = [
         "account_already_logged_in", "account_disabled", "manager_login_required",
-        "player_login_required", "login_rate_limited", "invalid_credentials", "service_unavailable",
+        "player_login_required", "login_rate_limited", "invalid_credentials", "service_unavailable", "maintenance_blocked", "update_busy",
       ].includes(rawCode);
       const unavailable = statusCode === 503 || [
         "ECONNREFUSED", "ECONNRESET", "ETIMEDOUT", "EHOSTUNREACH", "ENETUNREACH",
@@ -410,6 +419,11 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
         },
       };
     }
+  });
+
+  ipcMain.handle("session:suspend", async () => {
+    try { await controller.suspend(); }
+    finally { clearPlayerRuntime(deps); }
   });
 
   ipcMain.handle("auth:logout", async () => {
@@ -450,15 +464,12 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
   ipcMain.handle("party:declineInvite", (_event, invitationId: string) => withSavedAuth((client) => client.declinePartyInvite(invitationId)));
   ipcMain.handle("party:ignoreInvite", (_event, invitationId: string) => withSavedAuth((client) => client.ignorePartyInvite(invitationId)));
   ipcMain.handle("party:leave", () => withSavedAuth((client) => client.leaveParty()));
-  ipcMain.handle("party:preloadReady", (_event, matchId: string, resourceVersion: string) => withMaintenanceGuardedAuth((client) => client.acknowledgePreload(matchId, resourceVersion)));
-  ipcMain.handle("match:readyViewReady", (_event, matchId: string, token: string) => withMaintenanceGuardedAuth((client) => client.acknowledgeReadyView(matchId, token)));
   ipcMain.handle("party:beginMatchmaking", (_event, options?: { dev?: boolean }) => withMaintenanceGuardedAuth((client) => client.beginPartyMatchmaking(options ?? {})));
   ipcMain.handle("party:cancelMatchmaking", () => withSavedAuth((client) => client.cancelPartyMatchmaking()));
-  ipcMain.handle("party:startMatchmaking", (_event, options?: { dev?: boolean }) => withMaintenanceGuardedAuth((client) => client.startPartyMatchmaking(options ?? {})));
 
   ipcMain.handle("matchmaking:getState", () => withSavedAuth((client) => client.getMatchmakingState()));
-  ipcMain.handle("matchmaking:acceptReady", () => withMaintenanceGuardedAuth((client) => client.acceptReady()));
-  ipcMain.handle("matchmaking:declineReady", () => withSavedAuth((client) => client.declineReady()));
+  ipcMain.handle("matchmaking:acceptReady", (_event, matchId: string) => withMaintenanceGuardedAuth((client) => client.acceptReady(matchId)));
+  ipcMain.handle("matchmaking:declineReady", (_event, matchId: string) => withSavedAuth((client) => client.declineReady(matchId)));
   ipcMain.handle("matchmaking:refreshSnapshot", () =>
     withSavedAuth(() => deps.refreshRealtimeSnapshot()));
 
@@ -470,7 +481,7 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
     return shell.openExternal(connectUrl);
   });
 
-  ipcMain.handle("session:restore", async (_event, timeoutMs?: number): Promise<RestoreSessionResult | null | { ok: false; error: ReturnType<typeof versionErrorData> }> => {
+  ipcMain.handle("session:restore", async (_event, timeoutMs?: number): Promise<RestoreSessionResult | null | { ok: false; error: { code: string; message: string; statusCode?: number; requiredClientVersion?: string } }> => {
     if (versionBlock) return { ok: false, error: versionErrorData(versionBlock) };
     const normalizedTimeoutMs = normalizeStartupTimeout(timeoutMs);
     const deadline = normalizedTimeoutMs === undefined ? undefined : performance.now() + normalizedTimeoutMs;
@@ -498,6 +509,13 @@ export function registerPlayerIpc(deps: IpcDeps): AuthRetryController {
         ]);
       } finally {
         if (suspendTimer) clearTimeout(suspendTimer);
+      }
+      try { await assertMaintenanceAllowsAuth(); }
+      catch (error) {
+        return { ok: false as const, error: {
+          code: error && typeof error === "object" && "code" in error && error.code === "update_busy" ? "update_busy" : "maintenance_blocked",
+          message: "Client maintenance is incomplete",
+        } };
       }
       return withSavedSession(deps, assertCurrent, async (persisted) => {
         assertWithinDeadline();

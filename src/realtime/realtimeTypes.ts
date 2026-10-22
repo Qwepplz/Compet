@@ -1,7 +1,6 @@
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
 import type { PartyInvitationDto } from "../matchmaking/partyInvitationTypes.js";
 
-export const PRELOAD_RESOURCE_VERSION = "match-flow-2";
 
 type RealtimeEventWithSeq<T> = T & { seq?: number; serverNow?: string; streamId?: string };
 

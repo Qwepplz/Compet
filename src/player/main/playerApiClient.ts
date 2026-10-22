@@ -23,7 +23,6 @@ import { RemoteProfileService, type PlayerProfile } from "./remoteProfileService
 import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";
 
 const REQUEST_TIMEOUT_MS = 4_000;
-const MATCHMAKING_START_TIMEOUT_MS = 20_000;
 
 export interface PlayerLoginResult {
   token: string;
@@ -248,16 +247,6 @@ export class PlayerApiClient {
     return attachServerNow(response.party, response);
   }
 
-  async acknowledgePreload(matchId: string, resourceVersion: string): Promise<void> {
-    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503, "service_unavailable");
-    await this.realtimeCommandSender("party.preloadReady", { matchId, resourceVersion });
-  }
-
-  async acknowledgeReadyView(matchId: string, token: string): Promise<void> {
-    if (!this.realtimeCommandSender) throw new PlayerApiError("Realtime connection required", 503, "service_unavailable");
-    await this.realtimeCommandSender("match.readyViewReady", { matchId, token });
-  }
-
   async cancelPartyMatchmaking(): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> {
     const response = await this.commandOrRequest<{ party?: PlayerPartyDto } & ServerTimedResponse>(
       "party.cancelMatchmaking",
@@ -265,21 +254,6 @@ export class PlayerApiClient {
       () => this.request("POST", "/party/matchmaking/cancel", {}),
     );
     return attachServerNow(response.party, response);
-  }
-
-  async startPartyMatchmaking(options: { dev?: boolean } = {}): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
-    const payload = options.dev ? { dev: true } : {};
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
-      "party.startMatchmaking",
-      payload,
-      () => this.request(
-        "POST",
-        "/party/matchmaking/start",
-        payload,
-        MATCHMAKING_START_TIMEOUT_MS,
-      ),
-    );
-    return attachServerNow(response.room, response);
   }
 
   async getMatchmakingState(timeoutMs?: number): Promise<PlayerMatchmakingStateDto> {
@@ -292,21 +266,13 @@ export class PlayerApiClient {
 
 
 
-  async acceptReady(): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
-      "matchmaking.acceptReady",
-      {},
-      () => this.request("POST", "/matchmaking/ready", {}),
-    );
+  async acceptReady(matchId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
+    const response = await this.request<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>("POST", "/matchmaking/ready", { matchId });
     return attachServerNow(response.room, response);
   }
 
-  async declineReady(): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
-    const response = await this.commandOrRequest<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>(
-      "matchmaking.declineReady",
-      {},
-      () => this.request("POST", "/matchmaking/ready/decline", {}),
-    );
+  async declineReady(matchId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> {
+    const response = await this.request<{ room: PlayerLiveMatchStateDto } & ServerTimedResponse>("POST", "/matchmaking/ready/decline", { matchId });
     return attachServerNow(response.room, response);
   }
 

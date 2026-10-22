@@ -90,7 +90,6 @@ export async function registerWebSocket<RawServer extends RawServerBase>(
       if (registeredAccountId && deps.presence) {
         const summary = deps.presence.unregister(registeredAccountId, matchmakingHeartbeat ? new Date(lastReceivedAt).toISOString() : undefined);
         connectionCount = summary.connectionCount;
-        if (summary.connectionCount === 0) void deps.matchmaking?.invalidateReadyPresentation(registeredAccountId).catch(() => undefined);
         void publishPresenceUpdated("disconnect", deps, summary);
       }
       writeActivityLog({

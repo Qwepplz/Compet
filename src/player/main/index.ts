@@ -163,7 +163,7 @@ function broadcast(channel: string, payload: unknown): void {
 }
 
 function publishRealtimeStatus(next: PlayerRealtimeStatusDto): void {
-  if (realtimeStatus.connection === next.connection && realtimeStatus.stale === next.stale) {
+  if (realtimeStatus.connection === next.connection && realtimeStatus.stale === next.stale && realtimeStatus.errorCode === next.errorCode) {
     return;
   }
   realtimeStatus = next;
@@ -368,9 +368,22 @@ async function pollRealtimeEvents(sessionVersion: number, pollGeneration: number
         await delay(REALTIME_EVENT_POLL_RETRY_MS);
         continue;
       }
-      const nextStatus = getRealtimeStatusAfterPollFailure(realtimeStatus, connectedInCurrentSession);
-      pauseRealtimeEvents = nextStatus.connection !== "disconnected";
-      publishRealtimeStatus(nextStatus);
+      try {
+        await refreshRealtimeSnapshot();
+        if (sessionVersion !== realtimeSessionVersion || pollGeneration !== realtimePollGeneration || realtimeWebSocketConnected) return;
+        connectedInCurrentSession = true;
+        pauseRealtimeEvents = false;
+        publishRealtimeStatus({ connection: "connected", stale: false });
+        flushQueuedRealtimeEvents(sessionVersion);
+      } catch {
+        if (sessionVersion !== realtimeSessionVersion || pollGeneration !== realtimePollGeneration || realtimeWebSocketConnected) return;
+        if (shouldApplyRealtimePollFailure(pollStartedStatusRevision, realtimeStatusRevision)) {
+          const nextStatus = getRealtimeStatusAfterPollFailure(realtimeStatus, connectedInCurrentSession);
+          pauseRealtimeEvents = true;
+          publishRealtimeStatus({ ...nextStatus, errorCode: "service_unavailable" });
+          return;
+        }
+      }
       await delay(REALTIME_EVENT_POLL_RETRY_MS);
     }
   }
@@ -414,9 +427,10 @@ realtimeClient.onStatus((connection) => {
     connectedInCurrentSession = true;
     pauseRealtimeEvents = true;
     publishRealtimeStatus({ connection, stale: true });
+    const statusRevision = realtimeStatusRevision;
     void refreshRealtimeSnapshot().catch(() => {
-      if (sessionVersion === realtimeSessionVersion) {
-        publishRealtimeStatus({ connection: "connected", stale: true });
+      if (sessionVersion === realtimeSessionVersion && statusRevision === realtimeStatusRevision && realtimeWebSocketConnected) {
+        publishRealtimeStatus({ connection: "connected", stale: true, errorCode: "service_unavailable" });
       }
     });
     return;
@@ -424,9 +438,10 @@ realtimeClient.onStatus((connection) => {
 
   pauseRealtimeEvents = true;
   publishRealtimeStatus({ connection, stale: true });
+  const statusRevision = realtimeStatusRevision;
   void refreshRealtimeSnapshot().catch(() => {
-    if (sessionVersion === realtimeSessionVersion) {
-      publishRealtimeStatus({ connection: "connected", stale: true });
+    if (sessionVersion === realtimeSessionVersion && statusRevision === realtimeStatusRevision && realtimeWebSocketConnected) {
+      publishRealtimeStatus({ connection: "connected", stale: true, errorCode: "service_unavailable" });
     }
   });
 });

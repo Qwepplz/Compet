@@ -49,6 +49,7 @@ export const playerApi = {
     // contextBridge drops custom Error properties; reject cloneable data instead.
     throw result.error;
   },
+  suspendSession: (): Promise<void> => invoke("session:suspend"),
   logout: (): Promise<void> => invoke("auth:logout"),
   changePassword: (currentPassword: string, newPassword: string): Promise<void> =>
     invoke("auth:changePassword", currentPassword, newPassword),
@@ -75,14 +76,11 @@ export const playerApi = {
   declinePartyInvite: (invitationId: string): Promise<void> => invoke("party:declineInvite", invitationId),
   ignorePartyInvite: (invitationId: string): Promise<void> => invoke("party:ignoreInvite", invitationId),
   leaveParty: (): Promise<void> => invoke("party:leave"),
-  acknowledgePreload: (matchId: string, resourceVersion: string): Promise<void> => invoke("party:preloadReady", matchId, resourceVersion),
-  acknowledgeReadyView: (matchId: string, token: string): Promise<void> => invoke("match:readyViewReady", matchId, token),
   beginPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerPartyDto>> => invoke("party:beginMatchmaking", options),
   cancelPartyMatchmaking: (): Promise<PlayerServerTimedDto<PlayerPartyDto> | undefined> => invoke("party:cancelMatchmaking"),
-  startPartyMatchmaking: (options?: { dev?: boolean }): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("party:startMatchmaking", options),
   getMatchmakingState: (): Promise<PlayerMatchmakingStateDto> => invoke("matchmaking:getState"),
-  acceptReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:acceptReady"),
-  declineReady: (): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:declineReady"),
+  acceptReady: (matchId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:acceptReady", matchId),
+  declineReady: (matchId: string): Promise<PlayerServerTimedDto<PlayerLiveMatchStateDto>> => invoke("matchmaking:declineReady", matchId),
   refreshRealtimeSnapshot: (): Promise<void> => invoke("matchmaking:refreshSnapshot"),
   onRealtimeEvent: (listener: (event: PlayerRealtimeEvent) => void): (() => void) =>
     subscribe("player:realtime:event", listener),

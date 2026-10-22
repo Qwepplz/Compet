@@ -46,8 +46,6 @@ import {
   saveMatchSoundEnabled,
 } from "./playerPreferences.js";
 import { playerAccountLabel } from "./playerDisplay.js";
-import { preloadMapImages } from "./mapAssets.js";
-import { PRELOAD_RESOURCE_VERSION } from "../../../realtime/realtimeTypes.js";
 import { serverSyncedNowMs, updateServerClockOffset } from "./serverClock.js";
 import { displayError } from "../../../language/displayError.js";
 import { useLanguage, type LanguageContextValue } from "../../../language/react.js";
@@ -361,6 +359,10 @@ export function App() {
   const [startupGate, setStartupGate] = useState<StartupGateContext>({ state: "checking_update", generation: 0 });
   const startupGateRef = useRef(startupGate);
   const startupRunning = useRef(false);
+  const startupOwnerGeneration = useRef<number | null>(null);
+  const loginOwnerGeneration = useRef<number | null>(null);
+  const returnToLoginPromise = useRef<Promise<void> | null>(null);
+  const sessionStoppedRef = useRef(false);
   const [loadingMessageKey, setLoadingMessageKey] = useState<TranslationKey>("common.state.checkingUpdates");
   const [activeView, setActiveView] = useState<PlayerView>("login");
   const [baseUrl, setBaseUrl] = useState(defaultBaseUrl);
@@ -411,6 +413,7 @@ export function App() {
   const matchFoundAudioRef = useRef<HTMLAudioElement | null>(null);
   const matchSoundEnabledRef = useRef(matchSoundEnabled);
   const activeMatchRoomIdRef = useRef<string | null>(null);
+  const matchmakingActiveRef = useRef(false);
   const latestRealtimeEventSeqRef = useRef(0);
   const realtimeSnapshotGenerationRef = useRef(0);
   const realtimeStreamIdRef = useRef<string | undefined>(undefined);
@@ -423,20 +426,14 @@ export function App() {
   const currentRoom = getCurrentRoom(matchmaking);
   const activeMatchRoom = getActiveMatchRoom(matchmaking);
   activeMatchRoomIdRef.current = activeMatchRoom?.id ?? null;
+  matchmakingActiveRef.current = Boolean(activeMatchRoom || (party?.lockedMatchId && party.matchmakingPendingAt));
   realtimeStreamIdRef.current = matchmaking.streamId;
   realtimeEventHandlerRef.current = applyRealtimeEvent;
   const visibleHomeParty = !party || party.memberAccountIds.length <= 1 ? null : party;
   const syncedMatchmakingPendingAt = party?.status === "open" ? party.matchmakingPendingAt ?? null : null;
   const knownPlayerProfiles = buildKnownPlayerProfiles(account, friends);
   const currentRoomWithKnownProfiles = mergeRoomKnownPlayerProfiles(currentRoom, knownPlayerProfiles);
-  const pendingFlowRoom: PlayerLiveMatchStateDto | null = party?.matchmakingPendingAt && party.lockedMatchId && party.mapSelection ? {
-    id: party.lockedMatchId, phase: "ready", partyId: party.id, createdAt: party.matchmakingPendingAt,
-    mapSelection: party.mapSelection, humanAccountIds: party.memberAccountIds,
-    ready: party.memberAccountIds.map((accountId) => ({ accountId, ready: false })),
-    teamA: { id: "teamA", gameSide: "t", name: "", participants: Array.from({ length: 5 }, (_, i) => ({ id: `pending-a-${i}`, kind: "human", displayName: "" })) },
-    teamB: { id: "teamB", gameSide: "ct", name: "", participants: Array.from({ length: 5 }, (_, i) => ({ id: `pending-b-${i}`, kind: "human", displayName: "" })) },
-  } : null;
-  const matchFlowRoom = activeMatchRoom ? currentRoomWithKnownProfiles : pendingFlowRoom;
+  const matchFlowRoom = activeMatchRoom ? currentRoomWithKnownProfiles : null;
   const hasActiveMatch = Boolean(activeMatchRoom);
   const hasVisibleMatchResult = activeView === "match-result" && matchResult !== null && matchResultMatchId !== null;
   const viewingMatchHistory = activeView === "match-history" || (activeView === "match-result" && matchResultBackView === "match-history");
@@ -550,10 +547,8 @@ export function App() {
   }
 
   useEffect(() => {
-    void preloadMapImages().catch(() => undefined);
-    void window.playerApi.getVersion().then(setCurrentVersion);
     const unsubscribeVersion = api.onVersionBlocked(blockStartup);
-    void api.getVersionBlock().then((block) => { if (block) blockStartup(block); });
+    void api.getVersionBlock().then((block) => { if (block) blockStartup(block); }).catch((error) => returnToLogin(error));
     void initializeStartup();
     return () => {
       unsubscribeVersion();
@@ -640,14 +635,19 @@ export function App() {
   useEffect(() => {
     if (!account) return;
 
+    const generation = startupGateRef.current.generation;
     const unsubscribeStatus = api.onRealtimeStatus((status) => {
+      if (sessionStoppedRef.current || generation !== startupGateRef.current.generation) return;
       setRealtimeStatus(status);
+      if (status.errorCode) void returnToLogin({ code: status.errorCode });
     });
     const unsubscribeSnapshot = api.onRealtimeSnapshot((snapshot) => {
+      if (sessionStoppedRef.current || generation !== startupGateRef.current.generation) return;
       updateServerClock(snapshot.matchmaking.serverNow);
       applyRealtimeSnapshot(snapshot);
     });
     const unsubscribeEvent = api.onRealtimeEvent((event) => {
+      if (sessionStoppedRef.current || generation !== startupGateRef.current.generation) return;
       updateServerClock(event.serverNow);
       realtimeEventHandlerRef.current(event);
     });
@@ -689,11 +689,49 @@ export function App() {
     };
   }, [account, hasVisibleMatchResult, matchResultBackView, matchResultMatchId, matchHistoryPlayer?.accountId]);
 
+  function returnToLogin(error: unknown): Promise<void> {
+    if (returnToLoginPromise.current) return returnToLoginPromise.current;
+    if (sessionStoppedRef.current) return Promise.resolve();
+    sessionStoppedRef.current = true;
+    const gate = startupGateRef.current;
+    setGate({ ...gate, generation: gate.generation + 1,
+      ...((gate.state !== "update_required" && gate.code !== "maintenance_blocked") ? { state: "connection_failed" as const,
+        code: error && typeof error === "object" && "code" in error && typeof error.code === "string" ? error.code : "service_unavailable" } : {}) });
+    invalidateMatchHistoryResultRequest();
+    setAccount(null);
+    setFriends(emptyFriends);
+    setParty(null);
+    setMatchmaking(emptyMatchmaking);
+    pendingMatchRoomViewIdRef.current = null;
+    setMatchResult(null);
+    setMatchResultMatchId(null);
+    setMatchResultPlayerSteam64(undefined);
+    setMatchResultBackView("home");
+    setMatchHistory(null);
+    setMatchHistoryPlayer(null);
+    setRankmeStanding(null);
+    setPasswordModalOpen(false);
+    setSettingsModalOpen(false);
+    setBusyPartyInvitationId(null);
+    setMatchmakingFeedbackPending(false);
+    loginOwnerGeneration.current = null;
+    setLoginPending(false);
+    setLoading(false);
+    setActiveView("login");
+    const pending = Promise.resolve().then(() => api.suspendSession())
+      .catch(() => { /* Local failure still converges to the login form. */ })
+      .finally(() => { if (returnToLoginPromise.current === pending) returnToLoginPromise.current = null; });
+    returnToLoginPromise.current = pending;
+    void message.error(displayError(error, t, "errors.serviceUnavailable"));
+    return pending;
+  }
+
   async function hydrateRealtimeState() {
+    const generation = startupGateRef.current.generation;
     try {
       await api.refreshRealtimeSnapshot();
-    } catch {
-      // Keep the restored base state; a realtime snapshot failure is not a login failure.
+    } catch (error) {
+      if (generation === startupGateRef.current.generation) await returnToLogin(error);
     }
   }
 
@@ -714,8 +752,14 @@ export function App() {
     setFriends((current) => mergeFriendListSnapshot(current, snapshot.friends, resolvedFriendRequestIds.current));
     setParty((current) => mergePartySnapshot(current, snapshot.matchmaking.party));
     const snapshotActiveRoom = getActiveMatchRoom(snapshot.matchmaking);
+    // Read accepted authority before React commits the corresponding state updates.
+    matchmakingActiveRef.current = Boolean(snapshotActiveRoom
+      || (snapshot.matchmaking.party?.lockedMatchId && snapshot.matchmaking.party.matchmakingPendingAt));
     if (snapshotActiveRoom) {
       pendingMatchRoomViewIdRef.current = snapshotActiveRoom.id;
+    } else if (activeMatchRoomIdRef.current) {
+      pendingMatchRoomViewIdRef.current = null;
+      setActiveView("home");
     }
     setMatchmaking((current) => {
       const nextMatchmaking = mergeMatchmakingSnapshotState(
@@ -1024,8 +1068,8 @@ export function App() {
         return;
       case "match_failed":
         void hydrateRealtimeState();
-        if (party?.lockedMatchId === event.matchId && party.preload) {
-          void message.error(t(event.error === "preload_timeout" ? "player.home.preloadTimeout" : "errors.matchFailed"));
+        if (party?.lockedMatchId === event.matchId && party.matchmakingPendingAt) {
+          void message.error(t("errors.matchFailed"));
           setMatchmakingFeedbackPending(false);
         }
         updateCurrentRoom(event.matchId, (room) => ({
@@ -1220,6 +1264,7 @@ export function App() {
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
       acceptedInviteJoinMessageAccountIds.current.clear();
+      sessionStoppedRef.current = false;
       setAccount(restored.account);
       setFriends(emptyFriends);
       resetRealtimeSequence(restored.matchmaking.baseSeq);
@@ -1269,18 +1314,23 @@ export function App() {
   }
 
   async function login(values: LoginValues) {
-    if (loginPending) return;
+    if (loginOwnerGeneration.current !== null) return;
     invalidateMatchHistoryResultRequest();
     setLoginPending(true);
     setServerAddress(values.baseUrl);
     const generation = startupGateRef.current.generation + 1;
-    setGate({ state: "checking_admission", generation });
+    loginOwnerGeneration.current = generation;
+    setGate({ state: "checking_update", generation });
     try {
-      if (!await checkStartupAdmission(values.baseUrl, generation) || generation !== startupGateRef.current.generation) return;
+      if (returnToLoginPromise.current) await returnToLoginPromise.current;
+      if (generation !== startupGateRef.current.generation) return;
+      sessionStoppedRef.current = false;
+      if (!await prepareConnection(values.baseUrl, generation) || generation !== startupGateRef.current.generation) return;
       setCurrentPassword(values.password);
       setSavedLogin({ baseUrl: values.baseUrl, username: values.username, password: values.password });
       const authenticated = await window.playerApi.login(values.baseUrl, values.username, values.password);
       if (generation !== startupGateRef.current.generation) return;
+      sessionStoppedRef.current = false;
       setAccount(authenticated.account);
       resolvedFriendRequestIds.current.clear();
       resolvedPartyInvitationIds.current.clear();
@@ -1306,9 +1356,12 @@ export function App() {
       void refreshRankmeStanding();
     } catch (error) {
       if (generation !== startupGateRef.current.generation) return;
-      if (!blockStartup(error)) message.error(displayError(error, t, "errors.loginFailed"));
+      if (!blockStartup(error)) await returnToLogin(error);
     } finally {
-      setLoginPending(false);
+      if (loginOwnerGeneration.current === generation) {
+        loginOwnerGeneration.current = null;
+        setLoginPending(false);
+      }
     }
   }
 
@@ -1405,7 +1458,7 @@ export function App() {
     const unavailable = isSemver(requiredClientVersion) && available && isSemver(available) && compareSemver(available, requiredClientVersion) < 0;
     setGate({ state: isSemver(requiredClientVersion) ? "update_required" : "connection_failed",
       generation: startupGateRef.current.generation + 1, currentVersion, requiredClientVersion, code: unavailable ? "update_unavailable" : error.code });
-    setLoading(true);
+    void returnToLogin(error);
     return true;
   }
 
@@ -1422,11 +1475,29 @@ export function App() {
       if (generation !== startupGateRef.current.generation) return false;
       if (!blockStartup(error)) {
         setGate({ state: "connection_failed", generation, code: "service_unavailable" });
-        setActiveView("login");
-        setLoading(false);
+        await returnToLogin(error);
       }
       return false;
     }
+  }
+
+  async function prepareConnection(address: string, generation: number): Promise<boolean> {
+    const previousMaintenance = await api.getMaintenanceResult();
+    if (generation !== startupGateRef.current.generation) return false;
+    if (previousMaintenance && (previousMaintenance.status !== "passed" || previousMaintenance.error)) {
+      setRecoveryReport(previousMaintenance);
+      setGate({ state: "connection_failed", generation, code: "maintenance_blocked" });
+      await returnToLogin({ code: "maintenance_blocked" });
+      return false;
+    }
+    const installing = await checkStartupUpdate(performance.now() + STARTUP_CONNECTION_BUDGET_MS);
+    if (generation !== startupGateRef.current.generation) return false;
+    if (installing) {
+      setGate({ state: "installing", generation });
+      setLoading(true);
+      return false;
+    }
+    return checkStartupAdmission(address, generation);
   }
 
   async function initializeStartup(retry = false, address?: string) {
@@ -1434,6 +1505,7 @@ export function App() {
     startupInitializationStarted = true;
     startupRunning.current = true;
     const generation = startupGateRef.current.generation + 1;
+    startupOwnerGeneration.current = generation;
     setGate({ state: "checking_update", generation, availableVersion: undefined, code: undefined });
     setLoading(true);
     try {
@@ -1442,6 +1514,7 @@ export function App() {
       if (previousMaintenance && (previousMaintenance.status !== "passed" || previousMaintenance.error)) {
         setRecoveryReport(previousMaintenance);
         setGate({ state: "connection_failed", generation, code: "maintenance_blocked" });
+        await returnToLogin({ code: "maintenance_blocked" });
         return;
       }
       if (previousMaintenance?.status === "passed") void message.success(t("player.integrity.restartPassed"));
@@ -1469,12 +1542,22 @@ export function App() {
         restoreOutcome = await restoreSession(startupDeadline, true, selectedAddress);
       }
       if (generation !== startupGateRef.current.generation) return;
+      if (restoreOutcome === "retry") {
+        await returnToLogin({ code: "service_unavailable" });
+        return;
+      }
       if (restoreOutcome !== "restored") setActiveView("login");
       setLoading(false);
     } catch (error) {
-      if (generation === startupGateRef.current.generation && !blockStartup(error)) setGate({ state: "connection_failed", generation, code: "service_unavailable" });
+      if (generation === startupGateRef.current.generation && !blockStartup(error)) {
+        setGate({ state: "connection_failed", generation, code: "service_unavailable" });
+        await returnToLogin(error);
+      }
     } finally {
-      startupRunning.current = false;
+      if (startupOwnerGeneration.current === generation) {
+        startupRunning.current = false;
+        startupOwnerGeneration.current = null;
+      }
     }
   }
 
@@ -1558,22 +1641,23 @@ export function App() {
   }
 
   async function createParty() {
+    const generation = startupGateRef.current.generation;
     const nextParty = await api.createParty();
+    if (generation !== startupGateRef.current.generation || sessionStoppedRef.current) return false;
     updateServerClock(nextParty.serverNow);
     setParty(nextParty);
     setMatchmaking((current) => ({
       ...current,
       party: nextParty,
     }));
+    return true;
   }
 
   async function inviteToParty(accountId: string) {
     if (hasActiveMatch) return;
     const targetAccountId = accountId.trim();
     if (!targetAccountId) return;
-    if (!party) {
-      await createParty();
-    }
+    if (!party && !await createParty()) return;
     const invitation = await api.inviteToParty(targetAccountId);
     updateServerClock(invitation.serverNow);
     void message.success(t("player.party.inviteSent"));
@@ -1634,99 +1718,38 @@ export function App() {
   async function startMatchmakingFromHome(options?: { dev?: boolean }) {
     if (!canUseMatchmaking || hasActiveMatch || matchmakingFeedbackPending) return;
     if (party && party.ownerAccountId !== account?.id) return;
+    const generation = startupGateRef.current.generation;
     primeMatchFoundSound();
     setMatchmakingFeedbackPending(true);
-    let matchmakingPendingSynced = false;
     try {
-      if (!party) {
-        await createParty();
-      }
-      const requestSeq = latestRealtimeEventSeqRef.current;
-      const requestSnapshotGeneration = realtimeSnapshotGenerationRef.current;
+      if (!party && !await createParty()) return;
+      if (generation !== startupGateRef.current.generation) return;
       const pendingParty = await api.beginPartyMatchmaking(options);
+      if (generation !== startupGateRef.current.generation) return;
       updateServerClock(pendingParty.serverNow);
-      matchmakingPendingSynced = true;
-      if (latestRealtimeEventSeqRef.current === requestSeq && realtimeSnapshotGenerationRef.current === requestSnapshotGeneration) {
-        setParty(pendingParty);
-        setMatchmaking((current) => ({ ...current, party: pendingParty, occupancy: { activeCount: 1 } }));
-      }
-      setMatchmakingFeedbackPending(false);
+      await hydrateRealtimeState();
     } catch (error) {
-      let recoveredMatchmaking: PlayerMatchmakingStateDto;
-      const recoverySnapshotGeneration = realtimeSnapshotGenerationRef.current;
-      try {
-        recoveredMatchmaking = await api.getMatchmakingState();
-      } catch {
-        setMatchmakingFeedbackPending(false);
-        return;
+      if (generation !== startupGateRef.current.generation || blockStartup(error)) return;
+      await hydrateRealtimeState();
+      if (generation === startupGateRef.current.generation && !sessionStoppedRef.current && !matchmakingActiveRef.current) {
+        void message.error(displayError(error, t, "errors.matchmakingStartFailed"));
       }
-      if (realtimeSnapshotGenerationRef.current !== recoverySnapshotGeneration) {
-        setMatchmakingFeedbackPending(false);
-        return;
-      }
-      const recoveredRoom = getActiveMatchRoom(recoveredMatchmaking);
-      if (recoveredMatchmaking && recoveredRoom) {
-        const recoveryIsBehindRealtime = recoveredMatchmaking.baseSeq < latestRealtimeEventSeqRef.current;
-        if (recoveryIsBehindRealtime) {
-          void hydrateRealtimeState();
-          setMatchmakingFeedbackPending(false);
-          return;
-        }
-        rememberRealtimeSequence(recoveredMatchmaking.baseSeq);
-        updateServerClock(recoveredMatchmaking.serverNow);
-        setParty((current) => mergePartySnapshot(current, recoveredMatchmaking.party));
-        pendingMatchRoomViewIdRef.current = recoveredRoom.id;
-        setMatchmaking((current) => {
-          const nextMatchmaking = mergeMatchmakingSnapshotState(
-            current,
-            recoveredMatchmaking,
-            latestRealtimeEventSeqRef.current,
-          );
-          return {
-            ...nextMatchmaking,
-            party: mergePartySnapshot(current.party, recoveredMatchmaking.party),
-            partyInvitations: mergePartyInvitationsSnapshot(
-              current.partyInvitations,
-              recoveredMatchmaking.partyInvitations,
-              resolvedPartyInvitationIds.current,
-            ),
-          };
-        });
-        setMatchmakingFeedbackPending(false);
-        return;
-      }
-      if (matchmakingPendingSynced) {
-        const nextParty = await api.cancelPartyMatchmaking().catch(() => undefined);
-        if (nextParty) {
-          updateServerClock(nextParty.serverNow);
-          setParty(nextParty);
-          setMatchmaking((current) => ({
-            ...current,
-            party: nextParty,
-            occupancy: { activeCount: 0 },
-          }));
-        }
-      }
-      setMatchmakingFeedbackPending(false);
-      message.error(displayError(error, t, "errors.matchmakingStartFailed"));
+    } finally {
+      if (generation === startupGateRef.current.generation) setMatchmakingFeedbackPending(false);
     }
   }
 
-  async function acceptReady() {
-    if (!currentRoom) return;
-    const nextRoom = await api.acceptReady();
-    updateServerClock(nextRoom.serverNow);
-  }
-
-  async function declineReady() {
-    if (!currentRoom) return;
-    const nextRoom = await api.declineReady();
-    updateServerClock(nextRoom.serverNow);
-    if (isTerminalMatchPhase(nextRoom.phase)) {
-      invalidateMatchHistoryResultRequest();
-      setActiveView("home");
+  async function handleReadyResponse(action: "accept" | "decline", matchId: string): Promise<void> {
+    const generation = startupGateRef.current.generation;
+    try {
+      const result = action === "accept" ? await api.acceptReady(matchId) : await api.declineReady(matchId);
+      if (generation !== startupGateRef.current.generation) return;
+      updateServerClock(result.serverNow);
+    } catch (error) {
+      if (generation !== startupGateRef.current.generation) return;
+      if (blockStartup(error)) return;
     }
-    await hydrateRealtimeState();
+    if (generation === startupGateRef.current.generation) await hydrateRealtimeState();
   }
 
   async function copyText(text: string) {
@@ -1811,13 +1834,7 @@ export function App() {
       return (
         <div className="player-loading-screen">
           <div className="player-loading-content">
-            {startupGate.state === "update_required" || startupGate.state === "connection_failed" ? <>
-              <span>{t(startupGate.code === "maintenance_blocked" ? "player.integrity.restartFailed" : startupGate.state === "connection_failed" ? "player.startup.connectionFailed" : startupGate.code === "update_unavailable" ? "player.startup.updateUnavailable" : "player.startup.updateRequired")}</span>
-              <span>{t("player.startup.versions", { current: currentVersion, required: startupGate.requiredClientVersion || "—" })}</span>
-              <Input value={baseUrl} placeholder={t("common.labels.serverAddress")} disabled={loginPending} onChange={(event) => setServerAddress(event.target.value)} />
-              <Button onClick={() => void initializeStartup(true, baseUrl)}>{t(startupGate.state === "update_required" ? "player.startup.retryUpdate" : "player.startup.retryConnection")}</Button>
-            </> : <><Spin size="large" /><span>{t(loadingMessageKey)}</span></>}
-            <Button onClick={() => void api.closeWindow()}>{t("player.startup.exit")}</Button>
+            <Spin size="large" /><span>{t(loadingMessageKey)}</span>
           </div>
         </div>
       );
@@ -1837,8 +1854,10 @@ export function App() {
             }}
             onFinish={(values) => void login(values)}
           >
-            {startupGate.state === "connection_failed" && startupGate.code === "service_unavailable" ? (
-              <p className="player-copy">{t("errors.serviceUnavailable")}</p>
+            {startupGate.state === "update_required" || startupGate.state === "connection_failed" ? (
+              <p className="player-copy">{startupGate.state === "update_required"
+                ? t(startupGate.code === "update_unavailable" ? "player.startup.updateUnavailable" : "player.startup.updateRequired")
+                : displayError({ code: startupGate.code }, t, "errors.serviceUnavailable")}</p>
             ) : null}
             <Form.Item label={t("common.labels.serverAddress")} name="baseUrl" rules={[{ required: true, message: t("common.labels.serverAddress") }]}>
               <Input disabled={loginPending} onChange={(event) => setServerAddress(event.target.value)} />
@@ -1954,15 +1973,8 @@ export function App() {
               {matchFlowRoom ? (
                 <div className={`player-match-flow-host${activeView === "match-room" ? " is-active" : ""}`} inert={activeView !== "match-room"}>
                   <MatchRoomPage key={matchFlowRoom.id} account={account} room={matchFlowRoom} nowMs={syncedNowMs}
-                    active={activeView === "match-room"} connection={realtimeStatus.connection}
-                    preloadVersion={party?.matchmakingPendingAt ? party.preload?.resourceVersion : undefined}
-                    onPreloadReady={async () => {
-                      if (!party?.lockedMatchId || party.preload?.resourceVersion !== PRELOAD_RESOURCE_VERSION) throw new Error("Unsupported preload resources");
-                      await api.acknowledgePreload(party.lockedMatchId, party.preload.resourceVersion);
-                    }}
-                    onReadyViewReady={(id, token) => api.acknowledgeReadyView(id, token)}
-                    onPreloadFailure={() => { void message.warning(t("player.home.preloadRetry")); }}
-                    onAcceptReady={() => acceptReady()} onDeclineReady={() => declineReady()} onCopyText={(text) => copyText(text)} />
+                    active={activeView === "match-room"}
+                    onAcceptReady={() => handleReadyResponse("accept", matchFlowRoom.id)} onDeclineReady={() => handleReadyResponse("decline", matchFlowRoom.id)} onCopyText={(text) => copyText(text)} />
                 </div>
               ) : null}
             </main>

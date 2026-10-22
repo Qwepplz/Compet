@@ -31,6 +31,7 @@ const errorKeys = {
   integrity_timeout: "player.integrity.timeout",
   integrity_path_outside: "player.integrity.pathOutside",
   update_busy: "player.integrity.busy",
+  maintenance_blocked: "player.integrity.restartFailed",
   integrity_match_active: "player.integrity.matchActive",
   integrity_party_leave_required: "player.integrity.partyLeaveRequired",
   integrity_match_state_unavailable: "player.integrity.matchStateUnavailable",

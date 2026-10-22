@@ -10,7 +10,7 @@ import type { GameServerShutdownResult, MatchConnectInfo, MatchServerExitReport 
 import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import { rankmeDisplayFromLookup, type RankmeDisplay } from "../rankme/rankmeStandings.js";
 import type { GamePresenceChange, PresenceService } from "../presence/presenceService.js";
-import { PRELOAD_RESOURCE_VERSION, type RealtimeEvent } from "../realtime/realtimeTypes.js";
+import { type RealtimeEvent } from "../realtime/realtimeTypes.js";
 import type { CompletedMatchRecord, MatchRecordStore } from "../records/matchRecordStore.js";
 import type { PlayerMatchPolicyPort } from "./playerMatchPolicyStore.js";
 import type { PlayerMarkView } from "../shared/playerMarkTypes.js";
@@ -22,7 +22,6 @@ import {
   type MatchMapSelectionState,
   type MapSelectionContent,
   type PendingMatchDraft,
-  type ReadyPresentationState,
   type MatchRoomReadyState,
   type MatchRoomRecord,
   type MatchFailedEventOutboxEntry,
@@ -35,12 +34,22 @@ const DEFAULT_MAP_POOL = ["de_mirage", "de_inferno", "de_nuke", "de_cache", "de_
 const MAP_RANDOMIZATION_MS = 7_000;
 const RECENT_MAP_EXCLUSION_COUNT = 3;
 const MAX_PARTY_HUMANS = 5;
-const PRELOAD_TIMEOUT_MS = 45_000;
+const PREPARATION_TIMEOUT_MS = 45_000;
 const PARTY_INVITE_TIMEOUT_MS = 30_000;
 const READY_TIMEOUT_MS = 45_000;
 const FLOW_START_LEAD_MS = 1_000;
 
 const TERMINAL_ROOM_MEMORY_TTL_MS = 60 * 60 * 1000;
+
+function getPendingPreparation(party: PartyRecord | undefined): { deadlineAt: string; cancelled?: boolean } | undefined {
+  if (!party) return undefined;
+  const pending = party.pendingPreparation;
+  const legacy = party.preload;
+  if (pending && legacy && (pending.deadlineAt !== legacy.deadlineAt || Boolean(pending.cancelled) !== Boolean(legacy.cancelled))) {
+    throw new Error("Conflicting pending preparation state");
+  }
+  return pending ?? legacy;
+}
 
 function mergeMatchResultPlayers(
   room: MatchRoomRecord,
@@ -250,7 +259,6 @@ export interface PublicMatchRoomRecord {
   humanAccountIds?: string[];
   botParticipantIds?: string[];
   ready?: MatchRoomReadyState[];
-  readyPresentation?: ReadyPresentationState;
   readyStartsAt?: string;
   readyDeadlineAt?: string;
   partyId?: string;
@@ -259,8 +267,7 @@ export interface PublicMatchRoomRecord {
   createdAt: string;
 }
 
-export interface PublicPartyRecord extends Omit<PartyRecord, "draft" | "matchmakingForcedBalance"> {
-  mapSelection?: MapSelectionContent;
+export interface PublicPartyRecord extends Omit<PartyRecord, "draft" | "matchmakingForcedBalance" | "preload" | "pendingPreparation"> {
   rankmeStandings: Record<string, RankmeDisplay | null>;
 }
 
@@ -308,7 +315,6 @@ export class MatchmakingService {
   private readonly partyInviteTimeouts = new Map<string, ReadyTimeoutHandle>();
   private readonly partyMatchmakingTimeouts = new Map<string, { startAt: string; timeout: ReadyTimeoutHandle }>();
   private readonly readyTimeouts = new Map<string, ReadyTimeoutHandle>();
-  private readonly pendingReadyInvalidations = new Map<string, symbol>();
   private readonly mapRevealTimers = new Map<string, ReadyTimeoutHandle>();
   private readonly serverFailureCleanupReveals = new Map<string, string>();
   private readonly recoveredOfflineTimers = new Map<string, { matchId: string; timeout: ReadyTimeoutHandle }>();
@@ -317,7 +323,7 @@ export class MatchmakingService {
   private readonly staleCompensationRetryTimers = new Map<string, ReadyTimeoutHandle>();
   private readonly staleCompensationAttempts = new Map<string, { description: string; run: () => Promise<void> }>();
   private readonly failedMatchCleanups = new Map<string, FailedMatchCleanupProgress>();
-  private readonly preloadCancellationFailureEvents = new Map<string, string>();
+  private readonly preparationCancellationFailureEvents = new Map<string, string>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private readonly matchTasks = new Map<string, { controller: AbortController; backup: Promise<void>; draft?: Promise<void>; prepare?: Promise<void>; cancelled: boolean }>();
   private shutdownPromise?: Promise<ServiceShutdownSummary>;
@@ -344,7 +350,7 @@ export class MatchmakingService {
     task.draft = (async () => {
       const parties = await this.deps.store.listParties();
       const party = parties.find((entry) => entry.id === partyId && entry.lockedMatchId === matchId);
-      if (!party?.preload || party.preload.cancelled || party.draft || task.cancelled) return;
+      if (!party || !getPendingPreparation(party) || getPendingPreparation(party)!.cancelled || party.draft || task.cancelled) return;
       if ((await this.deps.store.listRooms()).some((room) => room.id === matchId)) return;
       const humans = await Promise.all(party.memberAccountIds.map((id) => this.toHumanParticipant(id)));
       const teams = party.matchmakingDev
@@ -354,7 +360,7 @@ export class MatchmakingService {
       await this.enqueueMutation(async () => {
         const latest = await this.deps.store.listParties();
         const current = latest.find((entry) => entry.id === partyId && entry.lockedMatchId === matchId);
-        if (!current?.preload || current.preload.cancelled || current.draft || task.cancelled) return;
+        if (!current || !getPendingPreparation(current) || getPendingPreparation(current)!.cancelled || current.draft || task.cancelled) return;
         const updated = { ...current, draft };
         await this.deps.store.saveParties(latest.map((entry) => entry.id === partyId ? updated : entry));
         await this.emitPartyUpdated(await this.toPlayerPublicParty(updated));
@@ -450,7 +456,7 @@ export class MatchmakingService {
     this.clearPendingTimeouts();
     this.failedMatchCleanups.clear();
     this.serverFailureCleanupReveals.clear();
-    this.preloadCancellationFailureEvents.clear();
+    this.preparationCancellationFailureEvents.clear();
   }
 
   async shutdownForServiceStop(): Promise<ServiceShutdownSummary> {
@@ -691,7 +697,7 @@ export class MatchmakingService {
             }
           } else {
             const parties = await this.deps.store.listParties();
-            const pendingParty = parties.find((party) => party.lockedMatchId === matchId && party.preload);
+            const pendingParty = parties.find((party) => party.lockedMatchId === matchId && getPendingPreparation(party));
             const hasBackup = await this.databaseBackupExists(matchId);
             if (hasBackup && !pendingParty) {
               process.stderr.write(`Interrupted recovery requires preload evidence for orphan ${matchId}\\n`);
@@ -749,7 +755,10 @@ export class MatchmakingService {
     await this.enqueueMutation(async () => {
       for (const candidate of await this.deps.store.listRooms()) {
         if (pending.has(candidate.id)) continue;
-        if (candidate.phase === "ready" && (!candidate.mapSelection || !candidate.readyPresentation)) {
+        if (candidate.phase === "ready" && (!candidate.mapSelection
+          || !Number.isFinite(Date.parse(candidate.readyStartsAt ?? ""))
+          || !Number.isFinite(Date.parse(candidate.readyDeadlineAt ?? ""))
+          || Date.parse(candidate.readyDeadlineAt!) <= Date.parse(candidate.readyStartsAt!))) {
           await this.failMatchRoom(await this.deps.store.listRooms(), candidate, "match_failed");
         }
       }
@@ -758,17 +767,13 @@ export class MatchmakingService {
       this.deps.store.listRooms(),
       this.deps.store.listParties(),
     ]);
-    const recoveredRooms = rooms.map((room) => !pending.has(room.id) && room.phase === "ready" && !room.readyStartsAt && room.readyPresentation
-      ? { ...room, readyPresentation: { ...room.readyPresentation, token: randomUUID(), completedAccountIds: [] } }
-      : room);
-    if (recoveredRooms.some((room, index) => room !== rooms[index])) await this.deps.store.saveRooms(recoveredRooms);
     const resumedParties = parties.map((party) => {
       if (party.lockedMatchId && pending.has(party.lockedMatchId)) return party;
       const room = rooms.find((entry) => entry.id === party.lockedMatchId && entry.partyId === party.id && !isTerminalMatchPhase(entry.phase));
-      if (room && (party.preload || party.draft || party.matchmakingPendingAt)) {
-        return { ...party, status: "matchmaking" as const, preload: undefined, draft: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined, matchmakingForcedBalance: undefined };
+      if (room && (getPendingPreparation(party) || party.draft || party.matchmakingPendingAt)) {
+        return { ...party, status: "matchmaking" as const, pendingPreparation: undefined, preload: undefined, draft: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined, matchmakingForcedBalance: undefined };
       }
-      if (!party.matchmakingPendingAt || (party.preload && party.lockedMatchId)) return party;
+      if (!party.matchmakingPendingAt || (getPendingPreparation(party) && party.lockedMatchId)) return party;
       return { ...party, matchmakingPendingAt: undefined, matchmakingDev: undefined, matchmakingForcedBalance: undefined, lockedMatchId: undefined, updatedAt: this.now() };
     });
     if (resumedParties.some((party, index) => party !== parties[index])) {
@@ -777,18 +782,14 @@ export class MatchmakingService {
 
     for (const party of resumedParties) {
       if (party.lockedMatchId && pending.has(party.lockedMatchId)) continue;
-      if (party.preload && !party.preload.cancelled && party.lockedMatchId) {
-        if (party.preload.resourceVersion !== PRELOAD_RESOURCE_VERSION) {
-          await this.cancelScheduledPartyMatchmaking(party.id, party.preload.deadlineAt, "match_failed");
-          continue;
-        }
-        try { await this.ensurePendingDraft(party.id, party.lockedMatchId); }
-        catch { await this.cancelScheduledPartyMatchmaking(party.id, party.preload.deadlineAt, "match_failed"); continue; }
+      if (getPendingPreparation(party) && !getPendingPreparation(party)?.cancelled && party.lockedMatchId) {
+        await this.cancelScheduledPartyMatchmaking(party.id, getPendingPreparation(party)!.deadlineAt, "match_failed");
+        continue;
       }
-      if (party.preload?.cancelled) {
-        await this.cancelScheduledPartyMatchmaking(party.id, party.preload.deadlineAt);
+      if (getPendingPreparation(party)?.cancelled) {
+        await this.cancelScheduledPartyMatchmaking(party.id, getPendingPreparation(party)!.deadlineAt);
       } else {
-        if (party.lockedMatchId && (party.preload || rooms.some((room) => room.id === party.lockedMatchId && ["ready", "map_randomizing"].includes(room.phase)))) {
+        if (party.lockedMatchId && (getPendingPreparation(party) || rooms.some((room) => room.id === party.lockedMatchId && ["ready", "map_randomizing"].includes(room.phase)))) {
           this.ensureMatchTask(party.lockedMatchId);
         }
         const matchId = party.lockedMatchId;
@@ -808,7 +809,7 @@ export class MatchmakingService {
     for (const room of await this.deps.store.listRooms()) {
       if (pending.has(room.id)) continue;
       if (room.phase === "ready" && room.ready?.length && room.ready.every((entry) => entry.ready)) {
-        await this.acceptReady(room.ready[0]!.accountId, undefined, "automatic");
+        await this.acceptReady(room.ready[0]!.accountId, room.id, undefined, "automatic");
       } else {
         this.scheduleMapReveal(room);
         this.scheduleReadyTimeout(room);
@@ -886,7 +887,7 @@ export class MatchmakingService {
 
   async leaveParty(accountId: string): Promise<void> {
     const snapshot = (await this.deps.store.listParties()).find((entry) => entry.memberAccountIds.includes(accountId));
-    if (snapshot?.preload) await this.cancelScheduledPartyMatchmaking(snapshot.id, snapshot.preload.deadlineAt);
+    if (snapshot && getPendingPreparation(snapshot)) await this.cancelScheduledPartyMatchmaking(snapshot.id, getPendingPreparation(snapshot)!.deadlineAt);
     return this.enqueueMutation(async () => {
       const parties = await this.deps.store.listParties();
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(accountId));
@@ -902,7 +903,7 @@ export class MatchmakingService {
             memberAccountIds: remainingMemberIds,
             matchmakingPendingAt: undefined,
             lockedMatchId: undefined,
-            preload: undefined,
+            pendingPreparation: undefined, preload: undefined,
             matchmakingDev: undefined, matchmakingForcedBalance: undefined,
             updatedAt: this.now(),
           }
@@ -935,17 +936,14 @@ export class MatchmakingService {
         if (!shouldContinue()) return;
         const room = rooms.find((r) => r.id === activeParty.lockedMatchId);
         if (activeParty.matchmakingPendingAt) {
-          if (activeParty.memberAccountIds.every((id) => this.isConfirmedOffline(id))) return { cancel: activeParty.id, deadline: activeParty.preload?.deadlineAt };
-          if (activeParty.memberAccountIds.every((id) => this.isConfirmedOffline(id) || activeParty.preload?.completedAccountIds.includes(id))) return { start: activeParty.ownerAccountId, matchId: activeParty.lockedMatchId };
+          if (activeParty.memberAccountIds.every((id) => this.isConfirmedOffline(id))) return { cancel: activeParty.id, deadline: getPendingPreparation(activeParty)?.deadlineAt };
           return;
         }
         if (room && ["ready", "map_randomizing"].includes(room.phase)) {
           if (this.roomAudience(room).every((id) => this.isConfirmedOffline(id))) {
             await this.failMatchRoom(rooms, room, "match_failed", undefined, shouldContinue);
           } else if (room.phase === "ready" && this.isConfirmedOffline(accountId)) {
-            if (room.readyDeadlineAt) return { ready: accountId };
-            const updated = { ...room, ready: room.ready?.map((entry) => entry.accountId === accountId ? { ...entry, ready: true, respondedAt: this.now() } : entry) };
-            await this.startReadyClockIfPresented(rooms, updated);
+            if (room.readyDeadlineAt) return { ready: accountId, matchId: room.id };
           }
         }
         return;
@@ -969,7 +967,7 @@ export class MatchmakingService {
             memberAccountIds: remainingMemberIds,
             matchmakingPendingAt: undefined,
             lockedMatchId: undefined,
-            preload: undefined,
+            pendingPreparation: undefined, preload: undefined,
             matchmakingDev: undefined, matchmakingForcedBalance: undefined,
             updatedAt: this.now(),
           }
@@ -1016,8 +1014,7 @@ export class MatchmakingService {
     });
     if (!shouldContinue()) return;
     if (action?.cancel) await this.cancelScheduledPartyMatchmaking(action.cancel, action.deadline, undefined, shouldContinue);
-    if (action?.start) await this.startPartyMatchmaking(action.start, {}, action.matchId);
-    if (action?.ready) await this.acceptReady(action.ready, shouldContinue, "automatic");
+    if (action?.ready) await this.acceptReady(action.ready, action.matchId, shouldContinue, "automatic");
   }
 
   private clearRecoveredOfflineTimers(matchId?: string): void {
@@ -1113,8 +1110,8 @@ export class MatchmakingService {
   async isMatchmakingParticipant(accountId: string): Promise<boolean> {
     const parties = await this.deps.store.listParties();
     const party = parties.find((entry) => entry.memberAccountIds.includes(accountId) && entry.lockedMatchId);
-    if (!party || party.preload?.cancelled) return false;
-    if (party.preload) return true;
+    if (!party || getPendingPreparation(party)?.cancelled) return false;
+    if (getPendingPreparation(party)) return true;
     return (await this.deps.store.listRooms()).some((room) => room.id === party.lockedMatchId && !isTerminalMatchPhase(room.phase));
   }
 
@@ -1306,9 +1303,13 @@ export class MatchmakingService {
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
+      if (getPendingPreparation(party)?.cancelled) throw new Error("match cancellation is in progress");
+      const existingPendingCleanup = new Set(await this.deps.store.listPendingBackupCleanupMatchIds());
+      if (party.lockedMatchId && existingPendingCleanup.has(party.lockedMatchId)) throw new Error("matchmaking is already active");
+      if (party.lockedMatchId && (await this.deps.store.listRooms()).some((room) => room.id === party.lockedMatchId && !isTerminalMatchPhase(room.phase))) return this.toPlayerPublicParty(party);
       this.requireOpenParty(party, true);
-      if (party.preload?.cancelled) throw new Error("match cancellation is in progress");
-      if (party.matchmakingPendingAt && party.preload && party.lockedMatchId) return this.toPlayerPublicParty(party);
+      if (getPendingPreparation(party)?.cancelled) throw new Error("match cancellation is in progress");
+      if (party.matchmakingPendingAt && getPendingPreparation(party) && party.lockedMatchId) return this.toPlayerPublicParty(party);
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
       const pendingCleanupMatchIds = new Set(await this.deps.store.listPendingBackupCleanupMatchIds());
       if (this.hasActiveMatchmaking(await this.deps.store.listRooms(), parties, { pendingCleanupMatchIds })) {
@@ -1321,7 +1322,8 @@ export class MatchmakingService {
         ...party,
         matchmakingPendingAt: now,
         lockedMatchId: this.idFactory(),
-        preload: { resourceVersion: PRELOAD_RESOURCE_VERSION, completedAccountIds: [], deadlineAt: new Date(Date.parse(now) + PRELOAD_TIMEOUT_MS).toISOString() },
+        pendingPreparation: { deadlineAt: new Date(Date.parse(now) + PREPARATION_TIMEOUT_MS).toISOString() },
+        preload: undefined,
         matchmakingDev: options.dev === true && ownerAccount.dev === true ? true : undefined,
         matchmakingForcedBalance: !(options.dev === true && ownerAccount.dev === true) && this.deps.playerPolicies.get(party.ownerAccountId).marked,
         updatedAt: now,
@@ -1337,22 +1339,43 @@ export class MatchmakingService {
     this.assertServiceAcceptingMatchmaking();
     try { await this.ensurePendingDraft(accepted.id, accepted.lockedMatchId!); }
     catch (error) {
-      await this.cancelScheduledPartyMatchmaking(accepted.id, accepted.preload?.deadlineAt, "match_failed");
+      await this.cancelScheduledPartyMatchmaking(accepted.id, undefined, "match_failed", undefined, accepted.lockedMatchId);
       throw error;
     }
     const current = (await this.deps.store.listParties()).find((party) => party.id === accepted.id);
-    if (!current || current.lockedMatchId !== accepted.lockedMatchId || current.preload?.cancelled) throw new Error("match preload is not active");
-    return this.toPlayerPublicParty(current);
+    if (!current || current.lockedMatchId !== accepted.lockedMatchId || getPendingPreparation(current)?.cancelled) throw new Error("match preparation is not active");
+    try {
+      await this.startPartyMatchmaking(ownerAccountId, {}, accepted.lockedMatchId);
+    } catch (error) {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find((entry) => entry.id === accepted.lockedMatchId);
+      if (room && !isTerminalMatchPhase(room.phase)) {
+        await this.enqueueMutation(async () => {
+          const currentRooms = await this.deps.store.listRooms();
+          const currentRoom = currentRooms.find((entry) => entry.id === accepted.lockedMatchId);
+          if (currentRoom && !isTerminalMatchPhase(currentRoom.phase)) await this.failMatchRoom(currentRooms, currentRoom, "match_failed");
+        });
+      } else if (!room) await this.cancelScheduledPartyMatchmaking(accepted.id, undefined, "match_failed", undefined, accepted.lockedMatchId);
+      throw error;
+    }
+    return this.toPlayerPublicParty((await this.deps.store.listParties()).find((party) => party.id === accepted.id)!);
   }
 
   async cancelPartyMatchmaking(ownerAccountId: string): Promise<PublicPartyRecord | undefined> {
     const party = await this.enqueueMutation(async () => {
       const found = (await this.deps.store.listParties()).find((entry) => entry.memberAccountIds.includes(ownerAccountId));
       if (found && found.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
+      const pending = getPendingPreparation(found);
+      if (found && pending) {
+        const updated = { ...found, pendingPreparation: { deadlineAt: pending.deadlineAt, cancelled: true }, preload: undefined };
+        const parties = await this.deps.store.listParties();
+        await this.deps.store.saveParties(parties.map((entry) => entry.id === found.id ? updated : entry));
+        return updated;
+      }
       return found;
     });
     if (!party) return undefined;
-    if (party.preload) await this.cancelScheduledPartyMatchmaking(party.id, party.preload.deadlineAt);
+    if (getPendingPreparation(party)) await this.cancelScheduledPartyMatchmaking(party.id, getPendingPreparation(party)!.deadlineAt);
     const current = (await this.deps.store.listParties()).find((entry) => entry.id === party.id);
     return current ? this.toPlayerPublicParty(current) : undefined;
   }
@@ -1366,7 +1389,7 @@ export class MatchmakingService {
       const party = parties.find((candidate) => candidate.memberAccountIds.includes(ownerAccountId));
       if (!party) throw new Error(`party not found for owner: ${ownerAccountId}`);
       if (party.ownerAccountId !== ownerAccountId) throw new Error("party owner required");
-      if (expectedMatchId && party.lockedMatchId !== expectedMatchId) throw new Error("match preload is not active");
+      if (expectedMatchId && party.lockedMatchId !== expectedMatchId) throw new Error("match preparation is not active");
       const pendingCleanupMatchIds = new Set(await this.deps.store.listPendingBackupCleanupMatchIds());
       const existingRooms = this.pruneTerminalRooms(await this.deps.store.listRooms(), parties, pendingCleanupMatchIds);
       const lockedRoom = party.lockedMatchId
@@ -1377,16 +1400,17 @@ export class MatchmakingService {
           ))
         : undefined;
       if (lockedRoom) {
-        if (party.preload || party.draft || party.matchmakingPendingAt) {
+        if (getPendingPreparation(party) || party.draft || party.matchmakingPendingAt) {
           this.assertServiceAcceptingMatchmaking();
-          const updated = { ...party, status: "matchmaking" as const, preload: undefined, draft: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined, matchmakingForcedBalance: undefined };
+          const updated = { ...party, status: "matchmaking" as const, pendingPreparation: undefined, preload: undefined, draft: undefined, matchmakingPendingAt: undefined, matchmakingDev: undefined, matchmakingForcedBalance: undefined };
           await this.deps.store.saveParties(parties.map((entry) => entry.id === party.id ? updated : entry));
           this.clearPartyMatchmakingTimeout(party.id);
         }
         return this.toPlayerPublicRoom(lockedRoom, ownerAccountId);
       }
       this.requireOpenParty(party, true);
-      if (!party.draft || !party.preload || party.preload.resourceVersion !== PRELOAD_RESOURCE_VERSION || party.preload.cancelled || !party.lockedMatchId || !party.memberAccountIds.some((id) => !this.isConfirmedOffline(id)) || !party.memberAccountIds.every((id) => this.isConfirmedOffline(id) || party.preload!.completedAccountIds.includes(id))) throw new Error("match preload is incomplete");
+      if (!party.draft || !getPendingPreparation(party) || getPendingPreparation(party)?.cancelled || !party.lockedMatchId || !party.memberAccountIds.some((id) => !this.isConfirmedOffline(id))) throw new Error("match preparation is incomplete");
+      if (Date.parse(getPendingPreparation(party)!.deadlineAt) <= Date.parse(this.now())) throw new Error("match preparation expired");
       const useDev = party.matchmakingDev === true;
       if (party.memberAccountIds.length > MAX_PARTY_HUMANS) throw new Error("party is full");
       await Promise.all(party.memberAccountIds.map((accountId) => this.requireMatchmakingAccount(accountId)));
@@ -1415,7 +1439,8 @@ export class MatchmakingService {
         humanAccountIds,
         botParticipantIds: participants.filter((participant) => participant.kind === "bot").map((participant) => participant.id),
         ready: this.buildReadyStates(humans).map((entry) => this.isConfirmedOffline(entry.accountId) ? { ...entry, ready: true, respondedAt: startedAt } : entry),
-        readyPresentation: { token: randomUUID(), completedAccountIds: [], deadlineAt: this.buildReadyDeadlineAt(startedAt) },
+        readyStartsAt: new Date(Date.parse(startedAt) + FLOW_START_LEAD_MS).toISOString(),
+        readyDeadlineAt: new Date(Date.parse(startedAt) + FLOW_START_LEAD_MS + READY_TIMEOUT_MS).toISOString(),
         partyId: party.id,
         createdAt: startedAt,
       };
@@ -1424,7 +1449,7 @@ export class MatchmakingService {
         status: "matchmaking",
         lockedMatchId: room.id,
         matchmakingPendingAt: undefined,
-        preload: undefined,
+        pendingPreparation: undefined, preload: undefined,
         draft: undefined,
         matchmakingDev: undefined, matchmakingForcedBalance: undefined,
         updatedAt: startedAt,
@@ -1440,6 +1465,7 @@ export class MatchmakingService {
       this.scheduleReadyTimeout(room);
       const publicParty = await this.toPlayerPublicParty(updatedParty);
       await this.emitReadyRoomCreatedPerAccount(room);
+      await this.emit(this.toReadyEvent("ready_check_started", room));
       await this.emitPartyUpdated(publicParty);
       await this.emitOccupancyUpdated();
       return this.toPlayerPublicRoom(room, ownerAccountId);
@@ -1483,77 +1509,19 @@ export class MatchmakingService {
 
 
 
-  acknowledgeReadyView(accountId: string, matchId: string, token: string, isConnectionActive?: () => boolean): Promise<void> {
-    const pendingInvalidation = this.pendingReadyInvalidations.get(accountId);
-    return this.enqueueMutation(async () => {
-      const rooms = await this.deps.store.listRooms();
-      const room = rooms.find((entry) => entry.id === matchId);
-      if (isConnectionActive && !isConnectionActive()) throw new Error("ready presentation connection is closed");
-      if (!room || room.phase !== "ready" || !this.roomAudience(room).includes(accountId) || room.readyPresentation?.token !== token) throw new Error("ready presentation is not active");
-      if (Date.parse(this.now()) >= Date.parse(room.readyDeadlineAt ?? room.readyPresentation.deadlineAt)) {
-        await this.failMatchRoom(rooms, room, "match_failed");
-        throw new Error("ready presentation expired");
-      }
-      if (room.readyStartsAt) return;
-      // A new valid receipt can also recover from a failed invalidation write.
-      if (pendingInvalidation && this.pendingReadyInvalidations.get(accountId) === pendingInvalidation) {
-        this.pendingReadyInvalidations.delete(accountId);
-      }
-      const updated = { ...room, readyPresentation: { ...room.readyPresentation, completedAccountIds: [...new Set([...room.readyPresentation.completedAccountIds, accountId])] } };
-      await this.startReadyClockIfPresented(rooms, updated);
-    });
-  }
-
-  invalidateReadyPresentation(accountId: string): Promise<void> {
-    const invalidation = Symbol();
-    this.pendingReadyInvalidations.set(accountId, invalidation);
-    return this.enqueueMutation(async () => {
-      const rooms = await this.deps.store.listRooms();
-      const room = rooms.find((entry) => entry.phase === "ready" && !entry.readyStartsAt && entry.readyPresentation && this.roomAudience(entry).includes(accountId));
-      if (!room?.readyPresentation?.completedAccountIds.includes(accountId)) return;
-      const updated = { ...room, readyPresentation: { ...room.readyPresentation, completedAccountIds: room.readyPresentation.completedAccountIds.filter((id) => id !== accountId) } };
-      await this.deps.store.saveRooms(rooms.map((entry) => entry.id === room.id ? updated : entry));
-      await this.emitRoomUpdated(updated);
-    }).then(() => {
-      if (this.pendingReadyInvalidations.get(accountId) === invalidation) this.pendingReadyInvalidations.delete(accountId);
-    });
-  }
-
-  private async startReadyClockIfPresented(rooms: MatchRoomRecord[], room: MatchRoomRecord): Promise<void> {
-    const nowMs = Date.parse(this.now());
-    if (!room.readyStartsAt && (!room.readyPresentation || nowMs >= Date.parse(room.readyPresentation.deadlineAt))) {
-      await this.failMatchRoom(rooms, room, "match_failed");
-      return;
-    }
-    const required = this.roomAudience(room).filter((id) => !this.isConfirmedOffline(id));
-    if (!required.length) { await this.failMatchRoom(rooms, room, "match_failed"); return; }
-    const starts = !room.readyStartsAt && required.every((id) =>
-      !this.pendingReadyInvalidations.has(id)
-      && (!this.deps.presence || this.deps.presence.get(id).online)
-      && room.readyPresentation?.completedAccountIds.includes(id));
-    const startMs = nowMs + FLOW_START_LEAD_MS;
-    const updated = starts
-      ? { ...room, readyStartsAt: new Date(startMs).toISOString(), readyDeadlineAt: new Date(startMs + READY_TIMEOUT_MS).toISOString() }
-      : room;
-    await this.deps.store.saveRooms(rooms.map((entry) => entry.id === room.id ? updated : entry));
-    this.scheduleReadyTimeout(updated);
-    await this.emitRoomUpdated(updated);
-    if (starts) await this.emit(this.toReadyEvent("ready_check_started", updated));
-  }
-
   private async requireReadyResponseWindow(rooms: MatchRoomRecord[], room: MatchRoomRecord, accountId: string): Promise<void> {
     if (!room.readyStartsAt || !room.readyDeadlineAt) throw new Error("ready check has not started");
     const now = Date.parse(this.now());
-    if (now >= Date.parse(room.readyDeadlineAt)) {
+    const startsAt = Date.parse(room.readyStartsAt);
+    const deadlineAt = Date.parse(room.readyDeadlineAt);
+    if (!Number.isFinite(startsAt) || !Number.isFinite(deadlineAt) || deadlineAt <= startsAt || now >= deadlineAt) {
       await this.failMatchRoom(rooms, room, "match_failed");
       throw new Error("ready check expired");
     }
-    if (now < Date.parse(room.readyStartsAt) && !this.isConfirmedOffline(accountId)) throw new Error("ready check has not started");
+    if (now < startsAt && !this.isConfirmedOffline(accountId)) throw new Error("ready check has not started");
   }
 
-  acceptReady(accountId: string): Promise<PublicMatchRoomRecord>;
-  acceptReady(accountId: string, shouldContinue: (() => boolean) | undefined, source?: "manual" | "automatic"): Promise<PublicMatchRoomRecord | undefined>;
-  acceptReady(accountId: string, shouldContinue?: () => boolean, source: "manual" | "automatic" = "manual"): Promise<PublicMatchRoomRecord | undefined> {
+  acceptReady(accountId: string, matchId: string, shouldContinue?: () => boolean, source: "manual" | "automatic" = "manual"): Promise<PublicMatchRoomRecord | undefined> {
     return this.enqueueMutation(async () => {
       const stillCurrent = () => !shouldContinue || shouldContinue();
       if (!stillCurrent()) return undefined;
@@ -1561,9 +1529,14 @@ export class MatchmakingService {
       if (!stillCurrent()) return undefined;
       const rooms = await this.deps.store.listRooms();
       if (!stillCurrent()) return undefined;
-      const room = this.findReadyRoomForAccount(rooms, accountId);
+      const room = rooms.find((candidate) => candidate.id === matchId && this.roomAudience(candidate).includes(accountId));
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
-      await this.requireReadyResponseWindow(rooms, room, accountId);
+      const alreadyAccepted = room.ready?.some((entry) => entry.accountId === accountId && entry.ready) === true;
+      if (alreadyAccepted && (room.phase !== "ready" || room.ready?.some((entry) => !entry.ready))) return this.toPlayerPublicRoom(room, accountId);
+      if (!alreadyAccepted) {
+        if (room.phase !== "ready") throw new Error("match room is closed");
+        await this.requireReadyResponseWindow(rooms, room, accountId);
+      }
       if (!stillCurrent()) return undefined;
 
       const acceptedAt = this.now();
@@ -1574,12 +1547,12 @@ export class MatchmakingService {
       });
       const updatedReadyRoom: MatchRoomRecord = {
         ...room, ready,
-        ...(source === "manual" && room.matchPolicy ? { matchPolicy: { ...room.matchPolicy,
+        ...(!alreadyAccepted && source === "manual" && room.matchPolicy ? { matchPolicy: { ...room.matchPolicy,
           manualReadyAccountIds: [...new Set([...room.matchPolicy.manualReadyAccountIds, accountId])] } } : {}),
       };
       const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? updatedReadyRoom : candidate));
       if (!stillCurrent()) return undefined;
-      await this.deps.store.saveRooms(updatedRooms);
+      if (!alreadyAccepted) await this.deps.store.saveRooms(updatedRooms);
       if (!stillCurrent()) {
         const rollbackReadyAcceptance = async (): Promise<void> => {
           if (this.shutdownRequested || this.backgroundTasksStopping) return;
@@ -1640,12 +1613,14 @@ export class MatchmakingService {
     });
   }
 
-  declineReady(accountId: string): Promise<PublicMatchRoomRecord> {
+  declineReady(accountId: string, matchId: string): Promise<PublicMatchRoomRecord> {
     return this.enqueueMutation(async () => {
       await this.requireAccount(accountId);
       const rooms = await this.deps.store.listRooms();
-      const room = this.findReadyRoomForAccount(rooms, accountId);
+      const room = rooms.find((candidate) => candidate.id === matchId && this.roomAudience(candidate).includes(accountId));
       if (!room) throw new Error(`ready room not found for account: ${accountId}`);
+      if (room.phase === "failed") return this.toPlayerPublicRoom(room, accountId);
+      if (room.phase !== "ready") throw new Error("match room is closed");
       await this.requireReadyResponseWindow(rooms, room, accountId);
       const readyEntry = room.ready?.find((entry) => entry.accountId === accountId);
       if (!readyEntry) throw new Error("ready state not found for account");
@@ -1664,7 +1639,7 @@ export class MatchmakingService {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId && candidate.phase === "ready");
       if (!room) throw new Error(`ready room not found: ${roomId}`);
-      if (expectedDeadline && ((room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt) !== expectedDeadline || Date.parse(this.now()) < Date.parse(expectedDeadline))) return this.toPublicRoom(room);
+      if (expectedDeadline && ((room.readyDeadlineAt) !== expectedDeadline || Date.parse(this.now()) < Date.parse(expectedDeadline))) return this.toPublicRoom(room);
       return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
     });
   }
@@ -1720,7 +1695,7 @@ export class MatchmakingService {
       ]);
       if (queue.length || this.hasActiveMatchmaking(rooms, parties, { pendingCleanupMatchIds: new Set(cleanup) }) ||
           this.cleanupTasks.size || this.matchTasks.size || this.failedMatchCleanups.size ||
-          this.staleCompensationAttempts.size || this.pendingReadyInvalidations.size) {
+          this.staleCompensationAttempts.size) {
         throw Object.assign(new Error("maintenance_matchmaking_busy"), { code: "maintenance_matchmaking_busy" });
       }
       this.maintenanceRequested = true;
@@ -2092,7 +2067,7 @@ export class MatchmakingService {
 
   private requireOpenParty(party: PartyRecord, allowPending = false): void {
     if ((party.status ?? "open") !== "open") throw new Error("party is not open");
-    if (!allowPending && party.matchmakingPendingAt) throw new Error("party preload is active");
+    if (!allowPending && party.matchmakingPendingAt) throw new Error("party preparation is active");
   }
 
   private async emitPartyUpdated(publicParty: PublicPartyRecord): Promise<void> {
@@ -2157,41 +2132,9 @@ export class MatchmakingService {
     await this.emitResolvedInvitations(invitations, resolvedInvitations);
   }
 
-  async acknowledgePreload(accountId: string, matchId: string, resourceVersion: string): Promise<void> {
-    const ownerId = await this.enqueueMutation(async () => {
-      const parties = await this.deps.store.listParties();
-      const party = parties.find((entry) => entry.memberAccountIds.includes(accountId));
-      if (party?.lockedMatchId === matchId && party.status === "matchmaking" && resourceVersion === PRELOAD_RESOURCE_VERSION) return undefined;
-      if (!party?.draft || !party.preload || party.preload.cancelled || party.lockedMatchId !== matchId || resourceVersion !== PRELOAD_RESOURCE_VERSION || party.preload.resourceVersion !== resourceVersion) throw new Error("match preload is not active");
-      if (Date.parse(party.preload.deadlineAt) <= Date.parse(this.now())) throw new Error("match preload expired");
-      const completedAccountIds = [...new Set([...party.preload.completedAccountIds, accountId])];
-      const updated = { ...party, preload: { ...party.preload, completedAccountIds } };
-      await this.deps.store.saveParties(parties.map((entry) => entry.id === party.id ? updated : entry));
-      await this.emitPartyUpdated(await this.toPlayerPublicParty(updated));
-      return party.memberAccountIds.some((id) => !this.isConfirmedOffline(id)) && party.memberAccountIds.every((id) => this.isConfirmedOffline(id) || completedAccountIds.includes(id)) ? party.ownerAccountId : undefined;
-    });
-    if (ownerId) {
-      try { await this.startPartyMatchmaking(ownerId, {}, matchId); }
-      catch (error) {
-        const persistedRoom = await this.enqueueMutation(async () => {
-          const rooms = await this.deps.store.listRooms();
-          const room = rooms.find((entry) => entry.id === matchId);
-          if (!room) return false;
-          if (!isTerminalMatchPhase(room.phase)) await this.failMatchRoom(rooms, room, "match_failed");
-          return true;
-        });
-        if (!persistedRoom) {
-          const current = (await this.deps.store.listParties()).find((entry) => entry.lockedMatchId === matchId && entry.preload);
-          if (current) await this.cancelScheduledPartyMatchmaking(current.id, current.preload!.deadlineAt, "match_failed");
-        }
-        throw error;
-      }
-    }
-  }
-
   private schedulePartyMatchmakingStart(party: PartyRecord): void {
-    if (!party.matchmakingPendingAt || !party.preload) return;
-    const deadline = party.preload.deadlineAt;
+    if (!party.matchmakingPendingAt || !getPendingPreparation(party)) return;
+    const deadline = getPendingPreparation(party)!.deadlineAt;
     this.clearPartyMatchmakingTimeout(party.id);
     const timeout = this.setTimeoutFn(() => {
       void this.retryScheduledPartyMatchmakingStart(party.id, deadline);
@@ -2227,7 +2170,7 @@ export class MatchmakingService {
       this.schedulePartyMatchmakingRetry(partyId, deadline);
       return;
     }
-    if (party?.lockedMatchId && party.preload?.deadlineAt === deadline) {
+    if (party?.lockedMatchId && getPendingPreparation(party)?.deadlineAt === deadline) {
       this.schedulePartyMatchmakingRetry(partyId, deadline);
     } else {
       this.clearPartyMatchmakingTimeout(partyId);
@@ -2236,7 +2179,7 @@ export class MatchmakingService {
 
   private async startScheduledPartyMatchmaking(partyId: string, deadline: string): Promise<void> {
     const party = (await this.deps.store.listParties()).find((entry) => entry.id === partyId);
-    if (!party?.lockedMatchId || party.preload?.deadlineAt !== deadline) {
+    if (!party?.lockedMatchId || getPendingPreparation(party)?.deadlineAt !== deadline) {
       this.clearPartyMatchmakingTimeout(partyId);
       return;
     }
@@ -2244,7 +2187,7 @@ export class MatchmakingService {
       this.schedulePartyMatchmakingStart(party);
       return;
     }
-    await this.cancelScheduledPartyMatchmaking(partyId, deadline, "preload_timeout");
+    await this.cancelScheduledPartyMatchmaking(partyId, deadline, "match_failed");
   }
 
   private async cancelScheduledPartyMatchmaking(
@@ -2252,6 +2195,7 @@ export class MatchmakingService {
     deadline?: string,
     reason?: string,
     shouldContinue: () => boolean = () => true,
+    expectedMatchId?: string,
   ): Promise<void> {
     const isCurrent = () => !this.shutdownRequested && shouldContinue();
     const restorePartyIfUnchanged = async (
@@ -2267,12 +2211,12 @@ export class MatchmakingService {
       await this.deps.store.saveParties(parties.map((entry) => (entry.id === partyId ? replacement : entry)));
       return true;
     };
-    const restorePartyAndResumePreload = async (
+    const restorePartyAndResumePreparation = async (
       expected: PartyRecord,
       replacement: PartyRecord,
     ): Promise<boolean> => {
       const restored = await this.enqueueMutation(() => restorePartyIfUnchanged(expected, replacement));
-      if (!restored || !replacement.matchmakingPendingAt || !replacement.preload || !replacement.lockedMatchId) return restored;
+      if (!restored || !replacement.matchmakingPendingAt || !getPendingPreparation(replacement) || !replacement.lockedMatchId) return restored;
       const matchId = replacement.lockedMatchId;
       const task = this.ensureMatchTask(matchId);
       const previousDraft = task.draft;
@@ -2285,18 +2229,19 @@ export class MatchmakingService {
         parties = await this.deps.store.listParties();
         current = parties.find((entry) => entry.id === partyId && entry.lockedMatchId === matchId);
       }
-      if (!current?.preload
-        || current.preload.cancelled
-        || current.preload.deadlineAt !== replacement.preload.deadlineAt
+      if (!current || !getPendingPreparation(current)
+        || getPendingPreparation(current)!.cancelled
+        || getPendingPreparation(current)!.deadlineAt !== getPendingPreparation(replacement)!.deadlineAt
         || !current.draft) {
         throw new Error(`Preload party ${partyId} could not be resumed with a persisted draft`);
       }
       this.schedulePartyMatchmakingStart(current);
+      await this.startPartyMatchmaking(current.ownerAccountId, {}, matchId);
       return true;
     };
     const schedulePartyRestoreRetry = (key: string, expected: PartyRecord, replacement: PartyRecord): void => {
       this.scheduleStaleCompensationRetry(key, "Preload cancellation compensation", async () => {
-        await restorePartyAndResumePreload(expected, replacement);
+        await restorePartyAndResumePreparation(expected, replacement);
       });
     };
 
@@ -2305,8 +2250,10 @@ export class MatchmakingService {
       const parties = await this.deps.store.listParties();
       if (!isCurrent()) return undefined;
       const party = parties.find((entry) => entry.id === partyId);
-      if (!party?.preload || !party.lockedMatchId || (deadline && party.preload.deadlineAt !== deadline)) return undefined;
-      const cancelledParty = { ...party, preload: { ...party.preload, cancelled: true } };
+      if (!party || !getPendingPreparation(party) || !party.lockedMatchId
+        || (expectedMatchId && party.lockedMatchId !== expectedMatchId)
+        || (deadline && getPendingPreparation(party)!.deadlineAt !== deadline)) return undefined;
+      const cancelledParty = { ...party, pendingPreparation: { deadlineAt: getPendingPreparation(party)!.deadlineAt, cancelled: true }, preload: undefined };
       if (!isCurrent()) return undefined;
       await this.deps.store.saveParties(parties.map((entry) => (entry.id === partyId ? cancelledParty : entry)));
       if (!isCurrent()) {
@@ -2317,12 +2264,14 @@ export class MatchmakingService {
     });
 
     if (!cancellation) {
-      if (isCurrent()) this.preloadCancellationFailureEvents.delete(partyId);
+      if (isCurrent() && (!expectedMatchId || this.preparationCancellationFailureEvents.get(partyId) === expectedMatchId)) {
+        this.preparationCancellationFailureEvents.delete(partyId);
+      }
       return;
     }
     if ("resumePreload" in cancellation) {
       try {
-        await restorePartyAndResumePreload(cancellation.cancelledParty, cancellation.party);
+        await restorePartyAndResumePreparation(cancellation.cancelledParty, cancellation.party);
       } catch (error) {
         process.stderr.write("Stale preload cancellation compensation failed for " + partyId + ": " + String(error) + "\n");
         schedulePartyRestoreRetry("preload-cancel:" + partyId + ":" + cancellation.party.lockedMatchId, cancellation.cancelledParty, cancellation.party);
@@ -2334,7 +2283,7 @@ export class MatchmakingService {
     await this.stopMatchTask(cancellation.matchId);
     if (!isCurrent()) {
       try {
-        await restorePartyAndResumePreload(cancellation.cancelledParty, cancellation.party);
+        await restorePartyAndResumePreparation(cancellation.cancelledParty, cancellation.party);
       } catch (error) {
         process.stderr.write("Stale preload stop compensation failed for " + partyId + ": " + String(error) + "\n");
         schedulePartyRestoreRetry("preload-stop:" + partyId + ":" + cancellation.matchId, cancellation.cancelledParty, cancellation.party);
@@ -2347,15 +2296,15 @@ export class MatchmakingService {
       const parties = await this.deps.store.listParties();
       if (!isCurrent()) return;
       const party = parties.find((entry) => entry.id === partyId);
-      if (party?.lockedMatchId !== cancellation.matchId || !party.preload?.cancelled) {
-        if (isCurrent() && this.preloadCancellationFailureEvents.get(partyId) === cancellation.matchId) {
-          this.preloadCancellationFailureEvents.delete(partyId);
+      if (party?.lockedMatchId !== cancellation.matchId || !getPendingPreparation(party)?.cancelled) {
+        if (isCurrent() && this.preparationCancellationFailureEvents.get(partyId) === cancellation.matchId) {
+          this.preparationCancellationFailureEvents.delete(partyId);
         }
         return;
       }
-      if (reason && this.preloadCancellationFailureEvents.get(partyId) !== cancellation.matchId) {
+      if (reason && this.preparationCancellationFailureEvents.get(partyId) !== cancellation.matchId) {
         await this.emit({ type: "match_failed", matchId: cancellation.matchId, accountIds: party.memberAccountIds, error: reason });
-        this.preloadCancellationFailureEvents.set(partyId, cancellation.matchId);
+        this.preparationCancellationFailureEvents.set(partyId, cancellation.matchId);
       }
       if (!isCurrent()) return;
       const updated = {
@@ -2363,13 +2312,13 @@ export class MatchmakingService {
         lockedMatchId: undefined,
         matchmakingPendingAt: undefined,
         matchmakingDev: undefined, matchmakingForcedBalance: undefined,
-        preload: undefined,
+        pendingPreparation: undefined, preload: undefined,
         draft: undefined,
         updatedAt: this.now(),
       };
       await this.deps.store.saveParties(parties.map((entry) => (entry.id === partyId ? updated : entry)));
       if (!isCurrent()) return updated;
-      this.preloadCancellationFailureEvents.delete(partyId);
+      this.preparationCancellationFailureEvents.delete(partyId);
       const publicParty = await this.toPlayerPublicParty(updated);
       if (!isCurrent()) return;
       await this.emitPartyUpdated(publicParty);
@@ -2378,7 +2327,7 @@ export class MatchmakingService {
     });
     if (unlockCompensation) {
       try {
-        await restorePartyAndResumePreload(unlockCompensation, cancellation.party);
+        await restorePartyAndResumePreparation(unlockCompensation, cancellation.party);
       } catch (error) {
         process.stderr.write("Stale preload unlock compensation failed for " + partyId + ": " + String(error) + "\n");
         schedulePartyRestoreRetry(
@@ -2839,8 +2788,8 @@ export class MatchmakingService {
         return [accountId, standing] as const;
       }),
     );
-    const { draft, matchmakingForcedBalance: _forcedBalance, ...publicParty } = party;
-    return { ...publicParty, ...(draft ? { mapSelection: draft.mapSelection } : {}), rankmeStandings: Object.fromEntries(rankmeEntries) };
+    const { draft: _draft, preload: _legacy, pendingPreparation: _pending, matchmakingForcedBalance: _forcedBalance, ...publicParty } = party;
+    return { ...publicParty, rankmeStandings: Object.fromEntries(rankmeEntries) };
   }
 
   private async requireMatchmakingAccount(accountId: string): Promise<AccountRecord> {
@@ -2872,16 +2821,12 @@ export class MatchmakingService {
     return humans.map((participant) => ({ accountId: participant.accountId ?? participant.id, ready: false }));
   }
 
-  private buildReadyDeadlineAt(createdAt: string): string {
-    return new Date(Date.parse(createdAt) + READY_TIMEOUT_MS).toISOString();
-  }
-
 
 
   private scheduleReadyTimeout(room: MatchRoomRecord): void {
     if (room.phase !== "ready") return;
 
-    const expectedDeadline = room.readyDeadlineAt ?? room.readyPresentation?.deadlineAt;
+    const expectedDeadline = room.readyDeadlineAt;
     if (!expectedDeadline) return;
     const deadlineMs = Date.parse(expectedDeadline);
     const nowMs = Date.parse(this.now());
@@ -2923,7 +2868,7 @@ export class MatchmakingService {
     }
 
     const room = rooms.find((entry) => entry.id === roomId);
-    const currentDeadline = room?.readyDeadlineAt ?? room?.readyPresentation?.deadlineAt;
+    const currentDeadline = room?.readyDeadlineAt;
     if (room?.phase === "ready" && currentDeadline === expectedDeadline) {
       this.scheduleReadyRetry(roomId, expectedDeadline);
     }
@@ -3209,7 +3154,6 @@ export class MatchmakingService {
       botParticipantIds: room.botParticipantIds?.slice(),
       ready: room.ready?.map((entry) => ({ ...entry })),
       readyStartsAt: room.readyStartsAt,
-      readyPresentation: room.readyPresentation ? { ...room.readyPresentation, completedAccountIds: room.readyPresentation.completedAccountIds.slice() } : undefined,
       readyDeadlineAt: room.readyDeadlineAt,
       partyId: room.partyId,
       mapSelection: room.mapSelection
@@ -3313,10 +3257,6 @@ export class MatchmakingService {
         accountId: p.accountId,
       })),
     };
-  }
-
-  private findReadyRoomForAccount(rooms: MatchRoomRecord[], accountId: string): MatchRoomRecord | undefined {
-    return rooms.find((room) => room.phase === "ready" && this.roomAudience(room).includes(accountId));
   }
 
   private findCurrentRoom<T extends { phase: string }>(rooms: T[]): T | null {
@@ -3627,7 +3567,7 @@ export class MatchmakingService {
 
     const updatedParty: PartyRecord = {
       ...party, status: "open", lockedMatchId: undefined, updatedAt,
-      matchmakingPendingAt: undefined, matchmakingDev: undefined, matchmakingForcedBalance: undefined, preload: undefined, draft: undefined,
+      matchmakingPendingAt: undefined, matchmakingDev: undefined, matchmakingForcedBalance: undefined, pendingPreparation: undefined, preload: undefined, draft: undefined,
     };
     await this.deps.store.saveParties(parties.map((candidate) => (candidate.id === party.id ? updatedParty : candidate)));
     try {
@@ -3655,7 +3595,7 @@ export class MatchmakingService {
         || party.lockedMatchId !== undefined
         || party.matchmakingPendingAt !== undefined
         || party.matchmakingDev !== undefined
-        || party.preload !== undefined
+        || getPendingPreparation(party) !== undefined
         || party.draft !== undefined;
       if (!hasPendingMatchState) return false;
       if (party.lockedMatchId && pendingBackupMatchIds.has(party.lockedMatchId)) return false;
@@ -3672,7 +3612,7 @@ export class MatchmakingService {
           lockedMatchId: undefined,
           matchmakingPendingAt: undefined,
           matchmakingDev: undefined, matchmakingForcedBalance: undefined,
-          preload: undefined,
+          pendingPreparation: undefined, preload: undefined,
           draft: undefined,
           updatedAt,
         }
@@ -3741,7 +3681,7 @@ export class MatchmakingService {
     const parties = await this.deps.store.listParties();
     for (const matchId of candidates) {
       if (absentBackups.has(matchId)) continue;
-      const preload = parties.some((party) => party.lockedMatchId === matchId && party.preload);
+      const preload = parties.some((party) => party.lockedMatchId === matchId && getPendingPreparation(party));
       if (!preload || await this.deps.records?.readCompletedMatch?.(matchId)) {
         pending.add(matchId);
         continue;

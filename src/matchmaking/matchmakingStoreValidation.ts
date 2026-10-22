@@ -55,6 +55,7 @@ const partiesFileSchema = z.object({
     status: z.enum(["open", "matchmaking", "in_match"]).optional(),
     lockedMatchId: z.string().optional(),
     matchmakingPendingAt: z.string().optional(),
+    pendingPreparation: z.object({ deadlineAt: z.string(), cancelled: z.boolean().optional() }).optional(),
     preload: z.object({
       cancelled: z.boolean().optional(),
       resourceVersion: z.string(),
@@ -150,6 +151,13 @@ export function assertQueueFile(value: unknown): asserts value is QueueFile {
 
 export function assertPartiesFile(value: unknown): asserts value is PartiesFile {
   assertFile<PartiesFile>(partiesFileSchema, value, "parties.json");
+  for (const party of value.parties) {
+    const pending = party.pendingPreparation;
+    const legacy = party.preload;
+    if (pending && legacy && (pending.deadlineAt !== legacy.deadlineAt || Boolean(pending.cancelled) !== Boolean(legacy.cancelled))) {
+      throw new Error("Invalid matchmaking parties.json at pendingPreparation");
+    }
+  }
 }
 
 export function assertInvitationsFile(value: unknown): asserts value is PartyInvitationsFile {

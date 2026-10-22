@@ -1,11 +1,11 @@
 import { Button, Spin } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import type { AccountView } from "../../../../manager/shared/types.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";
 import { RankmeBadges } from "../components/RankmeBadges.js";
-import { formatMapName, mapImageUrl, preloadMapImages } from "../mapAssets.js";
+import { formatMapName, mapImageUrl } from "../mapAssets.js";
 import { formatReadyCountdown } from "../matchTimers.js";
 import { getSelectedMap, getMatchPresentationPhase, isAccountInReadyRoom } from "../matchRoomState.js";
 import { participantDisplayName } from "../playerDisplay.js";
@@ -16,11 +16,6 @@ interface MatchRoomPageProps {
   room: PlayerLiveMatchStateDto | null;
   nowMs: number;
   active?: boolean;
-  preloadVersion?: string;
-  onPreloadReady?: () => Promise<void>;
-  onPreloadFailure?: () => void;
-  onReadyViewReady?: (matchId: string, token: string) => Promise<void>;
-  connection?: string;
   onAcceptReady?: () => Promise<void>;
   onDeclineReady?: () => Promise<void>;
   onCopyText?: (text: string) => Promise<void>;
@@ -125,73 +120,11 @@ export function MatchRoomPage({
   room,
   nowMs,
   active = true,
-  preloadVersion,
-  onPreloadReady,
-  onPreloadFailure,
-  onReadyViewReady,
-  connection,
   onAcceptReady,
   onDeclineReady,
   onCopyText,
 }: MatchRoomPageProps) {
   const { t } = useLanguage();
-  const rootRef = useRef<HTMLDivElement>(null);
-  const callbacks = useRef({ onPreloadReady, onReadyViewReady, onPreloadFailure });
-  callbacks.current = { onPreloadReady, onReadyViewReady, onPreloadFailure };
-  const reported = useRef(new Set<string>());
-  const requiredMaps = room?.mapSelection?.finalMap
-    ? [room.mapSelection.finalMap]
-    : [];
-  const requiredMapKey = JSON.stringify(requiredMaps);
-  useEffect(() => {
-    if (connection && connection !== "connected") {
-      for (const key of reported.current) if (key.includes(":ready:")) reported.current.delete(key);
-      return;
-    }
-    if (!room?.id || !room.mapSelection) return;
-    const id = room.id;
-    const token = room.readyPresentation?.token;
-    const kind = preloadVersion ? `preload:${preloadVersion}` : active && room.phase === "ready" && token && !room.readyStartsAt ? `ready:${token}:${connection}` : undefined;
-    if (!kind) return;
-    const key = `${id}:${kind}:${requiredMapKey}`;
-    if (reported.current.has(key)) return;
-    let stopped = false;
-    let retry: ReturnType<typeof setTimeout> | undefined;
-    let frame = 0;
-    let failureReported = false;
-    const retryFailure = () => {
-      if (stopped) return;
-      if (!failureReported && preloadVersion) { failureReported = true; callbacks.current.onPreloadFailure?.(); }
-      retry = setTimeout(() => void load(), 1500);
-    };
-    const load = async () => {
-      try {
-        const [, regular, bold] = await Promise.all([preloadMapImages(requiredMaps), document.fonts.load('400 16px "Play"'), document.fonts.load('700 16px "Play"')]);
-        if (!regular.length || !bold.length) throw new Error("Required fonts unavailable");
-        if (stopped) return;
-        const inspect = () => {
-          if (stopped) return;
-          const panels = [...(rootRef.current?.querySelectorAll<HTMLElement>("[data-flow-panel]") ?? [])];
-          const bounds = rootRef.current?.getBoundingClientRect();
-          if (!bounds || bounds.width <= 0 || bounds.height <= 0 || panels.length !== 4 || panels.some((panel) => { const rect = panel.getBoundingClientRect(); return rect.width <= 0 || rect.height <= 0 || rect.width > bounds.width; })) {
-            retry = setTimeout(() => void load(), 250);
-            return;
-          }
-          frame = requestAnimationFrame(() => {
-            if (stopped) return;
-            const report = preloadVersion ? callbacks.current.onPreloadReady : () => callbacks.current.onReadyViewReady?.(id, token!);
-            if (!report) return;
-            void Promise.resolve(report()).then(() => { if (!stopped) reported.current.add(key); }).catch(() => {
-              retryFailure();
-            });
-          });
-        };
-        frame = requestAnimationFrame(inspect);
-      } catch { retryFailure(); }
-    };
-    void load();
-    return () => { stopped = true; cancelAnimationFrame(frame); if (retry) clearTimeout(retry); };
-  }, [room?.id, Boolean(room?.mapSelection), requiredMapKey, preloadVersion, active, room?.phase, room?.readyPresentation?.token, room?.readyStartsAt, connection]);
   const selection = room?.mapSelection;
   const panelProps = (name: string, visible: boolean) => ({
     "data-flow-panel": name,
@@ -232,7 +165,7 @@ export function MatchRoomPage({
   }
 
   return (
-    <div className="faceit-matchroom" ref={rootRef}>
+    <div className="faceit-matchroom">
       <section className="faceit-match-header">
         <div className="faceit-match-status">
           <strong>{t("player.match.format")}</strong>

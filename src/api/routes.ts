@@ -46,6 +46,7 @@ function readStringField(payload: unknown, field: string): string {
 }
 
 const playerMarkSchema = z.object({ marked: z.boolean() }).strict();
+const readyResponseSchema = z.object({ matchId: z.string().trim().min(1) }).strict();
 const matchmakingStartSchema = z.object({ dev: z.boolean().optional() });
 const accountIdParamsSchema = z.object({ id: accountIdSchema });
 const partyJoinSchema = z.object({ partyId: z.string().min(1) });
@@ -157,6 +158,8 @@ function mapMatchmakingServiceError(error: unknown): never {
       error.message.includes("party matchmaking must be started by owner") ||
       error.message.includes("party invitation") ||
       error.message.includes("ready check has not started") ||
+      error.message.includes("ready response is already accepted") ||
+      error.message.includes("ready check expired") ||
       error.message.includes("match room is closed") ||
       error.message.includes("account is not in match room") ||
       error.message.includes("already in another party") ||
@@ -601,18 +604,6 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     }
   });
 
-  app.post("/party/matchmaking/start", async (request) => {
-    const auth = await authenticateRequest(request, deps);
-    requirePlayer(request);
-    const matchmaking = requireMatchmaking(deps);
-    const { dev } = matchmakingStartSchema.parse(request.body ?? {});
-    try {
-      return withServerNow({ room: await matchmaking.startPartyMatchmaking(auth.account.id, { dev }) });
-    } catch (error) {
-      mapMatchmakingServiceError(error);
-    }
-  });
-
   app.post("/party/matchmaking/begin", async (request) => {
     const auth = await authenticateRequest(request, deps);
     requirePlayer(request);
@@ -679,7 +670,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return withServerNow({ room: await matchmaking.acceptReady(auth.account.id) });
+      return withServerNow({ room: await matchmaking.acceptReady(auth.account.id, readyResponseSchema.parse(request.body).matchId) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }
@@ -690,7 +681,7 @@ export async function registerRoutes(app: FastifyInstance<any, any, any, any, an
     requirePlayer(request);
     const matchmaking = requireMatchmaking(deps);
     try {
-      return withServerNow({ room: await matchmaking.declineReady(auth.account.id) });
+      return withServerNow({ room: await matchmaking.declineReady(auth.account.id, readyResponseSchema.parse(request.body).matchId) });
     } catch (error) {
       mapMatchmakingServiceError(error);
     }

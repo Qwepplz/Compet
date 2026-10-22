@@ -22,6 +22,8 @@ export interface PartyRecord {
   status?: PartyStatus;
   lockedMatchId?: string;
   matchmakingPendingAt?: string;
+  pendingPreparation?: { deadlineAt: string; cancelled?: boolean };
+  // Legacy JSON input retained for strict validation and safe recovery.
   preload?: { cancelled?: boolean; resourceVersion: string; completedAccountIds: string[]; deadlineAt: string };
   matchmakingDev?: boolean;
   matchmakingForcedBalance?: boolean;
