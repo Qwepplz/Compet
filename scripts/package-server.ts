@@ -13,7 +13,6 @@ import { createServerUpdateFeed } from "./create-server-update-feed.js";
 import { assertPlainPath, fingerprintFile } from "../src/desktop/main/serverManagedFiles.js";
 import { resolveServerLayout, type ServerPlatform } from "../src/shared/serverPackageLayout.js";
 import { isSemver } from "../src/shared/version.js";
-import { HEADLESS_TEMPLATE_SERVER_ROOT, HEADLESS_TEMPLATE_CONNECT_HOST } from "../src/cli/config.js";
 import { serverConfigSchema } from "../src/config/config.js";
 export interface PackageOptions { platform: ServerPlatform; requiredClientVersion: string; artifactsDir: string }
 export function parsePackageOptions(args: string[]): PackageOptions {
@@ -50,19 +49,12 @@ export async function validatePackageSources(root: string, platform: ServerPlatf
   const required = ["src/main.ts", "src/cli/main.ts", "src/sourcemod/compet_match_lock.sp",
     "packaging/server/app-package.json", "packaging/server/profile-seed/human-index.json",
     "src/mysql_preinit/compet_mysql_preinit" + (platform === "win32-x64" ? ".ps1" : ".sh"),
-    ...(platform === "win32-x64" ? ["src/mysql_preinit/compet_mysql_preinit.cmd", "packaging/assets/compet-icon.ico"] : ["packaging/server/linux/server.example.json"])];
+    ...(platform === "win32-x64" ? ["src/mysql_preinit/compet_mysql_preinit.cmd", "packaging/assets/compet-icon.ico"] : [])];
   for (const relative of required) {
     const file = path.join(root, relative); await assertPlainPath(file);
     if (!await fs.stat(file).then(info => info.isFile(), () => false)) throw new Error("Missing required path: " + relative);
   }
   validateProfileSeed(JSON.parse(await fs.readFile(path.join(root, "packaging/server/profile-seed/human-index.json"), "utf8")));
-  if (platform === "linux-x64") {
-    const template = serverConfigSchema.safeParse(JSON.parse(await fs.readFile(path.join(root, "packaging/server/linux/server.example.json"), "utf8")));
-    if (!template.success || template.data.gameServer.serverRoot !== HEADLESS_TEMPLATE_SERVER_ROOT
-      || template.data.gameServer.publicConnectHost !== HEADLESS_TEMPLATE_CONNECT_HOST) {
-      throw new Error("Invalid server.example.json deployment template");
-    }
-  }
 }
 export async function copyManualMysqlEntries(root: string, appRoot: string, platform: ServerPlatform): Promise<void> {
   const names = platform === "win32-x64" ? ["compet_mysql_preinit.ps1", "compet_mysql_preinit.cmd"] : ["compet_mysql_preinit.sh"];
@@ -174,19 +166,16 @@ async function probePackage(root: string, platform: ServerPlatform): Promise<voi
   const probeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "compet-package-config-"));
   try {
     for (const key of Object.keys(env)) if (key.startsWith("COMPET_")) delete env[key];
-    const templatePath = path.join(root, "server.example.json");
-    const config = JSON.parse(await fs.readFile(platform === "linux-x64" ? templatePath
-      : path.join(repositoryRoot, "packaging/server/linux/server.example.json"), "utf8"));
-    if (platform === "linux-x64") {
-      const unconfigured = spawnSync(layout.nodePath, [layout.cliEntry, "config", "check", "--config", templatePath, "--json"],
-        { cwd: os.tmpdir(), env, windowsHide: true, encoding: "utf8" });
-      if (unconfigured.error || unconfigured.status !== 2 || !/config_invalid/.test(unconfigured.stdout + unconfigured.stderr)) {
-        throw new Error("unconfigured_template_not_rejected");
-      }
-    }
-    config.dataDir = path.join(probeRoot, "data");
-    config.gameServer.serverRoot = path.join(probeRoot, "game");
-    config.gameServer.publicConnectHost = "127.0.0.1";
+    const metadata = JSON.parse(await fs.readFile(path.join(layout.appRoot, "package.json"), "utf8"));
+    const config = serverConfigSchema.parse({
+      requiredClientVersion: metadata.requiredClientVersion,
+      dataDir: path.join(probeRoot, "data"),
+      gameServer: {
+        serverRoot: path.join(probeRoot, "game"),
+        publicConnectHost: "127.0.0.1",
+        portRange: {},
+      },
+    });
     const configPath = path.join(probeRoot, "server.json");
     await fs.writeFile(configPath, JSON.stringify(config));
     process.stdout.write(run(layout.nodePath, [layout.cliEntry, "config", "check", "--config", configPath, "--json"], os.tmpdir(), env));
@@ -230,8 +219,6 @@ export async function packageServer(options: PackageOptions): Promise<void> {
       await copy(path.join(repositoryRoot, "packaging/server/windows/compet.cmd"), path.join(stage, "compet.cmd"));
     } else {
       await copy(path.join(repositoryRoot, "packaging/server/linux/compet"), path.join(stage, "bin/compet"));
-      await copy(path.join(repositoryRoot, "packaging/server/linux/compet.service"), path.join(stage, "systemd/compet.service"));
-      await copy(path.join(repositoryRoot, "packaging/server/linux/server.example.json"), path.join(stage, "server.example.json"));
       if (!built) throw new Error("log_compressor_build_missing");
       await copy(built.binaryPath, path.join(stage, "runtime/7z/7zr"));
       await copy(built.licensePath, path.join(stage, "runtime/7z/lzma-sdk.txt"));
