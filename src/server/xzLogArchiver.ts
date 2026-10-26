@@ -2,20 +2,18 @@ import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
+import type { LogFingerprint, XzCodec } from "../archive/xzCodec.js";
+import { readArchiveMetadata, type TarXzCodec } from "../archive/tarXzCodec.js";
+import type { ArchiveMetadata } from "../archive/singleFileTar.js";
+export { SevenZipXzCodec } from "../archive/xzCodec.js";
+export type { LogFingerprint, XzCodec } from "../archive/xzCodec.js";
 import type { LogArchiver } from "../manager/main/logStore.js";
 import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
 
-export interface LogFingerprint { size: number; sha256: string }
-export interface XzCodec {
-  encode(sourcePath: string, targetPath: string): Promise<void>;
-  fingerprintDecoded(archivePath: string): Promise<LogFingerprint>;
-  cancel(): Promise<void>;
-}
-export interface XzArchiverOptions { onError(error: unknown): void }
+export interface XzArchiverOptions { onError(error: unknown): void; legacyCodec?: XzCodec }
 const magic = Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0]);
 const uuid = "[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}";
-const archivePattern = "(\\d{4}-\\d{2}-\\d{2})(?:\\.part-" + uuid + ")?\\.log\\.xz";
+const archivePattern = "(\\d{4}-\\d{2}-\\d{2})(?:\\.part-" + uuid + ")?\\.log(?:\\.tar)?\\.xz";
 const pendingPattern = new RegExp("^\\.compet-(" + archivePattern + ")\\.pending$");
 const attemptPattern = new RegExp("^\\.compet-(" + archivePattern + ")\\.attempt-" + uuid + "\\.tmp\\.xz$");
 function validDay(day: string): boolean {
@@ -23,27 +21,27 @@ function validDay(day: string): boolean {
 }
 async function stat(file: string) {
   await assertPlainPath(file);
-  return fs.lstat(file).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+  return fs.lstat(file, { bigint: true }).catch(error => { if (error.code === "ENOENT") return null; throw error; });
 }
-async function plain(file: string, links = 1) {
+async function plain(file: string, links = 1n) {
   const info = await stat(file);
   if (!info?.isFile() || info.nlink !== links) throw new Error("log_archive_file_invalid");
   return info;
 }
 type Identity = Awaited<ReturnType<typeof plain>>;
 function sameIdentity(a: Identity, b: Identity): boolean {
-  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs && a.ctimeMs === b.ctimeMs;
+  return a.dev === b.dev && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs && a.ctimeNs === b.ctimeNs;
 }
 function sameBytes(a: LogFingerprint, b: LogFingerprint): boolean { return a.size === b.size && a.sha256 === b.sha256; }
 async function sourceFingerprint(file: string): Promise<{ identity: Identity; fingerprint: LogFingerprint }> {
   const before = await plain(file);
   const handle = await fs.open(file, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW : 0));
   try {
-    const identity = await handle.stat();
-    if (!sameIdentity(before, identity) || identity.nlink !== 1) throw new Error("log_archive_source_changed");
+    const identity = await handle.stat({ bigint: true });
+    if (!sameIdentity(before, identity) || identity.nlink !== 1n) throw new Error("log_archive_source_changed");
     const hash = createHash("sha256"); let size = 0;
     for await (const chunk of handle.createReadStream({ autoClose: false })) { size += chunk.length; hash.update(chunk); }
-    if (!sameIdentity(identity, await handle.stat()) || !sameIdentity(identity, await plain(file))) throw new Error("log_archive_source_changed");
+    if (!sameIdentity(identity, await handle.stat({ bigint: true })) || !sameIdentity(identity, await plain(file))) throw new Error("log_archive_source_changed");
     return { identity, fingerprint: { size, sha256: hash.digest("hex") } };
   } finally { await handle.close(); }
 }
@@ -60,7 +58,7 @@ export class XzLogArchiver implements LogArchiver {
   private stopped = false;
   private cancelled = false;
   private closing?: Promise<void>;
-  constructor(private readonly logDir: string, private readonly codec: XzCodec, private readonly options: XzArchiverOptions) {}
+  constructor(private readonly logDir: string, private readonly codec: TarXzCodec, private readonly options: XzArchiverOptions) {}
   private report(error: unknown): void {
     this.failures.push(error);
     try { this.options.onError(error); } catch { /* Diagnostics must not break recovery. */ }
@@ -75,7 +73,18 @@ export class XzLogArchiver implements LogArchiver {
       if (this.stopped) break;
       const pending = pendingPattern.exec(name);
       if (pending && validDay(pending[2]!)) {
-        this.enqueue(pending[1]!);
+        try {
+          let archive = pending[1]!;
+          if (!archive.endsWith(".tar.xz") && !await stat(path.join(this.logDir, archive))) {
+            const old = path.join(this.logDir, name), migrated = archive.replace(/\.xz$/, ".tar.xz");
+            const target = path.join(this.logDir, ".compet-" + migrated + ".pending");
+            await plain(old);
+            if (await stat(target) || await stat(path.join(this.logDir, migrated))) throw new Error("log_archive_conflict");
+            await fs.rename(old, target); await syncDirectory(this.logDir);
+            archive = migrated;
+          }
+          this.enqueue(archive);
+        } catch (error) { this.report(error); }
         continue;
       }
       const match = /^(\d{4}-\d{2}-\d{2})\.log$/.exec(name);
@@ -83,17 +92,17 @@ export class XzLogArchiver implements LogArchiver {
       try {
         const source = path.join(this.logDir, name);
         await plain(source);
-        const primary = name + ".xz";
+        const primary = name + ".tar.xz";
         const prefix = ".compet-" + primary;
         const usePrimary = !await stat(path.join(this.logDir, primary)) &&
           !(await fs.readdir(this.logDir)).some(n => n === prefix + ".pending" || n.startsWith(prefix + ".attempt-"));
-        const archive = usePrimary ? primary : match[1] + ".part-" + randomUUID() + ".log.xz";
+        const archive = usePrimary ? primary : match[1] + ".part-" + randomUUID() + ".log.tar.xz";
         const target = path.join(this.logDir, ".compet-" + archive + ".pending");
         if (await stat(target)) throw new Error("log_archive_conflict");
         const handle = await fs.open(source, process.platform === "linux" ? constants.O_RDONLY | constants.O_NOFOLLOW : constants.O_RDWR);
         try {
-          const identity = await handle.stat();
-          if (!identity.isFile() || identity.nlink !== 1 || !sameIdentity(identity, await plain(source))) throw new Error("log_archive_source_changed");
+          const identity = await handle.stat({ bigint: true });
+          if (!identity.isFile() || identity.nlink !== 1n || !sameIdentity(identity, await plain(source))) throw new Error("log_archive_source_changed");
           await handle.sync();
         } finally { await handle.close(); }
         await fs.rename(source, target);
@@ -127,21 +136,31 @@ export class XzLogArchiver implements LogArchiver {
       const candidate = await stat(path.join(this.logDir, name));
       if (candidate?.isFile() && candidate.dev === info.dev && candidate.ino === info.ino) matches.push(name);
     }
-    if (info.nlink !== matches.length + 1) throw new Error("log_archive_conflict");
+    if (info.nlink !== BigInt(matches.length + 1)) throw new Error("log_archive_conflict");
     return matches;
   }
-  private async verifiedFinal(archive: string): Promise<LogFingerprint> {
+  private async decoded(archive: string, file: string, metadata?: ArchiveMetadata): Promise<LogFingerprint> {
+    if (!archive.endsWith(".tar.xz")) {
+      if (!this.options.legacyCodec) throw new Error("log_archive_legacy_codec_missing");
+      return this.options.legacyCodec.fingerprintDecoded(file);
+    }
+    const view = await this.codec.inspect(file);
+    if (view.memberName !== archive.slice(0, 10) + ".log" ||
+        metadata && (view.metadata.birthtimeNs !== metadata.birthtimeNs || view.metadata.mtimeNs !== metadata.mtimeNs)) throw new Error("log_archive_metadata_mismatch");
+    return view;
+  }
+  private async verifiedFinal(archive: string, metadata?: ArchiveMetadata): Promise<LogFingerprint> {
     const final = path.join(this.logDir, archive);
     await this.publishedLinks(archive);
     const before = await stat(final);
     const handle = await fs.open(final, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW : 0));
     try {
-      if (!before || !sameIdentity(before, await handle.stat())) throw new Error("log_archive_conflict");
+      if (!before || !sameIdentity(before, await handle.stat({ bigint: true }))) throw new Error("log_archive_conflict");
       const header = Buffer.alloc(magic.length);
       const { bytesRead } = await handle.read(header, 0, header.length, 0);
       if (bytesRead !== magic.length || !header.equals(magic)) throw new Error("log_archive_xz_invalid");
     } finally { await handle.close(); }
-    const result = await this.codec.fingerprintDecoded(final);
+    const result = await this.decoded(archive, final, metadata);
     if (!before || !sameIdentity(before, await plain(final, before.nlink))) throw new Error("log_archive_conflict");
     return result;
   }
@@ -159,8 +178,9 @@ export class XzLogArchiver implements LogArchiver {
   private async process(archive: string): Promise<void> {
     const pending = path.join(this.logDir, ".compet-" + archive + ".pending"), final = path.join(this.logDir, archive);
     const before = await sourceFingerprint(pending);
+    const metadata = archive.endsWith(".tar.xz") ? await readArchiveMetadata(pending) : undefined;
     if (await stat(final)) {
-      if (!sameBytes(await this.verifiedFinal(archive), before.fingerprint)) throw new Error("log_archive_conflict");
+      if (!sameBytes(await this.verifiedFinal(archive, metadata), before.fingerprint)) throw new Error("log_archive_conflict");
       const after = await sourceFingerprint(pending);
       if (!sameIdentity(before.identity, after.identity) || !sameBytes(before.fingerprint, after.fingerprint)) throw new Error("log_archive_source_changed");
       await syncDirectory(this.logDir);
@@ -177,33 +197,34 @@ export class XzLogArchiver implements LogArchiver {
     if (await stat(temporary)) throw new Error("log_archive_conflict");
     let temporaryIdentity: Identity | undefined;
     try {
-      await this.codec.encode(pending, temporary);
+      if (!metadata) throw new Error("log_archive_legacy_encode_forbidden");
+      await this.codec.encode({ sourcePath: pending, memberName: archive.slice(0, 10) + ".log", metadata }, temporary);
       temporaryIdentity = await plain(temporary);
       if (this.cancelled) throw new Error("log_archive_cancelled");
       const after = await sourceFingerprint(pending);
       if (!sameIdentity(before.identity, after.identity) || !sameBytes(before.fingerprint, after.fingerprint)) throw new Error("log_archive_source_changed");
       const handle = await fs.open(temporary, process.platform === "linux" ? constants.O_RDONLY | constants.O_NOFOLLOW : constants.O_RDWR);
       try {
-        const identity = await handle.stat();
-        if (!identity.isFile() || identity.nlink !== 1 || !sameIdentity(identity, await plain(temporary))) throw new Error("log_archive_file_invalid");
+        const identity = await handle.stat({ bigint: true });
+        if (!identity.isFile() || identity.nlink !== 1n || !sameIdentity(identity, await plain(temporary))) throw new Error("log_archive_file_invalid");
         const header = Buffer.alloc(6);
         await handle.read(header, 0, 6, 0);
         if (!header.equals(magic)) throw new Error("log_archive_xz_invalid");
         await handle.sync();
       } finally { await handle.close(); }
       const encoded = await plain(temporary);
-      if (!sameBytes(await this.codec.fingerprintDecoded(temporary), before.fingerprint)) throw new Error("log_archive_content_mismatch");
+      if (!sameBytes(await this.decoded(archive, temporary, metadata), before.fingerprint)) throw new Error("log_archive_content_mismatch");
       if (!sameIdentity(encoded, await plain(temporary)) || !sameIdentity(before.identity, (await sourceFingerprint(pending)).identity)) throw new Error("log_archive_source_changed");
       await fs.link(temporary, final);
       await syncDirectory(this.logDir);
-      if (!sameBytes(await this.verifiedFinal(archive), before.fingerprint) ||
+      if (!sameBytes(await this.verifiedFinal(archive, metadata), before.fingerprint) ||
           !sameIdentity(before.identity, (await sourceFingerprint(pending)).identity)) throw new Error("log_archive_conflict");
       await fs.unlink(pending); await syncDirectory(this.logDir);
       await this.cleanupPublishedAttempt(archive, path.basename(temporary));
     } catch (error) {
       // Failed encoders may leave an output whose identity was never confirmed.
       const tmp = await stat(temporary).catch(() => null);
-      if (temporaryIdentity && tmp?.isFile() && tmp.nlink === 1 && sameIdentity(temporaryIdentity, tmp)) {
+      if (temporaryIdentity && tmp?.isFile() && tmp.nlink === 1n && sameIdentity(temporaryIdentity, tmp)) {
         await fs.unlink(temporary).catch(() => undefined);
       }
       throw error;
@@ -225,68 +246,9 @@ export class XzLogArchiver implements LogArchiver {
       if (await Promise.race([this.queue.then(() => "done"), timeout]) === "timeout") {
         this.cancelled = true;
         await this.codec.cancel();
+        await this.options.legacyCodec?.cancel();
         await this.queue;
       }
     } finally { if (timer) clearTimeout(timer); }
-  }
-}
-
-export class SevenZipXzCodec implements XzCodec {
-  private readonly active = new Map<ChildProcess, Promise<void>>();
-  private cancelled = false;
-  constructor(private readonly executable: string) {
-    if (!path.isAbsolute(executable)) throw new Error("log_compressor_path_invalid");
-  }
-  private async run(args: string[], decode: boolean): Promise<LogFingerprint> {
-    if (this.cancelled) throw new Error("log_archive_cancelled");
-    await plain(this.executable);
-    if (this.cancelled) throw new Error("log_archive_cancelled");
-    const child = spawn(this.executable, args, { windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-    let complete!: () => void;
-    const exited = new Promise<void>(resolve => { complete = resolve; });
-    this.active.set(child, exited);
-    const hash = createHash("sha256"); let size = 0, stderr = Buffer.alloc(0);
-    let failure: unknown;
-    let forced: NodeJS.Timeout | undefined;
-    const terminate = (): void => {
-      child.kill("SIGTERM");
-      forced ??= setTimeout(() => { child.kill("SIGKILL"); }, 1000);
-      forced.unref();
-    };
-    const timeout = setTimeout(() => { failure = new Error("log_archive_process_timeout"); terminate(); }, 120000);
-    try {
-      return await new Promise<LogFingerprint>((resolve, reject) => {
-        child.stdout!.on("data", (chunk: Buffer) => { if (decode) { size += chunk.length; hash.update(chunk); } });
-        child.stderr!.on("data", (chunk: Buffer) => {
-          if (stderr.length < 32768) stderr = Buffer.concat([stderr, chunk.subarray(0, 32768 - stderr.length)]);
-        });
-        child.stdout!.on("error", error => { failure = error; terminate(); });
-        child.stderr!.on("error", error => { failure = error; terminate(); });
-        child.on("error", error => { failure = error; });
-        child.once("close", code => {
-          if (failure || code !== 0 || this.cancelled) reject(failure ?? new Error("log_archive_process_failed: " + String(code) + " " + stderr.toString("utf8")));
-          else resolve({ size, sha256: hash.digest("hex") });
-        });
-      });
-    } finally {
-      clearTimeout(timeout); if (forced) clearTimeout(forced);
-      this.active.delete(child); complete();
-    }
-  }
-  async encode(sourcePath: string, targetPath: string): Promise<void> {
-    if (await stat(targetPath)) throw new Error("log_archive_conflict");
-    await this.run(["a", "-txz", targetPath, sourcePath, "-mx=5", "-md=8m", "-mmt=1", "-bb0", "-bd", "-y"], false);
-    await fs.chmod(targetPath, 0o600);
-  }
-  fingerprintDecoded(archivePath: string): Promise<LogFingerprint> {
-    return this.run(["x", archivePath, "-so", "-bb0", "-bd"], true);
-  }
-  async cancel(): Promise<void> {
-    this.cancelled = true;
-    await Promise.all([...this.active].map(async ([child, exited]) => {
-      child.kill("SIGTERM");
-      const timer = setTimeout(() => { child.kill("SIGKILL"); }, 1000);
-      try { await exited; } finally { clearTimeout(timer); }
-    }));
   }
 }

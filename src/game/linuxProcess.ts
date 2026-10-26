@@ -134,6 +134,8 @@ export async function inspectLinuxGameRoot(serverRoot: string): Promise<"alive" 
       try {
         // A readable executable establishes whether this is the target game, even if its name changed.
         if (await fs.readlink(directory + "/exe") === path.join(root, "srcds_linux")) return "alive";
+        // A wrapper in this root may still start the game after an empty prepared job was recovered.
+        try { if (await fs.readlink(directory + "/cwd") === root) unknown = true; } catch { /* No readable cwd evidence. */ }
       } catch (error) {
         if (["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "")) continue;
         // Independent metadata or cwd evidence can still identify an unreadable game candidate.

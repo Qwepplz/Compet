@@ -6,6 +6,7 @@ import { stripVTControlCharacters } from "node:util";
 import { DatabaseSync } from "node:sqlite";
 import { FileLogStore } from "../manager/main/logStore.js";
 import { XzLogArchiver, SevenZipXzCodec } from "./xzLogArchiver.js";
+import { SevenZipTarXzCodec } from "../archive/tarXzCodec.js";
 import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
 import { redactSensitiveText } from "../shared/redactSensitiveText.js";
 import { isActivityLogInput, SERVER_ACTIVITY_PREFIX, type ActivityLogInput } from "../shared/activityLog.js";
@@ -238,7 +239,7 @@ async function install(input: LinuxFileLoggingInput): Promise<LinuxFileLogging &
       await assertPlainPath(executable);
       if (!(await fs.lstat(executable)).isFile()) throw new Error("log_compressor_type_invalid");
       await fs.access(executable, constants.X_OK);
-      archiver = new XzLogArchiver(lock.directory, new SevenZipXzCodec(executable), { onError: report });
+      archiver = new XzLogArchiver(lock.directory, new SevenZipTarXzCodec(executable), { onError: report, legacyCodec: new SevenZipXzCodec(executable) });
     } catch (error) { report(new Error("log_archive_unavailable", { cause: error })); }
     const store = new FileLogStore(lock.directory, { strictFiles: true, ...(archiver ? { archiver } : {}) });
     let closing: Promise<void> | undefined, timer: NodeJS.Timeout | undefined, stopped = false, forwarding = 0;

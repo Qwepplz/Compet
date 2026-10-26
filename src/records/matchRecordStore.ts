@@ -1,5 +1,8 @@
 import path from "node:path";
-import { rm } from "node:fs/promises";
+import { readFile, rm } from "node:fs/promises";
+import type { MatchServerExitReport } from "../game/matchExecutor.js";
+import { z } from "zod";
+import { isValidMr12FinalScore } from "../game/get5MatchResult.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { MatchPlan, MatchSeriesResult } from "../matchmaking/types.js";
 import { withDatabaseTransaction } from "../storage/competDatabase.js";
@@ -17,6 +20,42 @@ export interface CompletedMatchRecord {
 }
 
 const SAFE_MATCH_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+const scoreSchema = z.number().int().nonnegative();
+const resultHalfSchema = z.object({ team1Score: scoreSchema, team2Score: scoreSchema });
+const get5ResultSchema = z.object({
+  winner: z.enum(["teamA", "teamB"]),
+  team1SeriesScore: scoreSchema, team2SeriesScore: scoreSchema,
+  mapName: z.string(), team1Score: scoreSchema, team2Score: scoreSchema,
+  team1StartingSide: z.enum(["t", "ct"]), team2StartingSide: z.enum(["t", "ct"]),
+  players: z.array(z.object({ steam64: z.string(), team: z.enum(["teamA", "teamB"]) })),
+  completedAt: z.iso.datetime({ offset: true }),
+  firstHalfScore: resultHalfSchema.optional(), secondHalfScore: resultHalfSchema.optional(),
+}).refine((result) => (
+  result.team1StartingSide !== result.team2StartingSide
+  && result.team1SeriesScore === (result.winner === "teamA" ? 1 : 0)
+  && result.team2SeriesScore === (result.winner === "teamB" ? 1 : 0)
+  && isValidMr12FinalScore(result.team1Score, result.team2Score, result.winner)
+));
+const sideHalfSchema = z.object({ t: scoreSchema, ct: scoreSchema });
+const serverExitReportSchema = z.object({
+  exitInfo: z.object({
+    code: z.number().int().nullable(),
+    signal: z.custom<NodeJS.Signals>((value) => typeof value === "string" && /^SIG[A-Z0-9]+$/.test(value)).nullable(),
+    output: z.array(z.string()),
+  }),
+  get5Result: z.union([
+    z.object({ status: z.literal("normal"), result: get5ResultSchema }),
+    z.object({ status: z.literal("abnormal"), reason: z.string().min(1) }),
+  ]),
+  competStats: z.array(z.object({
+    steam64: z.string(), name: z.string(), kills: scoreSchema, deaths: scoreSchema,
+    assists: scoreSchema, damage: scoreSchema, headshots: scoreSchema,
+    kastRounds: scoreSchema.optional(), roundsPlayed: scoreSchema.optional(),
+  })),
+  competHalfScores: z.object({
+    firstHalfScore: sideHalfSchema.optional(), secondHalfScore: sideHalfSchema.optional(),
+  }).optional(),
+});
 
 export class MatchRecordStore {
   constructor(
@@ -184,6 +223,20 @@ export class MatchRecordStore {
     await this.saveMatchFile(matchId, "server.json", server);
   }
 
+  async readServerExitReport(matchId: string): Promise<MatchServerExitReport | undefined> {
+    let raw: string;
+    try { raw = await readFile(this.matchFile(matchId, "server-exit.json"), "utf8"); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
+    const report = serverExitReportSchema.safeParse(JSON.parse(raw));
+    if (!report.success) throw new Error("Invalid saved server exit report: " + matchId, { cause: report.error });
+    return report.data;
+  }
+
+  async saveServerExitReport(matchId: string, report: MatchServerExitReport): Promise<void> {
+    this.assertSafeMatchId(matchId);
+    await this.saveMatchFile(matchId, "server-exit.json", report, { pretty: false, durable: true });
+  }
+
   async saveStatus(matchId: string, status: unknown): Promise<void> {
     this.assertSafeMatchId(matchId);
     await this.saveMatchFile(matchId, "status.json", status, { pretty: false });
@@ -235,7 +288,7 @@ export class MatchRecordStore {
     matchId: string,
     fileName: string,
     value: unknown,
-    options: { pretty?: boolean } = {},
+    options: { pretty?: boolean; durable?: boolean } = {},
   ): Promise<void> {
     if (this.readMatchRow(matchId)) return;
     const filePath = this.matchFile(matchId, fileName);

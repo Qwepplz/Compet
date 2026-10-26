@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
-import { access, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
 import path from "node:path";
 
 export async function pathExists(filePath: string): Promise<boolean> {
@@ -23,6 +24,7 @@ export async function readJsonFile<T>(filePath: string, fallback?: T): Promise<T
 export interface WriteJsonFileOptions {
   pretty?: boolean;
   createParent?: boolean;
+  durable?: boolean;
 }
 
 export async function writeJsonFileAtomic(
@@ -30,6 +32,7 @@ export async function writeJsonFileAtomic(
   value: unknown,
   options: WriteJsonFileOptions = {},
 ): Promise<void> {
+  if (options.durable) await assertPlainPath(filePath);
   if (options.createParent !== false) {
     await mkdir(path.dirname(filePath), { recursive: true });
   }
@@ -37,8 +40,15 @@ export async function writeJsonFileAtomic(
   const json = options.pretty === false ? JSON.stringify(value) : JSON.stringify(value, null, 2);
 
   try {
-    await writeFile(tempPath, `${json}\n`, "utf8");
+    if (options.durable) {
+      const handle = await open(tempPath, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | (process.platform === "linux" ? constants.O_NOFOLLOW : 0), 0o600);
+      try { await handle.writeFile(`${json}\n`, "utf8"); await handle.sync(); } finally { await handle.close(); }
+    } else { await writeFile(tempPath, `${json}\n`, "utf8"); }
     await rename(tempPath, filePath);
+    if (options.durable && process.platform === "linux") {
+      const directory = await open(path.dirname(filePath), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+      try { await directory.sync(); } finally { await directory.close(); }
+    }
   } catch (error) {
     try {
       await rm(tempPath, { force: true });

@@ -5,6 +5,7 @@ import { delay } from "../shared/async.js";
 import { inspectLinuxGameRoot, inspectLinuxUdpPort, probeLinuxGameProcess, type GameProcessIdentity } from "./linuxProcess.js";
 
 export interface SourceServerExitMonitorSpec {
+  onObservation?: () => Promise<void>;
   host: string;
   port: number;
   intervalMs: number;
@@ -30,6 +31,7 @@ export async function waitForSourceServerExit(
   let observed = false;
   let missedResponses = 0;
   while (true) {
+    await spec.onObservation?.();
     const alive = await isSourceServerObservable(spec);
     if (alive) {
       observed = true;

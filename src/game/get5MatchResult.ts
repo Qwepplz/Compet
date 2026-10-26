@@ -1,4 +1,7 @@
 import { readFile } from "node:fs/promises";
+import fs from "node:fs/promises";
+import { constants } from "node:fs";
+import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
 import path from "node:path";
 import type { GameSide, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
 
@@ -34,6 +37,37 @@ export function get5MatchStatsPath(serverRoot: string, matchId: string): string 
     "csgo",
     ...get5MatchStatsRelativePath(matchId).split("/"),
   );
+}
+
+export async function readGet5DemoEvidence(serverRoot: string, matchId: string, completedAt: string):
+  Promise<{ get5Result: Get5MatchResultClassification; demoFiles: string[] }> {
+  const file = get5MatchStatsPath(serverRoot, matchId);
+  await assertPlainPath(file);
+  let before;
+  try { before = await fs.lstat(file, { bigint: true }); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { get5Result: { status: "abnormal", reason: "missing_get5_stats" }, demoFiles: [] };
+    throw error;
+  }
+  if (!before.isFile() || before.nlink !== 1n) throw new Error("demo_evidence_invalid");
+  const handle = await fs.open(file, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW | constants.O_NONBLOCK : 0));
+  let raw: string;
+  try {
+    const same = (info: typeof before) => info.dev === before.dev && info.ino === before.ino && info.size === before.size &&
+      info.mtimeNs === before.mtimeNs && info.ctimeNs === before.ctimeNs && info.nlink === 1n;
+    if (!same(await handle.stat({ bigint: true }))) throw new Error("demo_evidence_changed");
+    raw = await handle.readFile("utf8");
+    if (!same(await handle.stat({ bigint: true })) || !same(await fs.lstat(file, { bigint: true }))) throw new Error("demo_evidence_changed");
+  } finally { await handle.close(); }
+  let parsed: unknown;
+  try { parsed = raw.trimStart().startsWith("{") ? JSON.parse(raw) : parseStatsFile(raw); } catch (error) { throw new Error("demo_evidence_invalid", { cause: error }); }
+  if (!isRecord(parsed)) throw new Error("demo_evidence_invalid");
+  const demoFiles: string[] = [];
+  for (const [key, map] of Object.entries(parsed)) {
+    if (!/^map\d+$/.test(key) || !isRecord(map) || map.demo_filename === undefined || map.demo_filename === "") continue;
+    if (typeof map.demo_filename !== "string") throw new Error("demo_evidence_invalid");
+    demoFiles.push(map.demo_filename);
+  }
+  return { get5Result: classifyGet5MatchStats(parsed, completedAt), demoFiles: [...new Set(demoFiles)] };
 }
 
 export async function readGet5MatchResult(
@@ -196,7 +230,7 @@ function tokenizeKeyValues(raw: string): string[] {
   return tokens;
 }
 
-function isValidMr12FinalScore(team1Score: number, team2Score: number, winner: TeamSide): boolean {
+export function isValidMr12FinalScore(team1Score: number, team2Score: number, winner: TeamSide): boolean {
   if (!Number.isInteger(team1Score) || !Number.isInteger(team2Score) || team1Score === team2Score) return false;
   const winnerScore = winner === "teamA" ? team1Score : team2Score;
   const loserScore = winner === "teamA" ? team2Score : team1Score;

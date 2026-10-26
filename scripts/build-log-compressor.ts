@@ -6,9 +6,10 @@ import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { assertPlainPath } from "../src/desktop/main/serverManagedFiles.js";
+import { readArchiveMetadata, SevenZipTarXzCodec } from "../src/archive/tarXzCodec.js";
 
 const execute = promisify(execFile);
-export const LZMA_SDK_SOURCE_SHA256 = "0266ecbfc2abb46fac570361be4361e5bde1819f93a7c2d7982b51b9e22750b1";
+export const LZMA_SDK_SOURCE_SHA256 = "a432248c9c26fd4285c5155ed7d8b1ef46acac2869653bfe3ec438276b850a3f";
 const requiredSdkFiles = ["C/7zVersion.h", "C/XzEnc.h", "C/XzEnc.c", "C/XzDec.c",
   "CPP/7zip/Bundles/Alone7z/makefile.gcc", "CPP/7zip/cmpl_gcc.mak",
   "CPP/7zip/var_gcc.mak", "CPP/7zip/7zip_gcc.mak", "DOC/lzma-sdk.txt"] as const;
@@ -26,7 +27,7 @@ export async function validateLzmaSdkRoot(sdkRoot: string): Promise<void> {
     if (!info?.isFile()) throw new Error("lzma_sdk_input_invalid");
   }
   const version = await fs.readFile(path.join(sdkRoot, "C/7zVersion.h"), "utf8");
-  if (!/^#define MY_VERSION_NUMBERS "26[.]04"\r?$/m.test(version)) throw new Error("lzma_sdk_version_invalid");
+  if (!/^#define MY_VERSION_NUMBERS "26[.]05"\r?$/m.test(version)) throw new Error("lzma_sdk_version_invalid");
 }
 async function sdkFiles(sdkRoot: string): Promise<string[]> {
   const files: string[] = [];
@@ -56,7 +57,7 @@ export async function fingerprintLzmaSdkRoot(sdkRoot: string): Promise<string> {
 export interface BuiltLogCompressor {
   binaryPath: string;
   licensePath: string;
-  version: "26.04";
+  version: "26.05";
   sourceSha256: string;
   dispose(): Promise<void>;
 }
@@ -97,7 +98,7 @@ export async function buildLogCompressor(input: { sdkRoot: string; repositoryRoo
     if (!(await fs.lstat(binaryPath)).isFile()) throw new Error("log_compressor_type_invalid");
     await fs.chmod(binaryPath, 0o755);
     await probeLogCompressor(binaryPath);
-    return { binaryPath, licensePath: path.join(sdk, "DOC/lzma-sdk.txt"), version: "26.04", sourceSha256: LZMA_SDK_SOURCE_SHA256, dispose };
+    return { binaryPath, licensePath: path.join(sdk, "DOC/lzma-sdk.txt"), version: "26.05", sourceSha256: LZMA_SDK_SOURCE_SHA256, dispose };
   } catch (error) {
     await dispose().catch(cleanup => process.stderr.write("Log compressor cleanup failed: " + String(cleanup) + "\n"));
     throw error;
@@ -113,30 +114,25 @@ export async function probeLogCompressor(executable: string): Promise<void> {
     await fs.access(executable, constants.X_OK);
     const handle = await fs.open(executable, "r");
     try {
-      const header = Buffer.alloc(20);
-      await handle.read(header, 0, header.length, 0);
-      if (!header.subarray(0, 6).equals(Buffer.from([127, 69, 76, 70, 2, 1])) || header.readUInt16LE(18) !== 62) {
-        throw new Error("log_compressor_elf_invalid");
-      }
+      const header = Buffer.alloc(20); await handle.read(header, 0, header.length, 0);
+      if (!header.subarray(0, 6).equals(Buffer.from([127, 69, 76, 70, 2, 1])) || header.readUInt16LE(18) !== 62) throw new Error("log_compressor_elf_invalid");
     } finally { await handle.close(); }
     if ((info.mode & 0o777) !== 0o755) throw new Error("log_compressor_mode_invalid");
   }
-  const run = (args: string[]) => execute(executable, args, { windowsHide: true, timeout: 120000, encoding: "buffer", maxBuffer: 1024 * 1024 });
-  const formats = (await run(["i"])).stdout.toString("utf8");
-  if (!/26[.]04/.test(formats) || !/\bxz\b/i.test(formats)) throw new Error("log_compressor_format_invalid");
+  const formats = (await execute(executable, ["i"], { windowsHide: true, timeout: 120000, maxBuffer: 1024 * 1024 })).stdout;
+  if (!/7-Zip \(r\) 26[.]05(?:[^\r\n]*)/.test(formats) || !/\bxz\b/i.test(formats)) throw new Error("log_compressor_format_invalid");
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "compet-xz-probe-"));
+  const codec = new SevenZipTarXzCodec(executable);
   try {
     const samples = [Buffer.alloc(0), Buffer.from("log\n中文\r\n"), Buffer.from(Array.from({ length: 256 }, (_, n) => n))];
     for (const [index, bytes] of samples.entries()) {
-      const source = path.join(root, "sample-" + index);
-      const archive = source + ".xz";
+      const memberName = "sample-" + index, source = path.join(root, memberName), archive = source + ".tar.xz";
       await fs.writeFile(source, bytes, { mode: 0o600, flag: "wx" });
-      await run(["a", "-txz", archive, source, "-mx=5", "-md=8m", "-mmt=1", "-bb0", "-bd", "-y"]);
-      const encoded = await fs.readFile(archive);
-      if (!encoded.subarray(0, 6).equals(Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0]))) throw new Error("log_compressor_xz_invalid");
-      await run(["t", archive, "-bb0", "-bd"]);
-      const decoded = (await run(["x", archive, "-so", "-bb0", "-bd"])).stdout;
-      if (!decoded.equals(bytes)) throw new Error("log_compressor_roundtrip_invalid");
+      const metadata = await readArchiveMetadata(source);
+      await codec.encode({ sourcePath: source, memberName, metadata }, archive);
+      const view = await codec.inspect(archive);
+      if (view.memberName !== memberName || view.size !== bytes.length || view.sha256 !== createHash("sha256").update(bytes).digest("hex") ||
+          view.metadata.birthtimeNs !== metadata.birthtimeNs || view.metadata.mtimeNs !== metadata.mtimeNs) throw new Error("log_compressor_roundtrip_invalid");
     }
-  } finally { await fs.rm(root, { recursive: true, force: true }); }
+  } finally { await codec.cancel(); await fs.rm(root, { recursive: true, force: true }); }
 }

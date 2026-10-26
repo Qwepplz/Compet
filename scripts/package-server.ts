@@ -153,8 +153,8 @@ async function probePackage(root: string, platform: ServerPlatform): Promise<voi
   const source = 'const {DatabaseSync}=require("node:sqlite"); const db=new DatabaseSync(":memory:"); db.exec("SELECT 1"); db.close(); const a=require("argon2"); a.hash("package-probe").then(h=>a.verify(h,"package-probe")).then(ok=>{if(!ok)throw Error("argon2"); console.log(JSON.stringify({node:process.versions.node,abi:process.versions.modules,sqlite:process.versions.sqlite}));});';
   const env = { ...process.env }; for (const key of ["NODE_OPTIONS", "NODE_PATH", "ELECTRON_RUN_AS_NODE"]) delete env[key];
   process.stdout.write(run(layout.nodePath, ["-e", source], layout.appRoot, env));
+  await probeLogCompressor(path.join(layout.appRoot, "runtime/7z", platform === "win32-x64" ? "7zr.exe" : "7zr"));
   if (platform === "linux-x64") {
-    await probeLogCompressor(path.join(root, "runtime/7z/7zr"));
     const pty = 'const p=require("node-pty").spawn("/bin/sh",["-c","test -t 0 && printf COMPET_PTY_OK"],{name:"xterm",cols:80,rows:24,cwd:process.cwd(),env:process.env});let text="";p.onData(s=>text+=s);p.onExit(e=>{if(e.exitCode!==0||!text.includes("COMPET_PTY_OK"))process.exitCode=1;else console.log("COMPET_PTY_OK")});';
     process.stdout.write(run(layout.nodePath, ["-e", pty], layout.appRoot, env));
   }
@@ -182,6 +182,23 @@ async function probePackage(root: string, platform: ServerPlatform): Promise<voi
     if ((await fs.readdir(probeRoot)).join() !== "server.json") throw new Error("config_check_wrote_data");
   } finally { await fs.rm(probeRoot, { recursive: true, force: true }); }
 }
+export async function validateWindowsArchiveTools(root: string): Promise<void> {
+  const tools = ["packaging/server/runtime/7zr.exe", ".local-tools/7zr.exe"].map(name => path.join(root, name));
+  const license = path.join(root, "packaging/server/runtime/lzma-sdk.txt");
+  await assertPlainPath(license);
+  if (!(await fs.lstat(license)).isFile() || createHash("sha256").update(await fs.readFile(license)).digest("hex") !== "987cb5b55ea7d2a2cc1c52e0a3b524a2a8b831ed1e281fce4e063bdf44185b1f") throw new Error("seven_zip_license_invalid");
+  for (const tool of tools) {
+    await assertPlainPath(tool);
+    if (!(await fs.lstat(tool)).isFile()) throw new Error("seven_zip_tool_invalid");
+    const bytes = await fs.readFile(tool);
+    if (bytes.length < 64 || bytes.readUInt16LE(0) !== 0x5a4d) throw new Error("seven_zip_tool_invalid");
+    const offset = bytes.readUInt32LE(0x3c);
+    if (offset + 6 > bytes.length || bytes.readUInt32LE(offset) !== 0x4550 || bytes.readUInt16LE(offset + 4) !== 0x8664 ||
+        createHash("sha256").update(bytes).digest("hex") !== "ae23615622947262021cba6f4ae40c84702a9a55fef8e0b1bfab8b828748d63a") throw new Error("seven_zip_tool_invalid");
+  }
+  for (const tool of tools) await probeLogCompressor(tool);
+}
+
 export async function packageServer(options: PackageOptions): Promise<void> {
   await validateArtifactsDirectory(options.artifactsDir);
   const stage = path.join(options.artifactsDir, "staging", options.platform);
@@ -192,6 +209,7 @@ export async function packageServer(options: PackageOptions): Promise<void> {
     await validateLzmaSdkRoot(sdkRoot);
     if (await fingerprintLzmaSdkRoot(sdkRoot) !== LZMA_SDK_SOURCE_SHA256) throw new Error("lzma_sdk_source_mismatch");
   }
+  if (options.platform === "win32-x64") await validateWindowsArchiveTools(repositoryRoot);
   const metadata = await readServerPackageMetadata(options.requiredClientVersion);
   // SourcePawn must complete before build output, staging or existing archives are removed.
   await buildServer();
@@ -215,6 +233,7 @@ export async function packageServer(options: PackageOptions): Promise<void> {
       for (const name of await fs.readdir(locales)) if (!["en-US.pak", "zh-CN.pak"].includes(name)) await fs.unlink(path.join(locales, name));
       await copy(path.join(repositoryRoot, "out"), path.join(layout.appRoot, "out"));
       await copy(path.join(repositoryRoot, "packaging/server/runtime/7zr.exe"), path.join(layout.appRoot, "runtime/7z/7zr.exe"));
+      await copy(path.join(repositoryRoot, "packaging/server/runtime/lzma-sdk.txt"), path.join(layout.appRoot, "runtime/7z/lzma-sdk.txt"));
       run("pwsh", ["-NoProfile", "-File", path.join(repositoryRoot, "scripts/package-server-windows-resources.ps1"), "-Stage", stage, "-Version", JSON.parse(await fs.readFile(path.join(repositoryRoot, "packaging/server/app-package.json"), "utf8")).version]);
       await copy(path.join(repositoryRoot, "packaging/server/windows/compet.cmd"), path.join(stage, "compet.cmd"));
     } else {

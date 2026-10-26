@@ -15,6 +15,9 @@ import { isServerUpdateBlocked } from "../update/serverUpdate.js";
 import { FriendService } from "../friends/friendService.js";
 import { FriendStore } from "../friends/friendStore.js";
 import { MatchExecutor } from "../game/matchExecutor.js";
+import { MatchDemoLifecycle, probeDemoRoot, probeDemoOwner } from "../game/matchDemoLifecycle.js";
+import { readGet5DemoEvidence } from "../game/get5MatchResult.js";
+import { SevenZipTarXzCodec } from "../archive/tarXzCodec.js";
 import { loadRunCsgoSource } from "../game/runCsgoAssets.js";
 import { publishMysqlPreinitScripts } from "../game/mysqlPreinitScripts.js";
 import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
@@ -73,6 +76,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
     },
   });
 
+  let demos: MatchDemoLifecycle | undefined;
   try {
     const certificate = await ensureServerCertificate(path.join(config.dataDir, "certs"));
     const accounts = new AccountService(new AccountRepository(database));
@@ -117,7 +121,20 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       process.stdout.write(chunk);
     };
     let matchmaking: MatchmakingService | undefined;
+    const demoServerRoot = path.resolve(config.gameServer.serverRoot);
+    const compressor = layout ? path.join(layout.appRoot, "runtime/7z", process.platform === "win32" ? "7zr.exe" : "7zr")
+      : path.join(assetAppRoot, packaged ? path.join("runtime/7z", process.platform === "win32" ? "7zr.exe" : "7zr") : process.platform === "win32" ? "packaging/server/runtime/7zr.exe" : ".local-tools/7zr");
+    demos = new MatchDemoLifecycle({
+      serverRoot: demoServerRoot, jobDirectory: path.resolve(recordsDir, "demo-jobs"),
+      codec: new SevenZipTarXzCodec(compressor, { processTimeoutMs: 900000 }),
+      readEvidence: id => readGet5DemoEvidence(demoServerRoot, id, new Date().toISOString()),
+      probePrepared: () => probeDemoRoot(demoServerRoot, config.gameServer.portRange.start),
+      probeOwner: probeDemoOwner,
+      onError: (id, error) => process.stderr.write("Demo lifecycle " + id + ": " + (error instanceof Error ? error.message : String(error)) + "\n"),
+    });
+    await demos.recover();
     const executor = new MatchExecutor({
+      demos,
       assets: () => loadRunCsgoSource({ appRoot: assetAppRoot, ...(layout ? { layout } : {}),
         ...(packaged ? {} : { developmentRoot: path.join(assetAppRoot, "src/run_csgo") }) }),
       launcher: process.platform === "linux" ? new LinuxGameServerLauncher({ onStdout: gameStdoutHandler }) : new NodeGameServerLauncher({
@@ -205,6 +222,8 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       const errors: unknown[] = [];
       try { await matchmakingService.stopBackgroundTasks(); }
       catch (error) { errors.push(error); }
+      try { await demos?.close(); }
+      catch (error) { errors.push(error); }
       try { await sessions.revokePlayerSessions(); }
       catch (error) { errors.push(error); }
       try { database.close(); }
@@ -228,6 +247,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
     };
     return { app, close, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
   } catch (error) {
+    await demos?.close().catch(cleanup => process.stderr.write("Demo close failed: " + String(cleanup) + "\n"));
     if (database.isOpen) database.close();
     throw error;
   }
