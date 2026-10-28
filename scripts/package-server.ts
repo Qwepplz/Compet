@@ -10,6 +10,7 @@ import { buildServer } from "./build-server.js";
 import { buildLogCompressor, fingerprintLzmaSdkRoot, LZMA_SDK_SOURCE_SHA256, probeLogCompressor, validateLzmaSdkRoot } from "./build-log-compressor.js";
 import { createPackageInventory, verifyPackageInventory } from "./create-package-inventory.js";
 import { createServerUpdateFeed } from "./create-server-update-feed.js";
+import { createTarXzPackage, extractTarXzPackage } from "./create-tar-xz-package.js";
 import { assertPlainPath, fingerprintFile } from "../src/desktop/main/serverManagedFiles.js";
 import { resolveServerLayout, type ServerPlatform } from "../src/shared/serverPackageLayout.js";
 import { isSemver } from "../src/shared/version.js";
@@ -258,7 +259,7 @@ export async function packageServer(options: PackageOptions): Promise<void> {
     await probePackage(stage, options.platform);
     await createPackageInventory(stage, metadata.version, options.platform);
     await verifyPackageInventory(stage, metadata.version, options.platform);
-    const archive = path.join(options.artifactsDir, options.platform === "win32-x64" ? "Compet-Server-win32-x64.7z" : "Compet-Server-linux-x64.tar.gz");
+    const archive = path.join(options.artifactsDir, options.platform === "win32-x64" ? "Compet-Server-win32-x64.7z" : "Compet-Server-linux-x64.tar.xz");
     const temporary = archive + ".tmp";
     await assertPlainPath(archive); await assertPlainPath(temporary); await fs.rm(temporary, { force: true });
     try {
@@ -266,16 +267,28 @@ export async function packageServer(options: PackageOptions): Promise<void> {
         const sevenZip = path.join(repositoryRoot, ".local-tools/7zr.exe");
         run(sevenZip, ["a", "-t7z", temporary, ".", "-r", "-mx=7", "-bb0", "-bd", "-y"], stage);
         run(sevenZip, ["t", temporary, "-bb0", "-bd", "-y"]);
-      } else run("tar", ["-czf", temporary, "-C", stage, "."]);
+      } else await createTarXzPackage({ sourceRoot: stage, targetPath: temporary, compressorPath: built!.binaryPath });
       const unpack = await fs.mkdtemp(path.join(options.artifactsDir, "package-verify-"));
       try {
         if (options.platform === "win32-x64") run(path.join(repositoryRoot, ".local-tools/7zr.exe"), ["x", temporary, "-o" + unpack, "-y"]);
-        else run("tar", ["-xzf", temporary, "-C", unpack]);
+        else await extractTarXzPackage({ archivePath: temporary, targetRoot: unpack, compressorPath: built!.binaryPath });
         await verifyPackageInventory(unpack, metadata.version, options.platform);
         await probePackage(unpack, options.platform);
       } finally { await fs.rm(unpack, { recursive: true, force: true }); }
+      if (options.platform === "linux-x64") await fs.chmod(temporary, 0o644);
       await createServerUpdateFeed({ packageRoot: stage, outputRoot: path.join(options.artifactsDir, "update/server"), platform: options.platform, version: metadata.version, baseUrl: process.env.COMPET_SERVER_UPDATE_BASE_URL ?? "https://qwepplz111.site/update/server/" });
       await fs.rename(temporary, archive);
+      if (options.platform === "linux-x64") {
+        const legacy = path.join(options.artifactsDir, "Compet-Server-linux-x64.tar.gz");
+        try {
+          await assertPlainPath(legacy);
+          const info = await fs.lstat(legacy).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+          if (info && !info.isFile()) throw new Error("legacy_archive_type_invalid");
+          if (info) await fs.unlink(legacy);
+        } catch (error) {
+          throw new Error("package_archive_published: " + archive + "; legacy_archive_cleanup_failed: " + String(error), { cause: error });
+        }
+      }
       process.stdout.write(JSON.stringify({ archive, ...(await fingerprintFile(archive)), platform: options.platform, requiredClientVersion: options.requiredClientVersion }) + "\n");
     } finally { await fs.rm(temporary, { force: true }); }
   } finally { await built?.dispose().catch(error => process.stderr.write("Log compressor cleanup failed: " + String(error) + "\n")); }
