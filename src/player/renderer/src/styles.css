@@ -540,6 +540,8 @@ input {
 }
 
 .player-app-sidebar {
+  z-index: 5;
+  -webkit-app-region: no-drag;
   display: grid;
   align-content: start;
   gap: 1px;
