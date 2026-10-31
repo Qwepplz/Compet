@@ -209,39 +209,29 @@ public void Get5_OnKnifeRoundStarted(Handle event) {
   MarkGet5Started("get5 knife round started");
 }
 
-void ApplyDemoRecordingPath() {
+void ApplyMatchStatsPath() {
   if (g_MatchId[0] == '\0' || g_MatchFinalized) {
     return;
   }
   for (int i = 0; g_MatchId[i] != '\0'; i++) {
     int c = g_MatchId[i];
     if (!((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-')) {
-      LogError("[Compet] Invalid match id for demo path.");
+      LogError("[Compet] Invalid match id for stats path.");
       return;
     }
   }
-  ConVar demoPath = FindConVar("get5_demo_path");
-  ConVar demoName = FindConVar("get5_demo_name_format");
-  ConVar timeFormat = FindConVar("get5_time_format");
   ConVar statsPath = FindConVar("get5_stats_path_format");
-  if (demoPath == null || demoName == null || timeFormat == null || statsPath == null) {
-    LogError("[Compet] Get5 demo cvars unavailable.");
+  if (statsPath == null) {
+    LogError("[Compet] Get5 stats cvar unavailable.");
     return;
   }
-  char relative[256];
-  char format[256];
-  Format(relative, sizeof(relative), "demos/compet/%s/", g_MatchId);
-  Format(format, sizeof(format), "compet_%s_{TIME}_{MAPNAME}", g_MatchId);
-  demoPath.SetString(relative);
-  demoName.SetString(format);
-  timeFormat.SetString("%Y%m%dT%H%M%S");
   char stats[PLATFORM_MAX_PATH];
   Format(stats, sizeof(stats), "addons/sourcemod/data/compet/matches/%s/get5_matchstats.cfg", g_MatchId);
   statsPath.SetString(stats);
 }
 
 public void Get5_OnGoingLive(Handle event) {
-  ApplyDemoRecordingPath();
+  ApplyMatchStatsPath();
   MarkGet5Started("get5 going live");
   g_StatsActive = g_MatchId[0] != '\0' && !g_MatchFinalized;
   RefreshAllNativeStats();

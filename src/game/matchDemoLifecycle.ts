@@ -49,24 +49,28 @@ export async function probeDemoOwner(owner: DemoOwner): Promise<"alive" | "gone"
   const state = await probeWindowsGameProcess(owner);
   return state === "gone" ? probeDemoRoot(path.dirname(owner.executable), owner.port) : state;
 }
-const fileSchema = z.object({
-  name: z.string().min(1), dev: decimal, ino: decimal, size: decimal, mtimeNs: z.string().regex(/^-?\d+$/),
-  ctimeNs: z.string().regex(/^-?\d+$/), sha256: z.string().regex(/^[0-9a-f]{64}$/),
+const snapshotSchema = z.object({
+  name: z.string().min(1), dev: decimal, ino: decimal, size: decimal,
+  mtimeNs: z.string().regex(/^-?\d+$/), ctimeNs: z.string().regex(/^-?\d+$/),
+}).strict();
+export type DemoSnapshotFile = z.infer<typeof snapshotSchema>;
+const fileSchema = snapshotSchema.extend({
+  sha256: z.string().regex(/^[0-9a-f]{64}$/),
   state: z.enum(["pending", "deleting", "deleted", "archived"]),
   metadata: z.object({ birthtimeNs: z.string().regex(/^-?\d+$/), mtimeNs: z.string().regex(/^-?\d+$/) }).optional(),
-  attempt: z.object({ name: z.string().min(1), dev: decimal.optional(), ino: decimal.optional() }).optional(),
-  orphans: z.array(z.string()).optional(),
+  attempt: z.object({ name: z.string().min(1), dev: decimal.optional(), ino: decimal.optional(), verified: z.boolean().optional() }).optional(),
 }).strict();
 type DemoFile = z.infer<typeof fileSchema>;
 const jobSchema = z.object({
   schemaVersion: z.literal(1), matchId: matchIdSchema, dev: z.boolean(), serverRoot: z.string().min(1),
-  relativeDemoDir: z.string().min(1), directory: z.object({ dev: decimal, ino: decimal }),
+  sourceDirectory: z.object({ dev: decimal, ino: decimal }), baseline: z.array(snapshotSchema),
   stage: z.enum(["prepared", "attached", "frozen", "complete"]), owner: ownerSchema.optional(),
   disposition: z.enum(["keep", "delete"]).optional(),
   evidence: z.object({ normal: z.boolean(), reason: z.string().optional() }).optional(),
   files: z.array(fileSchema).optional(),
 }).strict();
 type DemoJob = z.infer<typeof jobSchema>;
+export type DemoSettlement = "kept" | "deleted" | "no_demo" | "unmanaged" | "blocked";
 export type DemoDisposition = "keep" | "delete";
 export function decideDemoDisposition(dev: boolean, normal: boolean): DemoDisposition {
   if (typeof dev !== "boolean") throw new Error("demo_dev_invalid");
@@ -88,10 +92,9 @@ async function maybeStat(file: string) {
 }
 export class MatchDemoLifecycle {
   private queue: Promise<unknown> = Promise.resolve();
-  private readonly pending = new Set<string>();
-  private background: Promise<void> = Promise.resolve();
   private failures: unknown[] = [];
   private readonly retries = new Map<string, NodeJS.Timeout>();
+  private readonly pendingSettlements = new Set<string>();
   private stopped = false;
   private cancelled = false;
   private closing?: Promise<void>;
@@ -108,24 +111,26 @@ export class MatchDemoLifecycle {
     if (!(await fs.lstat(root)).isDirectory()) throw new Error("demo_root_invalid");
     return root;
   }
-  private directory(job: DemoJob): string { return path.join(job.serverRoot, "csgo", job.relativeDemoDir); }
+  private directory(job: DemoJob): string { return path.join(job.serverRoot, "csgo"); }
   private async read(id: string): Promise<DemoJob | null> {
     const file = this.jobFile(id), info = await maybeStat(file);
     if (!info) return null;
     if (!info.isFile() || info.nlink !== 1n) throw new Error("demo_job_invalid");
     let job: DemoJob;
     try { job = jobSchema.parse(JSON.parse(await fs.readFile(file, "utf8"))); } catch (error) { throw new Error("demo_job_invalid", { cause: error }); }
-    if (job.matchId !== id || job.serverRoot !== await this.root() || job.relativeDemoDir !== "demos/compet/" + id + "/") throw new Error("demo_job_conflict");
+    if (job.matchId !== id || job.serverRoot !== await this.root()) throw new Error("demo_job_conflict");
     if (job.owner) {
       const expected = path.join(job.serverRoot, job.owner.platform === "linux" ? "srcds_linux" : "srcds.exe");
       if ((job.owner.platform === "linux" ? job.owner.identity.executable : job.owner.executable) !== expected ||
           job.owner.platform === "linux" && job.owner.identity.serverRoot !== job.serverRoot) throw new Error("demo_owner_conflict");
     }
     const directory = await maybeStat(this.directory(job));
-    if (!directory && job.stage === "complete" && job.disposition === "delete" && job.files?.every(file => file.state === "deleted")) return job;
-    if (!directory?.isDirectory() || directory.dev.toString() !== job.directory.dev || directory.ino.toString() !== job.directory.ino) throw new Error("demo_directory_conflict");
+    if (!directory?.isDirectory() || directory.dev.toString() !== job.sourceDirectory.dev || directory.ino.toString() !== job.sourceDirectory.ino) throw new Error("demo_directory_conflict");
     if ((job.stage === "frozen" || job.stage === "complete") && (!job.disposition || !job.files || !job.evidence)) throw new Error("demo_job_invalid");
-    if (job.files?.some(file => !this.validName(id, file.name))) throw new Error("demo_job_invalid");
+    if (job.files?.some(file => !this.validName(file.name))) throw new Error("demo_job_invalid");
+    const names = job.baseline.map(file => file.name);
+    if (names.some(name => !this.safeName(name)) || new Set(names).size !== names.length || names.join("\n") !== [...names].sort().join("\n")) throw new Error("demo_job_invalid");
+    if (job.files && new Set(job.files.map(file => file.name)).size !== job.files.length) throw new Error("demo_job_invalid");
     return job;
   }
   private async save(job: DemoJob): Promise<void> {
@@ -133,43 +138,60 @@ export class MatchDemoLifecycle {
     if (existing && (!existing.isFile() || existing.nlink !== 1n)) throw new Error("demo_job_invalid");
     await writeJsonFileAtomic(file, job, { durable: true });
   }
-  prepare(input: { matchId: string; dev: boolean }): Promise<{ relativeDemoDir: string; demoNameFormat: string }> {
+  private safeName(name: string): boolean {
+    return path.basename(name) === name && name.endsWith(".dem") && !/[\/\\:\x00-\x1f]/.test(name);
+  }
+  private async snapshot(directory: string): Promise<DemoSnapshotFile[]> {
+    const before = await maybeStat(directory);
+    if (!before?.isDirectory()) throw new Error("demo_directory_conflict");
+    const files: DemoSnapshotFile[] = [];
+    for (const name of (await fs.readdir(directory)).filter(name => name.endsWith(".dem")).sort()) {
+      if (!this.safeName(name)) throw new Error("demo_file_unmanaged");
+      const info = await archiveFile(path.join(directory, name));
+      files.push({ name, dev: info.dev.toString(), ino: info.ino.toString(), size: info.size.toString(),
+        mtimeNs: info.mtimeNs.toString(), ctimeNs: info.ctimeNs.toString() });
+    }
+    const after = await maybeStat(directory);
+    if (!after?.isDirectory() || before.dev !== after.dev || before.ino !== after.ino ||
+        before.mtimeNs !== after.mtimeNs || before.ctimeNs !== after.ctimeNs) throw new Error("demo_directory_changed");
+    return files;
+  }
+  private changed(job: DemoJob, files: DemoSnapshotFile[]): DemoSnapshotFile[] {
+    return files.filter(file => {
+      const previous = job.baseline.find(old => old.name === file.name);
+      return !previous || previous.dev !== file.dev || previous.ino !== file.ino || previous.size !== file.size ||
+        previous.mtimeNs !== file.mtimeNs || previous.ctimeNs !== file.ctimeNs;
+    });
+  }
+  prepare(input: { matchId: string; dev: boolean }): Promise<void> {
     return this.mutate(async () => {
+      if (this.stopped) throw new Error("demo_lifecycle_closed");
       matchId(input.matchId); if (typeof input.dev !== "boolean") throw new Error("demo_dev_invalid");
-      const root = await this.root(), relativeDemoDir = "demos/compet/" + input.matchId + "/";
-      const result = { relativeDemoDir, demoNameFormat: "compet_" + input.matchId + "_{TIME}_{MAPNAME}" };
+      const root = await this.root();
+      if (await maybeStat(this.options.jobDirectory)) await this.sync(this.options.jobDirectory);
       for (const entry of await fs.readdir(this.options.jobDirectory).catch(error => { if (error.code === "ENOENT") return []; throw error; })) {
         if (!entry.endsWith(".json") || entry === input.matchId + ".json") continue;
         const other = await this.read(entry.slice(0, -5));
-        if (other && other.stage !== "complete" && !(other.stage === "frozen" && other.disposition === "keep")) throw new Error("demo_jobs_pending");
+        if (other) throw new Error("demo_jobs_pending");
       }
       const existing = await this.read(input.matchId);
       if (existing) {
         if (existing.dev !== input.dev || existing.stage !== "prepared" || existing.owner) throw new Error("demo_job_conflict");
-        if ((await fs.readdir(this.directory(existing))).length) throw new Error("demo_owner_unconfirmed");
-        await this.save(existing); return result;
+        if (this.changed(existing, await this.snapshot(this.directory(existing))).length) throw new Error("demo_owner_unconfirmed");
+        await this.save(existing); return;
       }
-      const directory = path.join(root, "csgo", relativeDemoDir);
-      if (await maybeStat(directory)) throw new Error("demo_directory_unmanaged");
+      const directory = path.join(root, "csgo"), identity = await maybeStat(directory);
+      if (!identity?.isDirectory()) throw new Error("demo_directory_conflict");
+      const baseline = await this.snapshot(directory);
       await assertPlainPath(this.options.jobDirectory);
       await fs.mkdir(this.options.jobDirectory, { recursive: true, mode: 0o700 });
-      await fs.mkdir(path.dirname(directory), { recursive: true, mode: 0o700 });
-      await assertPlainPath(directory);
-      await fs.mkdir(directory, { mode: 0o700 });
-      const identity = await fs.lstat(directory, { bigint: true });
-      try {
-        await this.save({ schemaVersion: 1, matchId: input.matchId, dev: input.dev, serverRoot: root, relativeDemoDir,
-          directory: { dev: identity.dev.toString(), ino: identity.ino.toString() }, stage: "prepared" });
-        return result;
-      } catch (error) {
-        const current = await maybeStat(directory).catch(() => null);
-        if (!await maybeStat(this.jobFile(input.matchId)) && current?.isDirectory() && current.dev === identity.dev && current.ino === identity.ino && (await fs.readdir(directory)).length === 0) await fs.rmdir(directory).catch(cleanup => this.options.onError(input.matchId, cleanup));
-        throw error;
-      }
+      await this.save({ schemaVersion: 1, matchId: input.matchId, dev: input.dev, serverRoot: root,
+        sourceDirectory: { dev: identity.dev.toString(), ino: identity.ino.toString() }, baseline, stage: "prepared" });
     });
   }
   attachServer(id: string, owner: DemoOwner): Promise<void> {
     return this.mutate(async () => {
+      if (this.stopped) throw new Error("demo_lifecycle_closed");
       const job = await this.read(id); if (!job) throw new Error("demo_job_missing");
       const parsed = ownerSchema.safeParse(owner); if (!parsed.success) throw new Error("demo_owner_invalid");
       const expected = path.join(job.serverRoot, owner.platform === "linux" ? "srcds_linux" : "srcds.exe");
@@ -181,9 +203,10 @@ export class MatchDemoLifecycle {
     });
   }
 
-  private validName(id: string, name: string): boolean {
-    return path.basename(name) === name && name.startsWith("compet_" + id + "_") && name.endsWith(".dem") && !/[\/\\:\x00-\x1f]/.test(name);
+  private validName(name: string): boolean {
+    return this.safeName(name) && /^pug_\d{4}-\d{2}-\d{2}_\d{4}_[A-Za-z0-9_-]+[.]dem$/.test(name);
   }
+  private archiveDirectory(job: DemoJob): string { return path.join(this.directory(job), "demos"); }
   private report(id: string, error: unknown): void {
     try { this.options.onError(id, error); } catch { /* Diagnostics do not change ownership. */ }
   }
@@ -207,36 +230,41 @@ export class MatchDemoLifecycle {
     try { await handle.sync(); } finally { await handle.close(); }
   }
   private async complete(job: DemoJob): Promise<void> {
+    if (this.cancelled) throw new Error("demo_archive_cancelled");
     job.stage = "complete"; await this.save(job);
-    const directory = this.directory(job), info = await maybeStat(directory);
-    if (job.disposition === "delete" && info) {
-      if (!info.isDirectory() || info.dev.toString() !== job.directory.dev || info.ino.toString() !== job.directory.ino || (await fs.readdir(directory)).length) throw new Error("demo_directory_conflict");
-      await fs.rmdir(directory); await this.sync(path.dirname(directory));
+    try {
+      await fs.unlink(this.jobFile(job.matchId)); await this.sync(this.options.jobDirectory);
+    } catch (error) {
+      await this.save(job).catch(recoveryError => this.report(job.matchId, recoveryError));
+      throw error;
     }
-    if (job.files?.some(file => file.orphans?.length)) { this.report(job.matchId, new Error("demo_orphan_attempt_preserved")); return; }
-    await fs.unlink(this.jobFile(job.matchId)); await this.sync(this.options.jobDirectory);
   }
-  settle(id: string): Promise<"queued" | "deleted" | "no_demo" | "unmanaged" | "blocked"> {
+  settle(id: string): Promise<DemoSettlement> {
+    this.pendingSettlements.add(id);
     return this.mutate(async () => {
       try {
-        const job = await this.read(id); if (!job) return "unmanaged";
-        if (job.stage === "complete") { await this.complete(job); return job.disposition === "keep" ? "queued" : job.files?.length ? "deleted" : "no_demo"; }
-        if (job.stage === "frozen" && job.disposition === "keep") { this.enqueue(id); return "queued"; }
-        const names = await fs.readdir(this.directory(job));
+        const job = await this.read(id);
+        if (!job) {
+          if (await maybeStat(this.options.jobDirectory)) await this.sync(this.options.jobDirectory);
+          return "unmanaged";
+        }
+        if (this.stopped) throw new Error("demo_lifecycle_closed");
+        if (job.stage === "complete") { await this.complete(job); return job.files?.length ? job.disposition === "keep" ? "kept" : "deleted" : "no_demo"; }
         if (job.owner) {
           if (await this.options.probeOwner(job.owner) !== "gone") return "blocked";
-        } else if (names.length || await this.options.probePrepared?.() !== "gone") return "blocked";
+        } else if (await this.options.probePrepared?.() !== "gone") return "blocked";
+        const candidates = job.stage === "frozen" ? job.files! : this.changed(job, await this.snapshot(this.directory(job)));
+        const names = candidates.map(file => file.name);
         if (job.stage !== "frozen") {
-          if (names.some(name => !this.validName(id, name))) throw new Error("demo_file_unmanaged");
+          if (names.some(name => !this.validName(name))) throw new Error("demo_file_unmanaged");
           const evidence = job.dev ? undefined : await this.options.readEvidence(id);
           const normal = evidence?.get5Result.status === "normal";
           for (const input of evidence?.demoFiles ?? []) {
             const normalized = input.replaceAll("\\", "/");
             const withExtension = normalized.endsWith(".dem") ? normalized : normalized + ".dem";
             const name = path.posix.basename(withExtension);
-            if (!this.validName(id, name) || withExtension !== name && withExtension !== job.relativeDemoDir + name || !names.includes(name)) throw new Error("demo_evidence_conflict");
+            if (!this.validName(name) || withExtension !== name || !names.includes(name)) throw new Error("demo_evidence_conflict");
           }
-          if (normal && names.length && !evidence?.demoFiles.length) throw new Error("demo_evidence_conflict");
           job.disposition = decideDemoDisposition(job.dev, normal);
           job.evidence = { normal, ...(evidence?.get5Result.status === "abnormal" ? { reason: evidence.get5Result.reason } : {}) };
           job.files = [];
@@ -244,35 +272,43 @@ export class MatchDemoLifecycle {
           job.stage = "frozen"; await this.save(job);
         }
         if (!job.files?.length) { await this.complete(job); return "no_demo"; }
-        if (job.disposition === "keep") { this.enqueue(id); return "queued"; }
+        if (job.disposition === "keep") { await this.archive(id); return "kept"; }
         for (const file of job.files) {
           if (file.state === "deleted") continue;
           const source = path.join(this.directory(job), file.name);
           const current = await maybeStat(source);
-          if (!current && file.state === "deleting") { file.state = "deleted"; await this.save(job); continue; }
+          if (!current && file.state === "deleting") { await this.sync(this.directory(job)); file.state = "deleted"; await this.save(job); continue; }
           if (!current || !this.sameFile(file, await this.fingerprint(source))) throw new Error("demo_file_changed");
+          if (this.cancelled) throw new Error("demo_archive_cancelled");
           if (job.owner && await this.options.probeOwner(job.owner) !== "gone") return "blocked";
           file.state = "deleting"; await this.save(job);
           if (!this.sameFile(file, await this.fingerprint(source))) throw new Error("demo_file_changed");
+          if (this.cancelled) throw new Error("demo_archive_cancelled");
           await fs.unlink(source); await this.sync(this.directory(job));
           file.state = "deleted"; await this.save(job);
         }
         await this.complete(job); return "deleted";
-      } catch (error) { this.report(id, error); return "blocked"; }
+      } catch (error) { this.failures.push(error); this.report(id, error); return "blocked"; }
     }).then(result => {
       if (result === "blocked") this.scheduleRetry(id);
       else {
+        this.pendingSettlements.delete(id);
         clearTimeout(this.retries.get(id));
         this.retries.delete(id);
       }
       return result;
     });
   }
-  async recover(): Promise<void> {
+  async pendingMatchIds(): Promise<string[]> {
+    await assertPlainPath(this.options.jobDirectory);
     const names = await fs.readdir(this.options.jobDirectory).catch(error => { if (error.code === "ENOENT") return []; throw error; });
-    for (const name of names.sort()) {
-      if (!name.endsWith(".json")) continue;
-      const id = name.slice(0, -5);
+    const ids = names.filter(name => name.endsWith(".json")).map(name => {
+      const id = name.slice(0, -5); matchId(id); return id;
+    });
+    return [...new Set([...ids, ...this.pendingSettlements])].sort();
+  }
+  async recover(): Promise<void> {
+    for (const id of await this.pendingMatchIds()) {
       if (await this.settle(id) === "blocked") this.report(id, new Error("demo_recovery_blocked"));
     }
   }
@@ -288,29 +324,18 @@ export class MatchDemoLifecycle {
     }, 60000);
     timer.unref(); this.retries.set(id, timer);
   }
-  private enqueue(id: string): void {
-    if (this.stopped || this.pending.has(id)) return;
-    this.pending.add(id);
-    this.background = this.background.then(async () => {
-      await this.queue;
-      if (!this.cancelled) await this.archive(id);
-    }).catch(error => {
-      this.failures.push(error); this.report(id, error);
-      this.scheduleRetry(id);
-    }).finally(() => this.pending.delete(id));
-  }
   private matches(view: ArchiveInspection, file: DemoFile): boolean {
     return view.memberName === file.name && String(view.size) === file.size && view.sha256 === file.sha256 &&
       view.metadata.birthtimeNs === file.metadata?.birthtimeNs && view.metadata.mtimeNs === file.metadata?.mtimeNs;
   }
   private attemptPath(job: DemoJob, file: DemoFile): string {
     const name = file.attempt?.name;
-    const prefix = ".compet-" + file.name + ".attempt-";
-    if (!name || path.basename(name) !== name || !name.startsWith(prefix) || !/^[0-9a-f-]{36}[.]tmp[.]tar[.]xz$/.test(name.slice(prefix.length))) throw new Error("demo_attempt_invalid");
-    return path.join(this.directory(job), name);
+    const prefix = "." + file.name + ".attempt-";
+    if (!name || path.basename(name) !== name || !name.startsWith(prefix) || !/^[0-9a-f-]{36}[.]tmp$/.test(name.slice(prefix.length))) throw new Error("demo_attempt_invalid");
+    return path.join(this.archiveDirectory(job), name);
   }
   private async published(job: DemoJob, file: DemoFile): Promise<boolean> {
-    const final = path.join(this.directory(job), file.name + ".tar.xz"), info = await maybeStat(final);
+    const final = path.join(this.archiveDirectory(job), file.name + ".tar.xz"), info = await maybeStat(final);
     if (!info) return false;
     if (!info.isFile() || ![1n, 2n].includes(info.nlink)) throw new Error("demo_archive_conflict");
     if (info.nlink === 2n) {
@@ -327,13 +352,15 @@ export class MatchDemoLifecycle {
     if (info) {
       if (info.dev.toString() !== file.attempt.dev || info.ino.toString() !== file.attempt.ino ||
           !info.isFile() || !this.matches(await this.options.codec.inspect(temporary), file)) throw new Error("demo_attempt_conflict");
-      await fs.unlink(temporary); await this.sync(this.directory(job));
+      await fs.unlink(temporary); await this.sync(this.archiveDirectory(job));
     }
     delete file.attempt; await this.save(job);
   }
   private async archive(id: string): Promise<void> {
     const job = await this.read(id); if (!job) return;
     if (job.disposition !== "keep" || job.stage !== "frozen" || !job.files) return;
+    await assertPlainPath(this.archiveDirectory(job));
+    await fs.mkdir(this.archiveDirectory(job), { recursive: true, mode: 0o700 });
     for (const file of job.files) {
       if (this.cancelled) throw new Error("demo_archive_cancelled");
       const source = path.join(this.directory(job), file.name);
@@ -343,35 +370,58 @@ export class MatchDemoLifecycle {
         let reuse = false;
         if (file.attempt) {
           const temporary = this.attemptPath(job, file), previous = await maybeStat(temporary);
-          if (previous && previous.dev.toString() === file.attempt.dev && previous.ino.toString() === file.attempt.ino) {
-            if (!this.matches(await this.options.codec.inspect(temporary), file)) throw new Error("demo_attempt_conflict");
-            reuse = true;
-          } else {
-            if (previous) { file.orphans = [...(file.orphans ?? []), file.attempt.name]; this.report(id, new Error("demo_orphan_attempt_preserved")); }
-            delete file.attempt; await this.save(job);
-          }
+          if (previous) {
+            if (file.attempt.dev === undefined && file.attempt.ino === undefined && !file.attempt.verified) {
+              // The durable job reserved this exact UUID path before creation. Encoding
+              // cannot start before identity registration succeeds, so only an empty slot is recoverable.
+              if (!previous.isFile() || previous.nlink !== 1n || previous.size !== 0n) throw new Error("demo_attempt_conflict");
+              const handle = await fs.open(temporary, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW | constants.O_NONBLOCK : 0));
+              try {
+                if (!sameArchiveIdentity(previous, await handle.stat({ bigint: true }))) throw new Error("demo_attempt_conflict");
+                file.attempt.dev = previous.dev.toString(); file.attempt.ino = previous.ino.toString();
+                await this.save(job);
+                if (!sameArchiveIdentity(previous, await archiveFile(temporary))) throw new Error("demo_attempt_conflict");
+              } finally { await handle.close(); }
+            }
+            if (!previous.isFile() || previous.nlink !== 1n || previous.dev.toString() !== file.attempt.dev ||
+                previous.ino.toString() !== file.attempt.ino) throw new Error("demo_attempt_conflict");
+            if (file.attempt.verified) {
+              if (!this.matches(await this.options.codec.inspect(temporary), file)) throw new Error("demo_attempt_conflict");
+              reuse = true;
+            } else {
+              await fs.unlink(temporary); await this.sync(this.archiveDirectory(job));
+              delete file.attempt; await this.save(job);
+            }
+          } else { delete file.attempt; await this.save(job); }
         }
         if (!reuse) {
-          file.attempt = { name: ".compet-" + file.name + ".attempt-" + randomUUID() + ".tmp.tar.xz" }; await this.save(job);
-          await this.options.codec.encode({ sourcePath: source, memberName: file.name, metadata: file.metadata }, this.attemptPath(job, file));
+          file.attempt = { name: "." + file.name + ".attempt-" + randomUUID() + ".tmp" }; await this.save(job);
+          await this.options.codec.encode({ sourcePath: source, memberName: file.name, metadata: file.metadata }, this.attemptPath(job, file), async () => {
+            const created = await archiveFile(this.attemptPath(job, file));
+            file.attempt!.dev = created.dev.toString(); file.attempt!.ino = created.ino.toString();
+            await this.save(job);
+          });
           const encoded = await archiveFile(this.attemptPath(job, file));
+          if (file.attempt.dev && (file.attempt.dev !== encoded.dev.toString() || file.attempt.ino !== encoded.ino.toString())) throw new Error("demo_attempt_conflict");
           file.attempt.dev = encoded.dev.toString(); file.attempt.ino = encoded.ino.toString(); await this.save(job);
           if (!this.matches(await this.options.codec.inspect(this.attemptPath(job, file)), file)) throw new Error("demo_archive_mismatch");
+          file.attempt.verified = true; await this.save(job);
         }
         if (this.cancelled || !this.sameFile(file, await this.fingerprint(source))) throw new Error("demo_file_changed");
         const temporary = this.attemptPath(job, file), current = await archiveFile(temporary);
         if (current.dev.toString() !== file.attempt!.dev || current.ino.toString() !== file.attempt!.ino) throw new Error("demo_attempt_conflict");
-        await fs.link(temporary, source + ".tar.xz"); await this.sync(this.directory(job));
+        await fs.link(temporary, path.join(this.archiveDirectory(job), file.name + ".tar.xz")); await this.sync(this.archiveDirectory(job));
         if (!await this.published(job, file)) throw new Error("demo_archive_conflict");
       }
       if (!this.sameFile(file, await this.fingerprint(source))) throw new Error("demo_file_changed");
       await this.cleanupAttempt(job, file);
+      await this.sync(this.archiveDirectory(job));
       file.state = "archived"; await this.save(job);
     }
     await this.complete(job);
   }
   async flush(): Promise<void> {
-    await this.queue; await this.background;
+    await this.queue;
     const errors = this.failures.splice(0);
     if (errors.length) throw new AggregateError(errors, "demo_archive_failed");
   }
@@ -380,14 +430,13 @@ export class MatchDemoLifecycle {
     this.stopped = true;
     for (const timer of this.retries.values()) clearTimeout(timer);
     this.retries.clear();
-    await this.queue;
     let timer: NodeJS.Timeout | undefined;
     try {
       const timeout = new Promise<"timeout">(resolve => { timer = setTimeout(() => resolve("timeout"), 5000); });
-      if (await Promise.race([this.background.then(() => "done"), timeout]) === "timeout") {
+      if (await Promise.race([this.queue.then(() => "done"), timeout]) === "timeout") {
         this.cancelled = true; await this.options.codec.cancel();
       }
-      await this.background;
+      await this.flush();
     } finally { if (timer) clearTimeout(timer); await this.options.codec.cancel(); }
   }
 }

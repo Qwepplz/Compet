@@ -101,8 +101,8 @@ export class MatchExecutor {
       const safeMatchId = validateMatchId(matchPlan.id);
       const matchCfgPath = ACTIVE_MATCH_RUNTIME_CFG_PATH;
 
-      const demo = await this.options.demos?.prepare({ matchId: safeMatchId, dev: matchPlan.dev === true });
-      await this.writeMatchFiles(matchPlan, safeMatchId, matchCfgPath, demo);
+      await this.options.demos?.prepare({ matchId: safeMatchId, dev: matchPlan.dev === true });
+      await this.writeMatchFiles(matchPlan, safeMatchId, matchCfgPath);
       await this.options.records?.saveStatus(matchPlan.id, { phase: "server_prepare" });
       await this.options.records?.appendEvent(matchPlan.id, { type: "server_preparing", at: new Date().toISOString() });
       this.options.events?.publish({ type: "server_preparing", matchId: matchPlan.id, accountIds: humanAudience(matchPlan) });
@@ -194,7 +194,6 @@ export class MatchExecutor {
       missedResponsesBeforeExit: 3,
       startupObservationTimeoutMs: GAME_SERVER_SHUTDOWN_STARTUP_OBSERVATION_TIMEOUT_MS,
     });
-    if (result === "closed" || result === "not_observed") await this.settleMatchDemos(matchId);
     if (result === "closed") return "stopped";
     if (result === "not_observed") return "not_observed";
     return owned ? "timeout" : "not_owned";
@@ -213,7 +212,7 @@ export class MatchExecutor {
     await rm(path.dirname(competMatchStatsPath(this.options.config.serverRoot, safeMatchId)), { recursive: true, force: true });
   }
 
-  private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string, demo?: { relativeDemoDir: string; demoNameFormat: string }): Promise<void> {
+  private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {
     if (!this.options.assets) throw new Error("asset_source_required");
     const source = await this.options.assets();
     const transaction = await installRunCsgoAssets({ sourceRoot: source.root, serverRoot: this.options.config.serverRoot,
@@ -232,7 +231,7 @@ export class MatchExecutor {
       await writeFile(noRandomBotsCfgFile, `${buildNoRandomBotsCfg()}\n`, "utf8");
       const matchCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", matchCfgPath);
       await mkdir(path.dirname(matchCfgFile), { recursive: true });
-      await writeFile(matchCfgFile, `${buildMatchStartupCfg(matchPlan, safeMatchId, demo)}\n`, "utf8");
+      await writeFile(matchCfgFile, `${buildMatchStartupCfg(matchPlan, safeMatchId)}\n`, "utf8");
       const activeCfgFile = path.join(this.options.config.serverRoot, "csgo", "cfg", ACTIVE_MATCH_CFG_PATH);
       await mkdir(path.dirname(activeCfgFile), { recursive: true });
       await writeFile(activeCfgFile, `exec ${matchCfgPath}\n`, "utf8");
@@ -273,11 +272,14 @@ export class MatchExecutor {
     emptyServerWatchdog: EmptyServerWatchdog,
     gameServerPresenceMonitor?: GameServerPresenceMonitor,
   ): void {
-    const stopMonitors = () => {
-      void this.settleMatchDemos(matchId).catch(() => undefined);
+    const reportError = (error: unknown) => process.stderr.write("Server exit cleanup " + matchId + ": " + String(error) + "\n");
+    const stopMonitors = async () => {
       emptyServerWatchdog.stop();
       if (gameServerPresenceMonitor) {
-        void this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor).catch(() => undefined);
+        await this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor);
+      }
+      if (!this.options.onServerExit) {
+        await this.settleMatchDemos(matchId);
       }
     };
     const observeDemoOwner = async () => {
@@ -294,28 +296,27 @@ export class MatchExecutor {
       void stopped
         .catch(() => undefined)
         .then(async () => {
-          await this.settleMatchDemos(matchId).catch(() => undefined);
           await this.publishServerExit(matchId, exitInfo);
-        });
+        }).catch(reportError);
     };
 
     if (!this.options.onServerExit) {
       if (spec.exitIndicatesServerExit) {
         void launched.waitForExit()
           .then(stopMonitors)
-          .catch(stopMonitors);
+          .catch(reportError);
       }
       if (spec.serverExitMonitor && gameServerPresenceMonitor) {
         void waitForSourceServerExit({ ...spec.serverExitMonitor, onObservation: observeDemoOwner })
           .then(stopMonitors)
-          .catch(stopMonitors);
+          .catch(reportError);
       }
       if (
         gameServerPresenceMonitor
         && !spec.exitIndicatesServerExit
         && !spec.serverExitMonitor
       ) {
-        stopMonitors();
+        void stopMonitors().catch(reportError);
       }
       return;
     }
@@ -335,24 +336,19 @@ export class MatchExecutor {
             output: [formatServerExitMonitorOutput(result, spec.serverExitMonitor)],
           });
         })
-        .catch(stopMonitors);
+        .catch(reportError);
     }
   }
 
-  private publishServerExit(matchId: string, exitInfo: GameServerExitInfo): void {
-    setTimeout(() => {
-      void Promise.all([
-        readGet5MatchResult(this.options.config.serverRoot, matchId, new Date().toISOString()),
-        readCompetMatchStatsReport(this.options.config.serverRoot, matchId),
-      ])
-        .then(([get5Result, competReport]) => this.options.onServerExit?.(matchId, {
-          exitInfo,
-          get5Result,
-          competStats: competReport.players,
-          competHalfScores: extractCompetHalfScores(competReport),
-        }))
-        .catch(() => undefined);
-    }, 0);
+  private async publishServerExit(matchId: string, exitInfo: GameServerExitInfo): Promise<void> {
+    const [get5Result, competReport] = await Promise.all([
+      readGet5MatchResult(this.options.config.serverRoot, matchId, new Date().toISOString()),
+      readCompetMatchStatsReport(this.options.config.serverRoot, matchId),
+    ]);
+    await this.options.onServerExit?.(matchId, {
+      exitInfo, get5Result, competStats: competReport.players,
+      competHalfScores: extractCompetHalfScores(competReport),
+    });
   }
 
   private createEmptyServerWatchdog(matchId: string): EmptyServerWatchdog {
@@ -432,13 +428,10 @@ function formatServerExitMonitorOutput(
     : `Source server was not observed on UDP port ${address}`;
 }
 
-function buildMatchStartupCfg(matchPlan: MatchPlan, safeMatchId: string, demo = { relativeDemoDir: "demos/compet/" + safeMatchId + "/", demoNameFormat: "compet_" + safeMatchId + "_{TIME}_{MAPNAME}" }): string {
+function buildMatchStartupCfg(matchPlan: MatchPlan, safeMatchId: string): string {
   return [
     `sv_password ${quoteConsoleString(matchPlan.connectPassword)}`,
     `get5_stats_path_format ${quoteConsoleString(get5MatchStatsRelativePath(safeMatchId))}`,
-    `get5_demo_path ${quoteConsoleString(demo.relativeDemoDir)}`,
-    `get5_demo_name_format ${quoteConsoleString(demo.demoNameFormat)}`,
-    'get5_time_format "%Y%m%dT%H%M%S"',
     ...TEAMLOGO_CFG_LINES.slice(1),
     ...buildTeamNameCommands(matchPlan),
     ...buildTeamLogoCommands(matchPlan),

@@ -41,6 +41,8 @@ import { createOfflineCleanupScheduler } from "./offlineCleanup.js";
 export interface Runtime {
   app: Awaited<ReturnType<typeof createServer>>;
   close(reason: string): Promise<ServiceShutdownSummary>;
+  /** First startup recovery attempt; failures remain observable while background retries continue. */
+  recovery: Promise<void>;
   accounts: AccountService;
   sessions: SessionService;
   auth: AuthService;
@@ -132,7 +134,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       probeOwner: probeDemoOwner,
       onError: (id, error) => process.stderr.write("Demo lifecycle " + id + ": " + (error instanceof Error ? error.message : String(error)) + "\n"),
     });
-    await demos.recover();
+    const matchmakingStore = await MatchmakingStore.create(path.join(recordsDir, "matchmaking"));
     const executor = new MatchExecutor({
       demos,
       assets: () => loadRunCsgoSource({ appRoot: assetAppRoot, ...(layout ? { layout } : {}),
@@ -143,17 +145,16 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       }),
       records,
       config: config.gameServer,
-      onServerExit: (matchId, report) => {
-        void matchmaking?.completeMatchFromServerExit(matchId, report).catch((error) => {
-          process.stderr.write(`Failed to complete match after srcds exit: ${error instanceof Error ? error.message : String(error)}\n`);
-        });
+      onServerExit: async (matchId, report) => {
+        await matchmaking?.completeMatchFromServerExit(matchId, report);
       },
       onGameServerPresence: (matchId, steam64s) => matchmaking?.updateGameServerPresence(matchId, steam64s),
     });
     const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
     const matchmakingService = new MatchmakingService({
       playerPolicies: new PlayerMatchPolicyStore(database),
-      store: await MatchmakingStore.create(path.join(recordsDir, "matchmaking")),
+      hasPendingDemoJobs: async () => (await demos!.pendingMatchIds()).length > 0,
+      store: matchmakingStore,
       accounts,
       friends,
       botCatalog,
@@ -170,10 +171,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
         return updateLayout ? isServerUpdateBlocked(updateLayout, config) : true;
       },
     });
-    await matchmakingService.recoverCompletedMatches();
     matchmaking = matchmakingService;
-    await matchmakingService.recoverInterruptedMatches();
-    await matchmakingService.resumePendingTimeouts();
     const offlineCleanupScheduler = createOfflineCleanupScheduler({
       presence,
       matchmaking: {
@@ -220,9 +218,11 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
     app.addHook("onClose", async () => {
       closeOfflineCleanup();
       const errors: unknown[] = [];
+      const demoClose = demos?.close();
+      void demoClose?.catch(() => undefined);
       try { await matchmakingService.stopBackgroundTasks(); }
       catch (error) { errors.push(error); }
-      try { await demos?.close(); }
+      try { await demoClose; }
       catch (error) { errors.push(error); }
       try { await sessions.revokePlayerSessions(); }
       catch (error) { errors.push(error); }
@@ -237,6 +237,8 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       void reason;
       closePromise ??= (async () => {
         closeOfflineCleanup();
+        const demoClose = demos?.close();
+        void demoClose?.catch(() => undefined);
         try {
           return await matchmakingService.shutdownForServiceStop();
         } finally {
@@ -245,7 +247,9 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       })();
       return closePromise;
     };
-    return { app, close, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
+    const recovery = matchmakingService.recoverForStartup(() => demos!.recover());
+    void recovery.catch(error => process.stderr.write("Startup match recovery failed: " + String(error) + "\n"));
+    return { app, close, recovery, accounts, sessions, auth, friends, matchmaking: matchmakingService, events, records };
   } catch (error) {
     await demos?.close().catch(cleanup => process.stderr.write("Demo close failed: " + String(cleanup) + "\n"));
     if (database.isOpen) database.close();

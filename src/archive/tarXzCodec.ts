@@ -6,7 +6,7 @@ import { encodeSingleFileTar, inspectSingleFileTar, type ArchiveInspection, type
 import { archiveFile, sameArchiveIdentity, XzProcess } from "./xzCodec.js";
 
 export interface TarXzCodec {
-  encode(input: { sourcePath: string; memberName: string; metadata: ArchiveMetadata }, targetPath: string): Promise<void>;
+  encode(input: { sourcePath: string; memberName: string; metadata: ArchiveMetadata }, targetPath: string, onCreated?: () => Promise<void>): Promise<void>;
   inspect(archivePath: string): Promise<ArchiveInspection>;
   cancel(): Promise<void>;
 }
@@ -46,7 +46,7 @@ export class SevenZipTarXzCodec implements TarXzCodec {
   constructor(executable: string, options: { processTimeoutMs?: number } = {}) {
     this.process = new XzProcess(executable, options.processTimeoutMs ?? 120000);
   }
-  async encode(input: { sourcePath: string; memberName: string; metadata: ArchiveMetadata }, targetPath: string): Promise<void> {
+  async encode(input: { sourcePath: string; memberName: string; metadata: ArchiveMetadata }, targetPath: string, onCreated?: () => Promise<void>): Promise<void> {
     const before = await archiveFile(input.sourcePath);
     const current = await readArchiveMetadata(input.sourcePath);
     if (current.birthtimeNs !== input.metadata.birthtimeNs || current.mtimeNs !== input.metadata.mtimeNs) throw new Error("archive_source_changed");
@@ -56,7 +56,7 @@ export class SevenZipTarXzCodec implements TarXzCodec {
       await this.process.encode(encodeSingleFileTar({
         memberName: input.memberName, size: Number(before.size), metadata: input.metadata,
         content: handle.createReadStream({ autoClose: false }),
-      }), targetPath);
+      }), targetPath, onCreated);
       if (!sameArchiveIdentity(before, await handle.stat({ bigint: true })) || !sameArchiveIdentity(before, await archiveFile(input.sourcePath))) throw new Error("archive_source_changed");
     } finally { await handle.close(); }
   }

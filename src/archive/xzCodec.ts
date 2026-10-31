@@ -98,10 +98,35 @@ export class XzProcess {
       }
     } finally { this.cancellation.signal.removeEventListener("abort", abort); release(); }
   }
-  async encode(input: AsyncIterable<Uint8Array>, targetPath: string): Promise<void> {
+  async encode(input: AsyncIterable<Uint8Array>, targetPath: string, onCreated?: () => Promise<void>): Promise<void> {
     await assertPlainPath(targetPath);
     const handle = await fs.open(targetPath, "wx", 0o600);
+    let outputOpen = true;
     try {
+      if (onCreated) {
+        try { await onCreated(); }
+        catch (registrationError) {
+          try {
+            const created = await handle.stat({ bigint: true });
+            await handle.close(); outputOpen = false;
+            const current = await archiveFile(targetPath).catch(error => {
+              if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+              throw error;
+            });
+            if (current) {
+              if (!sameArchiveIdentity(created, current)) throw new Error("archive_output_changed");
+              await fs.unlink(targetPath);
+            }
+            if (process.platform === "linux") {
+              const directory = await fs.open(path.dirname(targetPath), constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+              try { await directory.sync(); } finally { await directory.close(); }
+            }
+          } catch (cleanupError) {
+            throw new AggregateError([registrationError, cleanupError], "archive_output_registration_cleanup_failed");
+          }
+          throw registrationError;
+        }
+      }
       await this.run(["a", "-txz", "-an", "-si", "-so", "-mx=5", "-md=8m", "-mmt=1", "-bb0", "-bd"], input, async output => {
         for await (const chunk of output) {
           let offset = 0;
@@ -113,7 +138,7 @@ export class XzProcess {
         }
       });
       await handle.sync();
-    } finally { await handle.close(); }
+    } finally { if (outputOpen) await handle.close(); }
   }
   async decode<T>(archivePath: string, consume: (output: AsyncIterable<Uint8Array>) => Promise<T>): Promise<T> {
     const before = await compressedFile(archivePath); await checkXz(archivePath);

@@ -14,13 +14,15 @@ export async function runServer(config: ServerConfig, layout?: ServerLayout): Pr
 async function runServerRuntime(config: ServerConfig, layout?: ServerLayout): Promise<void> {
   const runtime = await createRuntime(config, layout);
   let shutdown: ReturnType<typeof installGracefulShutdown> | undefined;
+  let shutdownRequested = false;
   let resolveClosed!: () => void;
   let rejectClosed!: (error: unknown) => void;
   const closed = new Promise<void>((resolve, reject) => { resolveClosed = resolve; rejectClosed = reject; });
+  void closed.catch(() => undefined);
   try {
-    const address = await runtime.app.listen({ host: config.host, port: config.port });
     shutdown = installGracefulShutdown({
       target: { close: async reason => {
+        shutdownRequested = true;
         try { const summary = await runtime.close(reason); resolveClosed(); return summary; }
         catch (error) { rejectClosed(error); throw error; }
       } },
@@ -28,9 +30,11 @@ async function runServerRuntime(config: ServerConfig, layout?: ServerLayout): Pr
       signals: ["SIGINT", "SIGTERM"],
       onError: error => console.error("Graceful shutdown failed", error),
     });
-    console.log(`Compet server listening at ${address}`);
+    const address = await runtime.app.listen({ host: config.host, port: config.port });
+    if (!shutdownRequested) console.log(`Compet server listening at ${address}`);
   } catch (error) {
     shutdown?.dispose();
+    if (shutdownRequested) { await closed; return; }
     await runtime.close("listen_failed").catch(() => undefined);
     throw error;
   }
