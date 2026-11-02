@@ -36,8 +36,8 @@ export interface AssignDevTeamsInput {
 
 export function assignDevTeams(input: AssignDevTeamsInput): AssignTeamsResult {
   const random = input.random ?? Math.random;
-  const teamARoster = requireDevRoster(input.botRosters, "vita");
-  const teamBRoster = requireDevRoster(input.botRosters, "fal");
+  const teamARoster = requireDevRoster(input.botRosters, "c_vita");
+  const teamBRoster = requireDevRoster(input.botRosters, "c_fal");
 
   const allyHumans = input.humans;
   const proSlots = 5 - allyHumans.length;
@@ -74,7 +74,7 @@ export function assignDevTeams(input: AssignDevTeamsInput): AssignTeamsResult {
   return { teamA: allyTeam, teamB: enemyTeam, selectedBots: [...proTeammates, ...enemyBots] };
 }
 
-function requireDevRoster(botRosters: readonly BotRosterTeam[], logo: "vita" | "fal"): PickedTeamRoster {
+function requireDevRoster(botRosters: readonly BotRosterTeam[], logo: "c_vita" | "c_fal"): PickedTeamRoster {
   const roster = botRosters.find((candidate) => candidate.logo === logo);
   const name = roster?.name.trim();
   const logoImage = roster?.logoImage?.trim();
