@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { chmod, copyFile, lstat, mkdir, open, readFile, readdir, rename, rm, rmdir } from "node:fs/promises";
 import path from "node:path";
 import { assertManagedRelativePath, assertPlainPath, buildServerUpdatePlan, fingerprintFile, sameFingerprint,
-  validatePackageInventory, type PackageFile, type PackageInventory, type FileFingerprint } from "../desktop/main/serverManagedFiles.js";
+  validatePackageInventory, type PackageFile, type PackageInventory, type FileFingerprint } from "../shared/managedFiles.js";
 import { compareSemver } from "../shared/version.js";
 
 const stateName = ".compet-run-csgo-state.json";
@@ -13,7 +13,7 @@ const active = new Set<string>();
 const templatePaths = new Set(["csgo/cfg/1.cfg", "csgo/cfg/sourcemod/sourcemod.cfg"]);
 const fingerprintText = (value: string): FileFingerprint => ({ size: Buffer.byteLength(value), sha256: createHash("sha256").update(value).digest("hex").toUpperCase() });
 interface AssetState { schemaVersion: 1; root: string; version: string; files: PackageFile[]; transactionId: string }
-interface AssetEntry { path: string; before: FileFingerprint | null; beforeMode?: number; backup: string; template?: FileFingerprint }
+interface AssetEntry { path: string; before: FileFingerprint | null; beforeMode?: number; copiedMode?: number; backup: string; template?: FileFingerprint }
 interface AssetJournal { schemaVersion: 2; intentCount: number; root: string; id: string; previous: AssetState | null; owned: PackageInventory | null; target: PackageInventory; entries: AssetEntry[] }
 export interface RunCsgoAssetTransaction {
   writeTemplate(relative: string, current: string, next: string): Promise<boolean>;
@@ -96,6 +96,8 @@ async function readJournal(root: string, directory: string): Promise<AssetJourna
   const seen = new Set<string>();
   for (const [index, entry] of journal.entries.entries()) {
     if (entry.beforeMode !== undefined && (!entry.before || !Number.isInteger(entry.beforeMode) || entry.beforeMode < 0 || entry.beforeMode > 0o777)) fail("asset_journal_invalid");
+    if (entry.copiedMode !== undefined && (!target.files.some(file => file.path === entry.path) ||
+        !Number.isInteger(entry.copiedMode) || entry.copiedMode < 0 || entry.copiedMode > 0o777)) fail("asset_journal_invalid");
     assertManagedRelativePath(entry.path);
     if (entry.path.toLowerCase().startsWith(".compet-") || seen.has(entry.path.toLowerCase()) || entry.backup !== index + ".bin") fail("asset_journal_invalid");
     seen.add(entry.path.toLowerCase());
@@ -155,7 +157,7 @@ async function restore(root: string): Promise<void> {
     if (sameFingerprint(actual, entry.before) && (entry.beforeMode === undefined || mode === entry.beforeMode)) continue;
     const intended = journal.target.files.find(file => file.path === entry.path) ?? null;
     if ((!sameFingerprint(actual, intended) && !(entry.template && sameFingerprint(actual, entry.template))) ||
-        (mode !== undefined && intended?.mode !== undefined && mode !== intended.mode && mode !== entry.beforeMode)) {
+        (mode !== undefined && intended?.mode !== undefined && mode !== intended.mode && mode !== entry.beforeMode && mode !== entry.copiedMode)) {
       conflicts.push(entry.path);
       continue;
     }
@@ -174,13 +176,13 @@ async function restore(root: string): Promise<void> {
   await cleanTransaction(root, journal);
 }
 export async function recoverRunCsgoAssets(serverRoot: string): Promise<void> {
-  const root = path.resolve(serverRoot), key = process.platform === "win32" ? root.toLowerCase() : root;
+  const root = path.resolve(serverRoot), key = root;
   if (active.has(key)) fail("asset_transaction_busy");
   active.add(key);
   try { await restore(root); } finally { active.delete(key); }
 }
 export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunCsgoAssetTransaction> {
-  const root = path.resolve(input.serverRoot), key = process.platform === "win32" ? root.toLowerCase() : root;
+  const root = path.resolve(input.serverRoot), key = root;
   if (active.has(key)) fail("asset_transaction_busy");
   active.add(key);
   let journalCreated = false;
@@ -218,7 +220,9 @@ export async function beginRunCsgoAssets(input: AssetInstallInput): Promise<RunC
     const directory = path.join(root, stagingName);
     for (const [index, relative] of allPaths.entries()) {
       const before = await fingerprintFile(path.join(root, relative));
+      const replacement = target.files.find(file => file.path === relative);
       journal.entries.push({ path: relative, before, backup: index + ".bin",
+        ...(replacement && process.platform === "linux" ? { copiedMode: (await lstat(path.join(input.sourceRoot, relative))).mode & 0o777 } : {}),
         ...(before && process.platform === "linux" ? { beforeMode: (await lstat(path.join(root, relative))).mode & 0o777 } : {}) });
     }
     await mkdir(directory);

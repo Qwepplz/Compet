@@ -3,7 +3,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 import { parseArgs } from "node:util";
 import { assertServerConfigPaths } from "../config/config.js";
-import { resolveServerLayout } from "../shared/serverPackageLayout.js";
+import { assertNativeServerPlatform, resolveServerLayout } from "../shared/serverPackageLayout.js";
 import { requestJson } from "../shared/httpJsonClient.js";
 import { isSemver } from "../shared/version.js";
 import { loadHeadlessConfig } from "./config.js";
@@ -14,7 +14,6 @@ import { runServer } from "../server/runServer.js";
 import { matchHistoryMatchIdSchema } from "../records/matchHistory.js";
 import { executeServerUpdate, readServerUpdateStatus } from "../update/serverUpdate.js";
 import { SystemdLifecycle } from "../update/systemdLifecycle.js";
-import { WindowsManagerLifecycle } from "../update/windowsLifecycle.js";
 
 export interface CliIo {
   stdin: Readable;
@@ -32,10 +31,10 @@ const help = "compet <command> [--config <absolute-path>] [--json] [--username <
 function defaultServices(): CliServices {
   const entry = process.argv[1];
   if (!entry || !path.isAbsolute(entry) || path.basename(entry) !== "cli.cjs") throw new CliError("cli_package_required");
-  const platform = process.platform + "-" + process.arch;
-  if (platform !== "linux-x64" && platform !== "win32-x64") throw new CliError("server_platform_unsupported");
+  assertNativeServerPlatform(process.platform, process.arch);
+  const platform = "linux-x64";
   const appRoot = path.dirname(path.dirname(entry));
-  const layout = resolveServerLayout({ platform, installRoot: platform === "win32-x64" ? path.resolve(appRoot, "../../../..") : appRoot });
+  const layout = resolveServerLayout({ platform, installRoot: appRoot });
   return {
     layout, env: process.env,
     loadConfig: (configPath, env) => loadHeadlessConfig({ configPath, env }),
@@ -48,8 +47,7 @@ function defaultServices(): CliServices {
       return identity.version;
     },
     createAdminClient: url => new CliAdminClient(url),
-    executeUpdate: input => executeServerUpdate({ ...input, lifecycle: input.layout.platform === "linux-x64"
-      ? new SystemdLifecycle(input) : new WindowsManagerLifecycle(input) }),
+    executeUpdate: input => executeServerUpdate({ ...input, lifecycle: new SystemdLifecycle(input) }),
     readUpdateStatus: readServerUpdateStatus,
   };
 }

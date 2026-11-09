@@ -1,4 +1,4 @@
-import type { AccountView } from "../../manager/shared/types.js";
+import type { AccountView } from "../../accounts/accountTypes.js";
 import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult, UpdateCheckResult, UpdateInstallResult } from "../../desktop/updateTypes.js";
 import { DEFAULT_LANGUAGE, isSupportedLanguage } from "../../language/translate.js";
 import type { SupportedLanguage } from "../../language/types.js";

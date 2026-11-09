@@ -20,7 +20,6 @@ import { readGet5DemoEvidence } from "../game/get5MatchResult.js";
 import { SevenZipTarXzCodec } from "../archive/tarXzCodec.js";
 import { loadRunCsgoSource } from "../game/runCsgoAssets.js";
 import { publishMysqlPreinitScripts } from "../game/mysqlPreinitScripts.js";
-import { NodeGameServerLauncher } from "../game/gameServerLauncher.js";
 import { LinuxGameServerLauncher } from "../game/linuxGameServerLauncher.js";
 import { MysqlDatabaseBackup } from "../game/mysqlDatabaseBackup.js";
 import { prepareSourceModForServerStartup } from "../game/sourceModStartup.js";
@@ -124,8 +123,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
     };
     let matchmaking: MatchmakingService | undefined;
     const demoServerRoot = path.resolve(config.gameServer.serverRoot);
-    const compressor = layout ? path.join(layout.appRoot, "runtime/7z", process.platform === "win32" ? "7zr.exe" : "7zr")
-      : path.join(assetAppRoot, packaged ? path.join("runtime/7z", process.platform === "win32" ? "7zr.exe" : "7zr") : process.platform === "win32" ? "packaging/server/runtime/7zr.exe" : ".local-tools/7zr");
+    const compressor = path.join(assetAppRoot, packaged ? "runtime/7z/7zr" : ".local-tools/7zr");
     demos = new MatchDemoLifecycle({
       serverRoot: demoServerRoot, jobDirectory: path.resolve(recordsDir, "demo-jobs"),
       codec: new SevenZipTarXzCodec(compressor, { processTimeoutMs: 900000 }),
@@ -139,10 +137,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       demos,
       assets: () => loadRunCsgoSource({ appRoot: assetAppRoot, ...(layout ? { layout } : {}),
         ...(packaged ? {} : { developmentRoot: path.join(assetAppRoot, "src/run_csgo") }) }),
-      launcher: process.platform === "linux" ? new LinuxGameServerLauncher({ onStdout: gameStdoutHandler }) : new NodeGameServerLauncher({
-        onStdout: gameStdoutHandler,
-        onStderr: (chunk) => process.stderr.write(chunk),
-      }),
+      launcher: new LinuxGameServerLauncher({ onStdout: gameStdoutHandler }),
       records,
       config: config.gameServer,
       onServerExit: async (matchId, report) => {
@@ -166,8 +161,8 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       steamPersonas,
       presence,
       isServerUpdateBlocked: async () => {
-        const updateLayout = layout ?? (packaged && process.platform === "win32"
-          ? resolveServerLayout({ platform: "win32-x64", installRoot: path.resolve(assetAppRoot, "../../../..") }) : undefined);
+        const updateLayout = layout ?? (packaged
+          ? resolveServerLayout({ platform: "linux-x64", installRoot: assetAppRoot }) : undefined);
         return updateLayout ? isServerUpdateBlocked(updateLayout, config) : true;
       },
     });

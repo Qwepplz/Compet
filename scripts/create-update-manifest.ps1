@@ -14,11 +14,7 @@ if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]
 $version = $Version
 
 $packageRoot = Resolve-Path $PackageDir
-if ($AppId -eq "compet-server-manager") {
-  & node --import tsx (Join-Path $PSScriptRoot "create-server-update-feed.ts") $packageRoot.Path $OutputDir "win32-x64" $version $LatestUrlBase
-  if ($LASTEXITCODE -ne 0) { throw "Server package feed generation failed." }
-  return
-}
+if ($AppId -ne "compet-player-client") { throw "Unsupported application identity: $AppId" }
 $outputRoot = New-Item -ItemType Directory -Path $OutputDir -Force
 Remove-Item -LiteralPath (Join-Path $outputRoot "files") -Recurse -Force -ErrorAction SilentlyContinue
 

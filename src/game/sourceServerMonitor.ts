@@ -1,6 +1,4 @@
-import { execFile } from "node:child_process";
 import dgram from "node:dgram";
-import { promisify } from "node:util";
 import { delay } from "../shared/async.js";
 import { inspectLinuxGameRoot, inspectLinuxUdpPort, probeLinuxGameProcess, type GameProcessIdentity } from "./linuxProcess.js";
 
@@ -22,7 +20,6 @@ const A2S_INFO_QUERY = Buffer.concat([
   Buffer.from([0xff, 0xff, 0xff, 0xff, 0x54]),
   Buffer.from("Source Engine Query\0", "ascii"),
 ]);
-const execFileAsync = promisify(execFile);
 
 export async function waitForSourceServerExit(
   spec: SourceServerExitMonitorSpec,
@@ -50,45 +47,13 @@ export async function waitForSourceServerExit(
 }
 
 export async function isSourceServerObservable(spec: SourceServerExitMonitorSpec): Promise<boolean> {
-  if (process.platform === "linux") {
-    const [port, processState, rootState] = await Promise.all([
-      inspectLinuxUdpPort(spec.port),
-      spec.identity ? probeLinuxGameProcess(spec.identity) :
-        spec.serverRoot ? inspectLinuxGameRoot(spec.serverRoot) : Promise.resolve("unknown"),
-      spec.serverRoot ? inspectLinuxGameRoot(spec.serverRoot) : Promise.resolve("gone"),
-    ]);
-    return port !== "free" || processState !== "gone" || rootState !== "gone";
-  }
-  const [queryAlive, ownerPid] = await Promise.all([
-    querySourceServer(spec.host, spec.port, spec.queryTimeoutMs),
-    findUdpPortOwnerPid(spec.port),
+  const [port, processState, rootState] = await Promise.all([
+    inspectLinuxUdpPort(spec.port),
+    spec.identity ? probeLinuxGameProcess(spec.identity) :
+      spec.serverRoot ? inspectLinuxGameRoot(spec.serverRoot) : Promise.resolve("unknown"),
+    spec.serverRoot ? inspectLinuxGameRoot(spec.serverRoot) : Promise.resolve("gone"),
   ]);
-  return queryAlive || ownerPid !== undefined;
-}
-
-export async function findUdpPortOwnerPid(port: number): Promise<number | undefined> {
-  if (process.platform !== "win32") return undefined;
-
-  try {
-    const { stdout } = await execFileAsync("netstat.exe", ["-ano", "-p", "udp"], { windowsHide: true });
-    return parseNetstatUdpOwnerPid(stdout, port);
-  } catch {
-    return undefined;
-  }
-}
-
-export function parseNetstatUdpOwnerPid(output: string, port: number): number | undefined {
-  const portSuffix = `:${port}`;
-  for (const line of output.split(/\r?\n/)) {
-    const columns = line.trim().split(/\s+/);
-    if (columns[0] !== "UDP" || columns.length < 3) continue;
-    const localAddress = columns[1] ?? "";
-    const pidText = columns[columns.length - 1] ?? "";
-    if (!localAddress.endsWith(portSuffix)) continue;
-    const pid = Number(pidText);
-    if (Number.isInteger(pid) && pid > 0) return pid;
-  }
-  return undefined;
+  return port !== "free" || processState !== "gone" || rootState !== "gone";
 }
 
 export async function querySourceServer(host: string, port: number, timeoutMs: number): Promise<boolean> {

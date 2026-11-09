@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { access, mkdir, open, readFile, rename, rm, writeFile } from "node:fs/promises";
-import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 import path from "node:path";
 
 export async function pathExists(filePath: string): Promise<boolean> {

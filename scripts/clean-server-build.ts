@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { repositoryRoot } from "./build-sourcemod.js";
-import { assertPlainPath } from "../src/desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../src/shared/managedFiles.js";
 export async function cleanServerBuild(): Promise<void> {
   const target = path.join(repositoryRoot, "dist");
   if (path.dirname(target) !== repositoryRoot || path.basename(target) !== "dist") throw new Error("unsafe_build_directory");

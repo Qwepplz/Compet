@@ -12,7 +12,3 @@ export function isInstalledClientLayout(appPath: string, executablePath: string)
   return path.relative(path.join(runtime, "resources", "app"), appPath) === ""
     && path.relative(path.join(runtime, "electron.exe"), executablePath) === "";
 }
-
-export function isInstalledServerLayout(appPath: string, executablePath: string): boolean {
-  return isInstalledClientLayout(appPath, executablePath);
-}

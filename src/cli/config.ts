@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { loadConfig, serverConfigSchema, type ServerConfig } from "../config/config.js";
-import { assertServerRoots, type ServerPlatform } from "../shared/serverPackageLayout.js";
+import { assertServerRoots } from "../shared/serverPackageLayout.js";
 
 function invalid(code: string): never {
   throw Object.assign(new Error(code), { code });
@@ -39,8 +39,7 @@ export async function loadHeadlessConfig(input: {
       || values.COMPET_PUBLIC_CONNECT_HOST?.trim() === HEADLESS_TEMPLATE_CONNECT_HOST) {
       invalid("config_invalid");
     }
-    if (process.arch !== "x64" || !["win32", "linux"].includes(process.platform)) invalid("config_invalid");
-    const platform = (process.platform + "-x64") as ServerPlatform;
+    const platform = "linux-x64";
     assertServerRoots({ platform, dataDir: values.COMPET_DATA_DIR!, serverRoot: values.COMPET_CSGO_SERVER_ROOT! });
     return loadConfig(values);
   } catch { invalid("config_invalid"); }

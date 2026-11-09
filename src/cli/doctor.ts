@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import path from "node:path";
 import { promisify } from "node:util";
 import { assertServerConfigPaths, type ServerConfig } from "../config/config.js";
-import type { ServerLayout } from "../shared/serverPackageLayout.js";
+import { assertNativeServerPlatform, type ServerLayout } from "../shared/serverPackageLayout.js";
 import { resolveMysqlTools } from "../shared/mysqlCli.js";
 import { parseRankmeDatabaseConfig } from "../rankme/rankmeScoreStore.js";
 
@@ -18,6 +18,8 @@ const execute = promisify(execFile);
 export async function inspectServerEnvironment(input: {
   config: ServerConfig; layout: ServerLayout;
 }): Promise<DoctorReport> {
+  assertNativeServerPlatform(process.platform, process.arch);
+  if (input.layout.platform !== "linux-x64") throw Object.assign(new Error("server_platform_unsupported"), { code: "server_platform_unsupported" });
   const checks: DoctorReport["checks"] = [];
   const add = (code: string, status: "passed" | "failed" | "unknown", detail?: string) =>
     checks.push({ code, status, ...(detail ? { detail } : {}) });
@@ -37,8 +39,7 @@ export async function inspectServerEnvironment(input: {
       return false;
     }
   }
-  const linux = input.layout.platform === "linux-x64";
-  const runtimeAvailable = await inspect(input.layout.nodePath, "file", "runtime", linux);
+  const runtimeAvailable = await inspect(input.layout.nodePath, "file", "runtime", true);
   if (runtimeAvailable) {
     if (process.platform + "-" + process.arch !== input.layout.platform) add("runtime_platform_mismatch", "failed");
     else {
@@ -51,7 +52,7 @@ export async function inspectServerEnvironment(input: {
         "try{if(db.isTransaction!==false||typeof backup!=='function')throw Error();",
         "db.exec('BEGIN');if(!db.isTransaction)throw Error();db.exec('ROLLBACK');}finally{db.close();}",
         "const argon=requireApp('argon2');if(!await argon.verify(await argon.hash('probe'),'probe'))throw Error();",
-        ...(linux ? ["requireApp('node-pty');"] : []),
+        "requireApp('node-pty');",
         "console.log(JSON.stringify({node:process.versions.node,sqlite:process.versions.sqlite,abi:process.versions.modules}));",
         "})().catch(()=>{process.exitCode=1});",
       ].join("");
@@ -66,19 +67,17 @@ export async function inspectServerEnvironment(input: {
     }
   }
   await inspect(input.config.gameServer.serverRoot, "directory", "game_root");
-  for (const relative of [linux ? "srcds_run" : "srcds.exe",
+  for (const relative of ["srcds_run",
     "csgo/addons/sourcemod/configs/core.cfg", "csgo/addons/sourcemod/configs/databases.cfg"]) {
     await inspect(path.join(input.config.gameServer.serverRoot, relative), "file",
-      relative === "srcds_run" || relative === "srcds.exe" ? "game_entry" : relative.endsWith("core.cfg") ? "sourcemod_config" : "mysql_config",
+      relative === "srcds_run" ? "game_entry" : relative.endsWith("core.cfg") ? "sourcemod_config" : "mysql_config",
       relative === "srcds_run");
   }
-  if (linux) {
-    await inspect(path.join(input.config.gameServer.serverRoot, "srcds_linux"), "file", "game_binary", true);
-    try {
-      await execute("script", ["--version"], { windowsHide: true, timeout: 5_000, maxBuffer: 4096 });
-      add("preinit_terminal_available", "passed");
-    } catch { add("preinit_terminal_unavailable", "failed"); }
-  }
+  await inspect(path.join(input.config.gameServer.serverRoot, "srcds_linux"), "file", "game_binary", true);
+  try {
+    await execute("script", ["--version"], { windowsHide: true, timeout: 5_000, maxBuffer: 4096 });
+    add("preinit_terminal_available", "passed");
+  } catch { add("preinit_terminal_unavailable", "failed"); }
   try {
     const tools = await resolveMysqlTools({ platform: input.layout.platform });
     add("mysql_tools_available", "passed");

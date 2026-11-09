@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
-import { assertPlainPath, fingerprintFile, sameFingerprint } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath, fingerprintFile, sameFingerprint } from "../shared/managedFiles.js";
 import { resolveServerLayout } from "../shared/serverPackageLayout.js";
 import { createServerWorkerLifecycle, type ServerLifecycle } from "./serverLifecycle.js";
 import { verifyServerFile } from "./serverRelease.js";
@@ -92,7 +92,7 @@ async function awaitOwnership(plan: ServerPlanV5, directory: string): Promise<Up
     try { owner = await readUpdateOwner(directory); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
     if (owner?.transactionId !== undefined && owner.transactionId !== plan.transactionId) updateFailure("update_busy");
-    if (owner?.process.pid === own.pid && owner.process.startTime === own.startTime && owner.process.executable.toLowerCase() === own.executable.toLowerCase()) {
+    if (owner?.process.pid === own.pid && owner.process.startTime === own.startTime && owner.process.executable === own.executable) {
       if (owner.parent) {
         const parent = await probeUpdateProcess(owner.parent);
         if (parent === "unknown") updateFailure("update_owner_unknown");

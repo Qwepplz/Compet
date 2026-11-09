@@ -1,6 +1,6 @@
 import path from "node:path";
 
-export type ServerPlatform = "win32-x64" | "linux-x64";
+export type ServerPlatform = "linux-x64";
 
 export interface ServerLayout {
   platform: ServerPlatform;
@@ -17,56 +17,48 @@ function invalid(code: string): never {
   throw Object.assign(new Error(code), { code });
 }
 
-function platformPath(platform: ServerPlatform): typeof path.posix {
-  if (platform === "win32-x64") return path.win32;
-  if (platform === "linux-x64") return path.posix;
-  return invalid("server_platform_unsupported");
+export function assertNativeServerPlatform(platform: string, arch: string): void {
+  if (platform !== "linux" || arch !== "x64") invalid("server_platform_unsupported");
 }
 
-function absoluteRoot(platform: ServerPlatform, value: string): string {
-  const api = platformPath(platform);
+function assertServerPlatform(platform: string): void {
+  if (platform !== "linux-x64") invalid("server_platform_unsupported");
+}
+
+function absoluteRoot(value: string): string {
   if (typeof value !== "string" || !value.trim() || value !== value.trim() || /[\x00-\x1f]/.test(value) ||
-      !api.isAbsolute(value) || (platform === "linux-x64" && value.includes("\\")) ||
-      (platform === "win32-x64" && !/^[A-Za-z]:[\\/]/.test(value))) invalid("server_path_invalid");
-  const root = api.normalize(value);
-  if (root === api.parse(root).root) invalid("server_path_invalid");
-  return root.replace(/[\\/]$/, "");
+      !path.posix.isAbsolute(value) || value.includes("\\")) invalid("server_path_invalid");
+  const root = path.posix.normalize(value);
+  if (root === "/") invalid("server_path_invalid");
+  return root.replace(/\/$/, "");
 }
 
 export function resolveServerLayout(input: { platform: ServerPlatform; installRoot: string }): ServerLayout {
-  const api = platformPath(input.platform);
-  const installRoot = absoluteRoot(input.platform, input.installRoot);
-  const appRoot = input.platform === "win32-x64"
-    ? api.join(installRoot, "runtime/electron/resources/app") : installRoot;
+  assertServerPlatform(input.platform);
+  const installRoot = absoluteRoot(input.installRoot);
   return {
-    platform: input.platform, installRoot, appRoot,
-    nodePath: api.join(installRoot, input.platform === "win32-x64" ? "runtime/node/node.exe" : "runtime/node/bin/node"),
-    cliEntry: api.join(appRoot, "dist/cli.cjs"),
-    serviceEntry: api.join(appRoot, "dist/main.cjs"),
-    workerEntry: api.join(installRoot, "runtime/updater/worker.cjs"),
-    runCsgoPrefix: input.platform === "win32-x64" ? "runtime/electron/resources/app/run_csgo/" : "run_csgo/",
+    platform: input.platform, installRoot, appRoot: installRoot,
+    nodePath: path.posix.join(installRoot, "runtime/node/bin/node"),
+    cliEntry: path.posix.join(installRoot, "dist/cli.cjs"),
+    serviceEntry: path.posix.join(installRoot, "dist/main.cjs"),
+    workerEntry: path.posix.join(installRoot, "runtime/updater/worker.cjs"),
+    runCsgoPrefix: "run_csgo/",
   };
 }
 
 export function assertServerRoots(input: {
   platform: ServerPlatform; installRoot?: string; dataDir: string; serverRoot: string;
 }): void {
-  const api = platformPath(input.platform);
-  const roots = [input.installRoot, input.dataDir, ...(input.platform === "win32-x64" && input.serverRoot === "" ? [] : [input.serverRoot])].filter((value): value is string => value !== undefined).map(value => {
-    const normalized = absoluteRoot(input.platform, value);
-    return input.platform === "win32-x64" ? normalized.toLowerCase() : normalized;
-  });
+  assertServerPlatform(input.platform);
+  const roots = [input.installRoot, input.dataDir, input.serverRoot]
+    .filter((value): value is string => value !== undefined).map(absoluteRoot);
+  const within = (value: string) => value === "" ||
+    (!path.posix.isAbsolute(value) && value !== ".." && !value.startsWith("../"));
   for (let i = 0; i < roots.length; i++) {
     for (let j = i + 1; j < roots.length; j++) {
-      if (input.platform === "win32-x64" && input.installRoot && i === 0 && j === 1) {
-        const dataRoot = api.join(resolveServerLayout({ platform: input.platform, installRoot: input.installRoot }).appRoot, "server-data").toLowerCase();
-        if (roots[j] === dataRoot || roots[j]!.startsWith(dataRoot + api.sep)) continue;
+      if (within(path.posix.relative(roots[i]!, roots[j]!)) || within(path.posix.relative(roots[j]!, roots[i]!))) {
+        invalid("server_roots_overlap");
       }
-      const relative = api.relative(roots[i]!, roots[j]!);
-      const reverse = api.relative(roots[j]!, roots[i]!);
-      const within = (value: string) => value === "" ||
-        (!api.isAbsolute(value) && value !== ".." && !value.startsWith(".." + api.sep));
-      if (within(relative) || within(reverse)) invalid("server_roots_overlap");
     }
   }
 }

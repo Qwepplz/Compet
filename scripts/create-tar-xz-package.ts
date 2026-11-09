@@ -3,7 +3,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { XzProcess } from "../src/archive/xzCodec.js";
-import { assertPlainPath } from "../src/desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../src/shared/managedFiles.js";
 
 const execute = promisify(execFile);
 const timeoutMs = 600000;

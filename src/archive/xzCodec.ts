@@ -5,7 +5,7 @@ import { createHash } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 import type { ArchiveFingerprint } from "./singleFileTar.js";
 
 export type LogFingerprint = ArchiveFingerprint;

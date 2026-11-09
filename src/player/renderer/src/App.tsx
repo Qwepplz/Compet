@@ -3,7 +3,7 @@ import { reduceStartupGate, type StartupGateContext } from "./startupGate.js";
 import { useEffect, useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { Button, Card, Form, Input, Modal, Select, Spin, Switch, Tabs, message } from "antd";
 import { ArrowLeftOutlined } from "@ant-design/icons";
-import type { AccountView } from "../../../manager/shared/types.js";
+import type { AccountView } from "../../../accounts/accountTypes.js";
 import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult, UpdateCheckResult, UpdateInstallResult } from "../../../desktop/updateTypes.js";
 import type { RankmeDisplay } from "../../../rankme/rankmeStandings.js";
 import type {

@@ -1,5 +1,5 @@
 export interface LifecycleSnapshot {
-  kind: "systemd" | "windows-manager";
+  kind: "systemd";
   wasRunning: boolean;
   wasEnabled?: boolean;
   serviceName?: string;
@@ -20,10 +20,6 @@ export async function createServerWorkerLifecycle(input: {
   configPath: string;
   snapshot: LifecycleSnapshot;
 }): Promise<ServerLifecycle> {
-  if (input.layout.platform === "linux-x64") {
-    const { SystemdLifecycle } = await import("./systemdLifecycle.js");
-    return new SystemdLifecycle({ ...input, serviceName: input.snapshot.serviceName });
-  }
-  const { WindowsManagerLifecycle } = await import("./windowsLifecycle.js");
-  return new WindowsManagerLifecycle(input);
+  const { SystemdLifecycle } = await import("./systemdLifecycle.js");
+  return new SystemdLifecycle({ ...input, serviceName: input.snapshot.serviceName });
 }

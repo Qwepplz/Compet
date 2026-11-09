@@ -7,7 +7,7 @@ import type { ServerConfig } from "../config/config.js";
 import { assertServerConfigPaths } from "../config/config.js";
 import type { ServerLayout } from "../shared/serverPackageLayout.js";
 import { compareSemver, isSemver } from "../shared/version.js";
-import { assertPlainPath, fingerprintFile, sameFingerprint } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath, fingerprintFile, sameFingerprint } from "../shared/managedFiles.js";
 import type { ServerLifecycle } from "./serverLifecycle.js";
 import { loadServerRelease, validateServerInventory, verifyServerFile, validateServerFile, assertUniqueServerFiles } from "./serverRelease.js";
 import { captureUpdateProcess, probeUpdateProcess, writeUpdateOwner, readUpdateOwner, readServerPlan,
@@ -72,7 +72,7 @@ async function readPreparingFiles(directory: string, owner: UpdateOwner, expecte
     ["protocol", "transactionId", "root", "platform", "version", "files"]);
   const platform = process.platform + "-" + process.arch;
   if (value.protocol !== 5 || value.transactionId !== owner.transactionId || value.root !== owner.root ||
-      value.platform !== platform || !["linux-x64", "win32-x64"].includes(platform) ||
+      value.platform !== platform || platform !== "linux-x64" ||
       typeof value.version !== "string" || !isSemver(value.version) || !Array.isArray(value.files) || !value.files.length) updateFailure("update_release_invalid");
   const files = value.files.map(file => validateServerFile(file, platform as ServerLayout["platform"]));
   assertUniqueServerFiles(files);
@@ -325,13 +325,7 @@ export async function executeServerUpdate(input: {
       pending.splice(pending.indexOf(retired), 1);
     }
     const receipt = await readServerUpdateReceipt({ root: input.layout.installRoot, dataDir: input.config.dataDir });
-    if (!receipt?.serviceRestorePending && input.layout.platform === "win32-x64" && pending.length === 1 && (await exists(path.join(pending[0]!, "plan.txt")) ||
-        path.basename(pending[0]!) === ".compet-maintenance-retired" && (await fs.readdir(pending[0]!)).length === 0)) {
-      const { handoffLegacyServerUpdate } = await import("./legacyServerWorker.js");
-      const legacy = await handoffLegacyServerUpdate({ ...input, directory: pending[0]! });
-      if (legacy.status !== "completed" || input.action === "recover") return legacy;
-      pending.splice(0);
-    }
+    if (pending.length && await exists(path.join(pending[0]!, "plan.txt"))) updateFailure("update_transaction_unsupported");
     const reclaimed = await reclaimStaleRootClaims(pending, receipt, input.config);
     if (reclaimed && pending.length === 0 && !receipt?.serviceRestorePending) return { status: "completed", transactionId: reclaimed };
     if (receipt?.serviceRestorePending || input.action === "recover" && receipt && pending.length === 0) {

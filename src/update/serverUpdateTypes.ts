@@ -1,5 +1,5 @@
 import type { ServerPlatform } from "../shared/serverPackageLayout.js";
-import type { FileFingerprint } from "../desktop/main/serverManagedFiles.js";
+import type { FileFingerprint } from "../shared/managedFiles.js";
 import type { LifecycleSnapshot } from "./serverLifecycle.js";
 
 export type ServerUpdateAction = "check" | "apply" | "repair" | "recover";
@@ -34,7 +34,7 @@ export interface ServerPlanV5 {
   root: string;
   exe: string;
   targetVersion: string;
-  configurationFingerprint: FileFingerprint & { path: string; effectiveSha256: string; kind?: "windows-manager"; requiredClientVersion?: string };
+  configurationFingerprint: FileFingerprint & { path: string; effectiveSha256: string };
   protectedPaths: string[];
   expectedFiles: ServerPackageFile[];
   baselineFiles: ServerBaselineFile[];

@@ -1,4 +1,4 @@
-import type { AccountView } from "../../../manager/shared/types.js";
+import type { AccountView } from "../../../accounts/accountTypes.js";
 import type { PlayerMatchParticipantDto } from "../../shared/types.js";
 
 export function playerAccountLabel(

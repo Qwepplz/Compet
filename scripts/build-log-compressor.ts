@@ -5,7 +5,7 @@ import os from "node:os";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { assertPlainPath } from "../src/desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../src/shared/managedFiles.js";
 import { readArchiveMetadata, SevenZipTarXzCodec } from "../src/archive/tarXzCodec.js";
 
 const execute = promisify(execFile);

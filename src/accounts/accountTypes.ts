@@ -16,3 +16,21 @@ export interface AccountRecord {
   updatedAt: string;
   lastLoginAt: string | null;
 }
+
+export interface AccountView {
+  id: string;
+  username: string;
+  displayName: string;
+  steam64?: string;
+  steamPersonaName?: string;
+  steamAvatarUrl?: string;
+  role: AccountRole;
+  enabled: boolean;
+  dev?: boolean;
+  online?: boolean;
+  inGame?: boolean;
+  mustChangePassword: boolean;
+  lastLoginAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}

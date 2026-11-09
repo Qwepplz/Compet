@@ -1,7 +1,7 @@
 import { readFile } from "node:fs/promises";
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
-import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 import path from "node:path";
 import type { GameSide, MatchSeriesResult, TeamSide } from "../matchmaking/types.js";
 

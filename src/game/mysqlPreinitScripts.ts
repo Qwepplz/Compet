@@ -3,11 +3,10 @@ import { fstat, type Stats } from "node:fs";
 import { link, lstat, open, readFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import type { ServerPlatform } from "../shared/serverPackageLayout.js";
-import { assertPlainPath, fingerprintFile, sameFingerprint, type FileFingerprint } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath, fingerprintFile, sameFingerprint, type FileFingerprint } from "../shared/managedFiles.js";
 
 export const MYSQL_PREINIT_SCRIPT_FILES = [
-  "compet_mysql_preinit.ps1",
-  "compet_mysql_preinit.cmd",
+  "compet_mysql_preinit.sh",
 ] as const;
 
 export interface MysqlPreinitPublishResult {
@@ -52,8 +51,8 @@ export async function publishMysqlPreinitScripts(input: {
     if (!(await inspect(root))?.isDirectory()) fail("mysql_preinit_root_invalid", root);
   }
   const sources: Array<{ name: string; bytes: Buffer; fingerprint: FileFingerprint }> = [];
-  const scriptFiles: readonly string[] = (input.platform ?? process.platform + "-" + process.arch) === "linux-x64"
-    ? ["compet_mysql_preinit.sh"] : MYSQL_PREINIT_SCRIPT_FILES;
+  if (input.platform !== undefined && input.platform !== "linux-x64") fail("server_platform_unsupported", serverRoot);
+  const scriptFiles = MYSQL_PREINIT_SCRIPT_FILES;
   for (const name of scriptFiles) {
     const file = path.join(sourceRoot, name);
     await inspect(file);

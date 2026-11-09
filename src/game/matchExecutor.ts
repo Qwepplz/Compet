@@ -174,10 +174,10 @@ export class MatchExecutor {
       staleAfterMs: 90_000,
       nowMs: Date.now,
     });
-    const saved = process.platform === "linux" ? await this.options.records?.readServer?.(matchId) as { identity?: import("./linuxProcess.js").GameProcessIdentity } | undefined : undefined;
+    const saved = await this.options.records?.readServer?.(matchId) as { identity?: import("./linuxProcess.js").GameProcessIdentity } | undefined;
     const identity = this.options.launcher.getIdentity?.(this.options.config.serverRoot) ?? saved?.identity;
-    const processOwned = process.platform !== "linux" || (identity &&
-      await import("./linuxProcess.js").then(module => module.probeLinuxGameProcess(identity)) === "alive");
+    const processOwned = identity &&
+      await import("./linuxProcess.js").then(module => module.probeLinuxGameProcess(identity)) === "alive";
     const owned = (Boolean(status) || this.gameServerPresenceMonitors.has(matchId)) && Boolean(processOwned);
     // Losing ownership does not prove the server is running or stopped.
     // Observe without sending commands to a potentially unrelated server.
@@ -247,10 +247,6 @@ export class MatchExecutor {
     if (process.platform === "linux") {
       const identity = launched?.identity ?? this.options.launcher.getIdentity?.(this.options.config.serverRoot);
       if (identity) await this.options.demos.attachServer(matchId, { platform: "linux", identity, port });
-    } else if (process.platform === "win32") {
-      const { inspectWindowsGameOwner } = await import("./windowsProcess.js");
-      const owner = await inspectWindowsGameOwner(path.resolve(this.options.config.serverRoot), port);
-      if (owner.state === "owned") await this.options.demos.attachServer(matchId, { ...owner.identity, port });
     }
   }
 

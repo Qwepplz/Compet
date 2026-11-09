@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { constants } from "node:fs";
-import { assertPlainPath, fingerprintFile, sameFingerprint } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath, fingerprintFile, sameFingerprint } from "../shared/managedFiles.js";
 import type { ServerPlatform } from "../shared/serverPackageLayout.js";
 import { sameServerImage, syncDirectory } from "./serverTransaction.js";
 import { updateFailure, type ServerBeforeImage } from "./serverUpdateTypes.js";

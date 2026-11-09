@@ -4,10 +4,10 @@ import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { stripVTControlCharacters } from "node:util";
 import { DatabaseSync } from "node:sqlite";
-import { FileLogStore } from "../manager/main/logStore.js";
+import { FileLogStore } from "../server/fileLogStore.js";
 import { XzLogArchiver, SevenZipXzCodec } from "./xzLogArchiver.js";
 import { SevenZipTarXzCodec } from "../archive/tarXzCodec.js";
-import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 import { redactSensitiveText } from "../shared/redactSensitiveText.js";
 import { isActivityLogInput, SERVER_ACTIVITY_PREFIX, type ActivityLogInput } from "../shared/activityLog.js";
 

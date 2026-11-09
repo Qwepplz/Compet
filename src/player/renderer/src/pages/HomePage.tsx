@@ -1,6 +1,6 @@
 import { Button, Modal, Spin, Switch, message } from "antd";
 import { useState } from "react";
-import type { AccountView } from "../../../../manager/shared/types.js";
+import type { AccountView } from "../../../../accounts/accountTypes.js";
 import type { RankmeDisplay } from "../../../../rankme/rankmeStandings.js";
 import type { PlayerFriendListDto, PlayerFriendDto, PlayerPartyDto } from "../../../shared/types.js";
 import { RankmeBadges } from "../components/RankmeBadges.js";

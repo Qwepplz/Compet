@@ -2,12 +2,11 @@ import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
 import { appendFile, lstat, mkdir, open } from "node:fs/promises";
 import { constants } from "node:fs";
-import { assertPlainPath } from "../../desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 import path from "node:path";
-import { type ActivityLogInput, type LogActor } from "../../shared/activityLog.js";
-import type { LogEntry } from "../shared/types.js";
-import { SevenZipLogArchiver } from "./logArchiver.js";
-import { redactSensitiveText } from "../../shared/redactSensitiveText.js";
+import { type ActivityLogInput, type LogActor } from "../shared/activityLog.js";
+import type { LogEntry } from "../shared/activityLog.js";
+import { redactSensitiveText } from "../shared/redactSensitiveText.js";
 
 type LogContext = NonNullable<LogEntry["context"]>;
 
@@ -17,7 +16,6 @@ export interface LogArchiver {
 
 export interface FileLogStoreOptions {
   maxRecent?: number;
-  sevenZipPath?: string;
   archiver?: LogArchiver;
   strictFiles?: boolean;
   now?: () => Date;
@@ -36,10 +34,9 @@ export class FileLogStore extends EventEmitter {
     super();
     this.maxRecent = options.maxRecent ?? 2_000;
     this.now = options.now ?? (() => new Date());
-    if (options.archiver && options.sevenZipPath) throw new Error("log_archiver_conflict");
     this.strictFiles = options.strictFiles ?? false;
     if (this.strictFiles && (process.platform !== "linux" || !constants.O_NOFOLLOW)) throw new Error("log_strict_files_unsupported");
-    this.archiver = options.archiver ?? (options.sevenZipPath ? new SevenZipLogArchiver(logDir, options.sevenZipPath) : undefined);
+    this.archiver = options.archiver;
   }
 
   append(input: ActivityLogInput, options: { preserveWhitespace?: boolean } = {}): Promise<LogEntry> {

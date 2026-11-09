@@ -54,7 +54,6 @@ function updateError(code: string, message: string, ErrorType: ErrorConstructor 
 
 const latestUrls: Record<string, string> = {
   "compet-player-client": "https://qwepplz111.site/update/client/latest.json",
-  "compet-server-manager": "https://qwepplz111.site/update/server/latest.json",
 };
 
 export async function checkForUpdates(appId: string, timeoutMs?: number): Promise<UpdateCheckResult> {
@@ -103,34 +102,32 @@ export async function installUpdate(appId: string, exeName: string): Promise<Upd
 }
 
 async function performInstallUpdate(appId: string, exeName: string): Promise<UpdateInstallResult> {
-  if (appId === "compet-player-client") {
-    const controller = new AbortController();
-    maintenanceController = controller;
-    maintenanceHandedOff = false;
-    try {
-      const report = await performIntegrityCheck(true, controller.signal);
-      if (report.status === "unavailable" || report.error || !integritySnapshot) {
-        throw updateError(report.error ?? "integrity_unavailable", "Unable to scan the client installation");
-      }
-      const release = integritySnapshot.release;
-      const updateAvailable = report.action === "update";
-      const result: UpdateInstallResult = {
-        currentVersion: report.currentVersion,
-        latestVersion: report.version,
-        updateAvailable,
-        changedFiles: report.changedFiles,
-        changedBytes: report.changedBytes,
-        manifestUrl: release.manifestUrl,
-        installing: false,
-      };
-      if (!updateAvailable || report.changedFiles === 0) return result;
-      await prepareClientMaintenance(release, report, controller.signal, exeName);
-      return { ...result, installing: true };
-    } finally {
-      if (maintenanceController === controller) maintenanceController = undefined;
+  if (appId !== "compet-player-client") throw updateError("update_source_unknown", "Unknown update source");
+  const controller = new AbortController();
+  maintenanceController = controller;
+  maintenanceHandedOff = false;
+  try {
+    const report = await performIntegrityCheck(true, controller.signal);
+    if (report.status === "unavailable" || report.error || !integritySnapshot) {
+      throw updateError(report.error ?? "integrity_unavailable", "Unable to scan the client installation");
     }
+    const release = integritySnapshot.release;
+    const updateAvailable = report.action === "update";
+    const result: UpdateInstallResult = {
+      currentVersion: report.currentVersion,
+      latestVersion: report.version,
+      updateAvailable,
+      changedFiles: report.changedFiles,
+      changedBytes: report.changedBytes,
+      manifestUrl: release.manifestUrl,
+      installing: false,
+    };
+    if (!updateAvailable || report.changedFiles === 0) return result;
+    await prepareClientMaintenance(release, report, controller.signal, exeName);
+    return { ...result, installing: true };
+  } finally {
+    if (maintenanceController === controller) maintenanceController = undefined;
   }
-  throw updateError("maintenance_manager_required", "Server updates require the Manager lifecycle");
 }
 
 export function getCurrentVersion(): string {

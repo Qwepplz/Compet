@@ -17,9 +17,7 @@ internal static class CompetLauncher
         string electron = Path.Combine(electronRoot, "electron.exe");
         string app = Path.Combine(electronRoot, "resources", "app");
 
-#if !COMPET_SERVER
         if (!RecoverMaintenance(root)) return 1;
-#endif
 
         if (!File.Exists(electron))
         {
@@ -45,7 +43,6 @@ internal static class CompetLauncher
         return 0;
     }
 
-#if !COMPET_SERVER
     private static bool RecoverMaintenance(string baseRoot)
     {
         string root = Path.GetFullPath(baseRoot).TrimEnd(Path.DirectorySeparatorChar);
@@ -176,7 +173,6 @@ internal static class CompetLauncher
         catch (DirectoryNotFoundException) { }
     }
 
-#endif
     private static string BuildArguments(string app, string[] args)
     {
         var builder = new StringBuilder();

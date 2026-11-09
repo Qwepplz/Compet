@@ -1,5 +1,8 @@
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { assertWindowsClientPlatform, resolvePlayerAppIdentity } from "./appIdentity.js";
+import { getInstallRoot, isInstalledClientLayout } from "../../desktop/main/installLayout.js";
 import { appendBootLog, describeBootEnvironment } from "../../desktop/main/bootLog.js";
 import { delay } from "../../shared/async.js";
 import { configureRemoteDesktopRendering } from "../../desktop/main/remoteRendering.js";
@@ -11,7 +14,7 @@ import type {
   PlayerRealtimeSnapshotDto,
   PlayerRealtimeStatusDto,
 } from "../shared/types.js";
-import type { AccountView } from "../../manager/shared/types.js";
+import type { AccountView } from "../../accounts/accountTypes.js";
 import { createPlayerApiClient, observeMaintenanceMatchmakingState, observeMaintenanceRealtimeEvent,
   publishClientVersionBlock, registerPlayerIpc, setProfilesUpdatedHandler, warmUpProfiles } from "./ipc.js";
 import { PlayerApiClient } from "./playerApiClient.js";
@@ -22,6 +25,8 @@ import { getRealtimeStatusAfterPollFailure, shouldApplyRealtimePollFailure } fro
 import { revokePlayerSession } from "./sessionShutdown.js";
 import { translate } from "../../language/translate.js";
 import { finalizeClientMaintenance } from "../../desktop/main/updateCheck.js";
+
+assertWindowsClientPlatform(process.platform);
 
 const bootLogFile = "compet-player-client-boot.log";
 appendBootLog(bootLogFile, `process starting; ${describeBootEnvironment()}`);
@@ -115,10 +120,20 @@ async function clearSession(): Promise<void> {
 }
 
 async function createWindow(): Promise<void> {
+  const installedAppRoot = app.getAppPath();
+  const installRoot = isInstalledClientLayout(installedAppRoot, process.execPath) ? getInstallRoot(installedAppRoot) : undefined;
+  const identity = resolvePlayerAppIdentity({
+    appRoot: installRoot ? installedAppRoot : path.resolve(__dirname, "../.."),
+    executablePath: process.execPath,
+    ...(installRoot ? { installRoot } : {}),
+  });
+  if (!existsSync(identity.iconPath)) throw Object.assign(new Error("app_icon_missing: " + identity.iconPath), { code: "app_icon_missing" });
+  app.setAppUserModelId(identity.appId);
   appendBootLog(bootLogFile, "creating BrowserWindow");
   const entry = resolveDesktopWindowEntry(__dirname);
   appendBootLog(bootLogFile, `resolved entries preload=${entry.preloadPath}; renderer=${entry.rendererPath}; problems=${entry.problems.join(" | ")}`);
   const win = new BrowserWindow({
+    icon: identity.iconPath,
     width: 1280,
     height: 820,
     resizable: false,
@@ -130,6 +145,12 @@ async function createWindow(): Promise<void> {
       contextIsolation: true,
       nodeIntegration: false,
     },
+  });
+  win.setAppDetails({
+    appId: identity.appId,
+    appIconPath: identity.iconPath,
+    relaunchCommand: identity.relaunchCommand,
+    relaunchDisplayName: identity.displayName,
   });
   mainWindow = win;
   win.on("closed", () => {

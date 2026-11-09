@@ -3,7 +3,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { assertPlainPath } from "../src/desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../src/shared/managedFiles.js";
 
 export const repositoryRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 export async function buildSourcemod(input: { compilerPath?: string; sourcePath?: string; outputPath?: string } = {}): Promise<void> {

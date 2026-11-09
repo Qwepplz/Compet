@@ -7,8 +7,8 @@ import { readArchiveMetadata, type TarXzCodec } from "../archive/tarXzCodec.js";
 import type { ArchiveMetadata } from "../archive/singleFileTar.js";
 export { SevenZipXzCodec } from "../archive/xzCodec.js";
 export type { LogFingerprint, XzCodec } from "../archive/xzCodec.js";
-import type { LogArchiver } from "../manager/main/logStore.js";
-import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
+import type { LogArchiver } from "../server/fileLogStore.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 
 export interface XzArchiverOptions { onError(error: unknown): void; legacyCodec?: XzCodec }
 const magic = Buffer.from([0xfd, 0x37, 0x7a, 0x58, 0x5a, 0]);

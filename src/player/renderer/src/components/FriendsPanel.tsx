@@ -1,7 +1,7 @@
 import { Badge, Button, Dropdown, Input, Modal } from "antd";
 import { TeamOutlined, UserAddOutlined } from "@ant-design/icons";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { AccountView } from "../../../../manager/shared/types.js";
+import type { AccountView } from "../../../../accounts/accountTypes.js";
 import type { PlayerFriendDto, PlayerFriendListDto, PlayerFriendSearchResultDto } from "../../../shared/types.js";
 import { resolveFriendStatus, type FriendStatusLabel } from "../friendStatus.js";
 import { RankmeBadges } from "./RankmeBadges.js";

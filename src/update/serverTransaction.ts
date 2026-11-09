@@ -1,9 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import childProcess from "node:child_process";
-import { assertPlainPath, assertServerProgramRelativePath, fingerprintFile, sameFingerprint } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath, assertServerProgramRelativePath, fingerprintFile, sameFingerprint } from "../shared/managedFiles.js";
 import { parseLinuxProcessStat } from "../game/linuxProcess.js";
-import { readServerMaintenancePlan, type ServerMaintenancePlan } from "../desktop/main/updateTransaction.js";
 import { resolveServerLayout, type ServerPlatform } from "../shared/serverPackageLayout.js";
 import { isSemver } from "../shared/version.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -16,18 +14,21 @@ import { strictObject, assertFingerprint, updateFailure, type ServerPlanV5, type
   type ServerResultV5, type ServerJournalEntry } from "./serverUpdateTypes.js";
 
 const transactionPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-function apiFor(platform: ServerPlatform) { return platform === "win32-x64" ? path.win32 : path.posix; }
+function apiFor(platform: ServerPlatform) {
+  if (platform !== "linux-x64") updateFailure("server_platform_unsupported");
+  return path.posix;
+}
 function absolute(value: unknown, platform: ServerPlatform): string {
   const api = apiFor(platform);
   if (typeof value !== "string" || !value || /[\x00-\x1f]/.test(value) || !api.isAbsolute(value) ||
       api.normalize(value) !== value || value === api.parse(value).root ||
-      (platform === "win32-x64" ? !/^[A-Za-z]:[\\/]/.test(value) : value.includes("\\"))) updateFailure("update_root_invalid");
+      value.includes("\\")) updateFailure("update_root_invalid");
   return value;
 }
 export function serverPathsOverlap(a: string, b: string, platform: ServerPlatform): boolean {
   const api = apiFor(platform);
-  const left = platform === "win32-x64" ? a.toLowerCase() : a;
-  const right = platform === "win32-x64" ? b.toLowerCase() : b;
+  const left = a;
+  const right = b;
   const within = (from: string, to: string) => { const relative = api.relative(from, to);
     return relative === "" || !api.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + api.sep); };
   return within(left, right) || within(right, left);
@@ -47,16 +48,14 @@ function sameImage(a: ServerBeforeImage | null, b: ServerBeforeImage | null, own
 function withoutPath(file: ServerBaselineFile): ServerBeforeImage { const { path: _path, ...image } = file; return image; }
 
 export function validateLifecycleSnapshot(raw: unknown, platform: ServerPlatform): LifecycleSnapshot {
-  const systemd = platform === "linux-x64";
-  const value = strictObject(raw, systemd ? ["kind", "wasRunning", "wasEnabled", "serviceName", "unitFingerprint"] : ["kind", "wasRunning"], systemd ? ["controlGroup"] : []);
-  if (value.kind !== (systemd ? "systemd" : "windows-manager") || typeof value.wasRunning !== "boolean") updateFailure("update_lifecycle_invalid");
-  if (systemd) {
-    if (typeof value.wasEnabled !== "boolean" || typeof value.serviceName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]*\.service$/.test(value.serviceName)) updateFailure("update_lifecycle_invalid");
-    assertFingerprint(strictObject(value.unitFingerprint, ["size", "sha256"]));
-    if ("controlGroup" in value && (typeof value.controlGroup !== "string" || !value.controlGroup.startsWith("/") || value.controlGroup === "/" ||
-        /[\\\x00-\x20]/.test(value.controlGroup) || path.posix.normalize(value.controlGroup) !== value.controlGroup) ||
-        value.wasRunning && !value.controlGroup) updateFailure("update_lifecycle_invalid");
-  }
+  if (platform !== "linux-x64") updateFailure("server_platform_unsupported");
+  const value = strictObject(raw, ["kind", "wasRunning", "wasEnabled", "serviceName", "unitFingerprint"], ["controlGroup"]);
+  if (value.kind !== "systemd" || typeof value.wasRunning !== "boolean") updateFailure("update_lifecycle_invalid");
+  if (typeof value.wasEnabled !== "boolean" || typeof value.serviceName !== "string" || !/^[A-Za-z0-9][A-Za-z0-9_.-]*\.service$/.test(value.serviceName)) updateFailure("update_lifecycle_invalid");
+  assertFingerprint(strictObject(value.unitFingerprint, ["size", "sha256"]));
+  if ("controlGroup" in value && (typeof value.controlGroup !== "string" || !value.controlGroup.startsWith("/") || value.controlGroup === "/" ||
+      /[\\\x00-\x20]/.test(value.controlGroup) || path.posix.normalize(value.controlGroup) !== value.controlGroup) ||
+      value.wasRunning && !value.controlGroup) updateFailure("update_lifecycle_invalid");
   return structuredClone(value) as unknown as LifecycleSnapshot;
 }
 
@@ -64,19 +63,16 @@ export function validateServerPlan(raw: unknown): ServerPlanV5 {
   const value = strictObject(raw, ["protocol", "transactionId", "platform", "root", "exe", "targetVersion", "configurationFingerprint",
     "protectedPaths", "expectedFiles", "baselineFiles", "operations", "runner", "lifecycle"]);
   if (value.protocol !== 5 || typeof value.transactionId !== "string" || !transactionPattern.test(value.transactionId) ||
-      value.platform !== "win32-x64" && value.platform !== "linux-x64" || typeof value.targetVersion !== "string" || !isSemver(value.targetVersion)) updateFailure("update_plan_invalid");
+      value.platform !== "linux-x64" || typeof value.targetVersion !== "string" || !isSemver(value.targetVersion)) updateFailure("update_plan_invalid");
   const platform = value.platform;
   const root = absolute(value.root, platform), api = apiFor(platform);
   const layout = resolveServerLayout({ platform, installRoot: root });
-  const config = strictObject(value.configurationFingerprint, ["path", "size", "sha256", "effectiveSha256"], ["kind", "requiredClientVersion"]);
+  const config = strictObject(value.configurationFingerprint, ["path", "size", "sha256", "effectiveSha256"]);
   absolute(config.path, platform); assertFingerprint(config);
-  const manager = "kind" in config || "requiredClientVersion" in config;
-  if (manager && (platform !== "win32-x64" || config.kind !== "windows-manager" || typeof config.requiredClientVersion !== "string" ||
-      !isSemver(config.requiredClientVersion) || config.path !== api.join(layout.appRoot, "user-data/manager-config.json"))) updateFailure("update_configuration_invalid");
   if (typeof config.effectiveSha256 !== "string" || !/^[A-Fa-f0-9]{64}$/.test(config.effectiveSha256)) updateFailure("update_configuration_invalid");
   if (!Array.isArray(value.protectedPaths) || value.protectedPaths.length < 2) updateFailure("update_protection_invalid");
   const protectedPaths = value.protectedPaths.map(p => absolute(p, platform));
-  const protectedKeys = protectedPaths.map(p => platform === "win32-x64" ? p.toLowerCase() : p);
+  const protectedKeys = protectedPaths;
   if (new Set(protectedKeys).size !== protectedKeys.length || protectedPaths.some(p =>
       serverPathsOverlap(root, p, platform) && (api.relative(root, p) === "" || api.relative(root, p).startsWith("..")))) updateFailure("update_protection_invalid");
   const collection = (rawFiles: unknown, baseline: boolean): ServerBaselineFile[] => {
@@ -100,15 +96,11 @@ export function validateServerPlan(raw: unknown): ServerPlanV5 {
   const baselineFiles = collection(value.baselineFiles, true);
   const expected = new Map(expectedFiles.map(file => [file.path.toLowerCase(), file]));
   const baseline = new Map(baselineFiles.map(file => [file.path.toLowerCase(), file]));
-  const fixed = [platform === "linux-x64" ? "bin/compet" : "Compet Server Manager.exe", "compet-package-manifest.json",
+  const fixed = ["bin/compet", "compet-package-manifest.json",
     api.relative(root, layout.nodePath).split(api.sep).join("/"), api.relative(root, layout.workerEntry).split(api.sep).join("/"),
     api.relative(root, layout.cliEntry).split(api.sep).join("/"), api.relative(root, layout.serviceEntry).split(api.sep).join("/"),
-    api.relative(root, api.join(layout.appRoot, "package.json")).split(api.sep).join("/"),
-    ...(platform === "win32-x64" ? ["compet.cmd", "runtime/updater/Compet Updater.exe"] : [])];
+    api.relative(root, api.join(layout.appRoot, "package.json")).split(api.sep).join("/")];
   if (value.exe !== fixed[0] || fixed.some(p => !expected.has(p.toLowerCase()))) updateFailure("update_target_incomplete");
-  if (platform === "win32-x64") {
-    for (const name of ["server-data", "user-data"]) if (!protectedKeys.includes(api.join(layout.appRoot, name).toLowerCase())) updateFailure("update_protection_invalid");
-  }
   if (!Array.isArray(value.operations)) updateFailure("update_operations_invalid");
   const operationKeys = new Set<string>();
   const operations = value.operations.map((rawOperation): ServerOperation => {
@@ -141,7 +133,7 @@ export function validateServerPlan(raw: unknown): ServerPlanV5 {
   const runner = strictObject(value.runner, ["directory", "node", "entry", "files"]);
   const runnerDirectory = absolute(runner.directory, platform);
   if ([root, ...protectedPaths, String(config.path)].some(p => serverPathsOverlap(p, runnerDirectory, platform)) ||
-      runner.node !== (platform === "linux-x64" ? "node" : "node.exe") || runner.entry !== "worker.cjs" ||
+      runner.node !== "node" || runner.entry !== "worker.cjs" ||
       !Array.isArray(runner.files) || runner.files.length !== 2) updateFailure("update_runner_invalid");
   const runnerFiles = runner.files.map(file => validateServerFile(file, platform));
   assertUniqueServerFiles(runnerFiles);
@@ -150,8 +142,7 @@ export function validateServerPlan(raw: unknown): ServerPlanV5 {
     if (!file || !sameImage(file, expected.get(String(targetPath).toLowerCase()) ?? null, false) || platform === "linux-x64" && name === "node" && file.mode !== 0o755) updateFailure("update_runner_invalid");
   }
   return { protocol: 5, transactionId: value.transactionId, platform, root, exe: String(value.exe), targetVersion: value.targetVersion,
-    configurationFingerprint: { path: String(config.path), size: Number(config.size), sha256: String(config.sha256), effectiveSha256: config.effectiveSha256,
-      ...(manager ? { kind: "windows-manager", requiredClientVersion: String(config.requiredClientVersion) } : {}) },
+    configurationFingerprint: { path: String(config.path), size: Number(config.size), sha256: String(config.sha256), effectiveSha256: config.effectiveSha256 },
     protectedPaths, expectedFiles, baselineFiles, operations,
     runner: { directory: runnerDirectory, node: String(runner.node), entry: String(runner.entry), files: runnerFiles },
     lifecycle: validateLifecycleSnapshot(value.lifecycle, platform) };
@@ -282,6 +273,7 @@ async function transactionDirectory(directory: string): Promise<void> {
   if (!(await fs.lstat(directory)).isDirectory()) updateFailure("update_transaction_directory_invalid");
   const names = await fs.readdir(directory);
   if (names.includes("plan.txt") && names.includes("plan.json")) updateFailure("update_transaction_format_conflict");
+  if (names.includes("plan.txt")) updateFailure("update_transaction_unsupported");
 }
 async function readJson(file: string): Promise<unknown> {
   await assertPlainPath(file);
@@ -320,17 +312,6 @@ export async function readServerResult(directory: string, plan: ServerPlanV5): P
   await transactionDirectory(directory);
   return validateServerResult(await readJson(path.join(directory, "result.json")), plan);
 }
-export interface LegacyServerPlan extends ServerMaintenancePlan { platform: "win32-x64" }
-export async function readLegacyServerPlan(directory: string, platform: ServerPlatform): Promise<LegacyServerPlan> {
-  if (platform !== "win32-x64") updateFailure("update_legacy_platform_invalid");
-  await transactionDirectory(directory);
-  if ((await fs.readdir(directory)).includes("plan.json")) updateFailure("update_transaction_format_conflict");
-  // Validate UTF-8 before the existing strict Base64/protocol-4 reader.
-  new TextDecoder("utf-8", { fatal: true }).decode(await fs.readFile(path.join(directory, "plan.txt")));
-  const plan = await readServerMaintenancePlan(directory);
-  return { ...plan, platform: "win32-x64" };
-}
-
 export interface UpdateProcessIdentity { pid: number; startTime: string; executable: string }
 export interface UpdateOwner {
   protocol: 5;
@@ -362,24 +343,14 @@ export async function captureUpdateProcess(pid: number): Promise<UpdateProcessId
       throw error;
     }
   }
-  if (process.platform !== "win32") updateFailure("server_platform_unsupported");
-  const script = "$ErrorActionPreference='Stop';try{$p=Get-CimInstance Win32_Process -Filter 'ProcessId=" + pid + "';if($null -eq $p){'null';exit};if(!$p.ExecutablePath -or !$p.CreationDate){throw 'identity unavailable'};[pscustomobject]@{pid=[int]$p.ProcessId;startTime=$p.CreationDate.ToUniversalTime().Ticks.ToString();executable=$p.ExecutablePath}|ConvertTo-Json -Compress}catch{exit 2}";
-  const command = path.join(process.env.SystemRoot ?? "C:\\Windows", "System32/WindowsPowerShell/v1.0/powershell.exe");
-  await assertPlainPath(command);
-  const output = await new Promise<string>((resolve, reject) => childProcess.execFile(command,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(script, "utf16le").toString("base64")],
-    { shell: false, windowsHide: true, timeout: 10_000, maxBuffer: 16 * 1024, encoding: "utf8" },
-    (error, stdout) => error ? reject(Object.assign(Error("update_process_unknown"), { code: "update_process_unknown" })) : resolve(stdout)));
-  try { const value: unknown = JSON.parse(output.replace(/^\uFEFF/, "")); return value === null ? null : processIdentity(value); }
-  catch { updateFailure("update_process_unknown"); }
+  updateFailure("server_platform_unsupported");
 }
 export async function probeUpdateProcess(identity: UpdateProcessIdentity): Promise<"alive" | "gone" | "unknown"> {
   try {
     processIdentity(identity);
     const current = await captureUpdateProcess(identity.pid);
     if (!current || current.startTime !== identity.startTime) return "gone";
-    const compare = (value: string) => process.platform === "win32" ? value.toLowerCase() : value;
-    return compare(current.executable) === compare(identity.executable) ? "alive" : "unknown";
+    return current.executable === identity.executable ? "alive" : "unknown";
   } catch { return "unknown"; }
 }
 export function validateUpdateOwner(raw: unknown, directory: string): UpdateOwner {
@@ -423,8 +394,7 @@ export async function readServerProgramFiles(input: {
   const files: ServerBaselineFile[] = [];
   const within = (value: string, boundary: string) => {
     const api = apiFor(input.platform);
-    const relative = api.relative(input.platform === "win32-x64" ? boundary.toLowerCase() : boundary,
-      input.platform === "win32-x64" ? value.toLowerCase() : value);
+    const relative = api.relative(boundary, value);
     return relative === "" || !api.isAbsolute(relative) && relative !== ".." && !relative.startsWith(".." + api.sep);
   };
   async function visit(directory: string): Promise<void> {
@@ -458,28 +428,22 @@ function canonical(value: unknown): string {
 export async function fingerprintServerConfiguration(input: { config: ServerConfig; configPath: string; layout?: ReturnType<typeof resolveServerLayout> }): Promise<ServerPlanV5["configurationFingerprint"]> {
   const fingerprint = await fingerprintFile(input.configPath);
   if (!fingerprint) updateFailure("maintenance_config_changed");
-  const manager = input.layout?.platform === "win32-x64" && input.configPath === path.join(input.layout.appRoot, "user-data/manager-config.json");
-  return { path: input.configPath, ...fingerprint, effectiveSha256: createHash("sha256").update(canonical(input.config)).digest("hex").toUpperCase(),
-    ...(manager ? { kind: "windows-manager", requiredClientVersion: input.config.requiredClientVersion } : {}) };
+  return { path: input.configPath, ...fingerprint, effectiveSha256: createHash("sha256").update(canonical(input.config)).digest("hex").toUpperCase() };
 }
 export function serverProtectedPaths(layout: ReturnType<typeof resolveServerLayout>, config: ServerConfig): string[] {
   assertServerConfigPaths(config, layout);
-  return [...new Set([config.dataDir, ...(config.gameServer.serverRoot ? [config.gameServer.serverRoot] : []),
-    ...(layout.platform === "win32-x64" ? [path.join(layout.appRoot, "server-data"), path.join(layout.appRoot, "user-data")] : [])].map(p => apiFor(layout.platform).normalize(p)))];
+  return [...new Set([config.dataDir, ...(config.gameServer.serverRoot ? [config.gameServer.serverRoot] : [])].map(p => apiFor(layout.platform).normalize(p)))];
 }
 export async function assertServerConfiguration(plan: ServerPlanV5, supplied?: ServerConfig): Promise<ServerConfig> {
   const before = await fingerprintFile(plan.configurationFingerprint.path);
   const layout = resolveServerLayout({ platform: plan.platform, installRoot: plan.root });
-  const config = plan.configurationFingerprint.kind === "windows-manager"
-    ? await (await import("./windowsManagerConfig.js")).loadManagerServerConfig({ layout, configPath: plan.configurationFingerprint.path,
-      requiredClientVersion: plan.configurationFingerprint.requiredClientVersion })
-    : await loadHeadlessConfig({ configPath: plan.configurationFingerprint.path, env: process.env });
-  const actual = await fingerprintServerConfiguration({ config, configPath: plan.configurationFingerprint.path, ...(plan.configurationFingerprint.kind ? { layout } : {}) });
+  const config = await loadHeadlessConfig({ configPath: plan.configurationFingerprint.path, env: process.env });
+  const actual = await fingerprintServerConfiguration({ config, configPath: plan.configurationFingerprint.path });
   const expected = plan.configurationFingerprint;
   if (!sameFingerprint(before, actual) || !sameFingerprint(actual, expected) || actual.effectiveSha256 !== expected.effectiveSha256.toUpperCase() ||
       supplied && createHash("sha256").update(canonical(supplied)).digest("hex").toUpperCase() !== actual.effectiveSha256) updateFailure("maintenance_config_changed");
   const paths = serverProtectedPaths(layout, config);
-  const key = (value: string) => plan.platform === "win32-x64" ? value.toLowerCase() : value;
+  const key = (value: string) => value;
   if (paths.length !== plan.protectedPaths.length || paths.some(p => !plan.protectedPaths.map(key).includes(key(p)))) updateFailure("maintenance_config_changed");
   return config;
 }

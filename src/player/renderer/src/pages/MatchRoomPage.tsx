@@ -1,6 +1,6 @@
 import { Button, Spin } from "antd";
 import { useState } from "react";
-import type { AccountView } from "../../../../manager/shared/types.js";
+import type { AccountView } from "../../../../accounts/accountTypes.js";
 import type { PlayerLiveMatchStateDto, PlayerMatchParticipantDto, PlayerMatchTeamDto } from "../../../shared/types.js";
 import { SteamAvatar } from "../components/SteamAvatar.js";
 import { VerificationBadge } from "../components/VerificationBadge.js";

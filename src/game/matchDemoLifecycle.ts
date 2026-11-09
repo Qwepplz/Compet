@@ -2,10 +2,9 @@ import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { archiveFile, sameArchiveIdentity } from "../archive/xzCodec.js";
-import { inspectWindowsGameOwner, probeWindowsGameProcess, type WindowsGameProcessIdentity } from "./windowsProcess.js";
 import path from "node:path";
 import { z } from "zod";
-import { assertPlainPath } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 import { writeJsonFileAtomic } from "../storage/jsonFile.js";
 import { readArchiveMetadata, type TarXzCodec } from "../archive/tarXzCodec.js";
 import type { ArchiveInspection } from "../archive/singleFileTar.js";
@@ -25,13 +24,12 @@ const ownerSchema = z.discriminatedUnion("platform", [
     serverRoot: z.string().min(1), processGroupId: z.number().int().positive(),
   }) }),
 ]);
-export type DemoOwner = { platform: "linux"; identity: GameProcessIdentity; port: number } | (WindowsGameProcessIdentity & { port: number });
+export type DemoOwner = z.infer<typeof ownerSchema>;
 export async function probeDemoRoot(serverRoot: string, port: number): Promise<"gone" | "unknown"> {
   if (process.platform === "linux") {
     const [root, udp] = await Promise.all([inspectLinuxGameRoot(serverRoot), inspectLinuxUdpPort(port)]);
     return root === "gone" && udp === "free" ? "gone" : "unknown";
   }
-  if (process.platform === "win32") return (await inspectWindowsGameOwner(serverRoot, port)).state === "gone" ? "gone" : "unknown";
   return "unknown";
 }
 export async function probeDemoOwner(owner: DemoOwner): Promise<"alive" | "gone" | "unknown"> {
@@ -46,8 +44,7 @@ export async function probeDemoOwner(owner: DemoOwner): Promise<"alive" | "gone"
     const state = await probeLinuxGameProcess(owner.identity);
     return state === "gone" ? probeDemoRoot(owner.identity.serverRoot, owner.port) : state;
   }
-  const state = await probeWindowsGameProcess(owner);
-  return state === "gone" ? probeDemoRoot(path.dirname(owner.executable), owner.port) : state;
+  return "unknown";
 }
 const snapshotSchema = z.object({
   name: z.string().min(1), dev: decimal, ino: decimal, size: decimal,
@@ -120,8 +117,9 @@ export class MatchDemoLifecycle {
     try { job = jobSchema.parse(JSON.parse(await fs.readFile(file, "utf8"))); } catch (error) { throw new Error("demo_job_invalid", { cause: error }); }
     if (job.matchId !== id || job.serverRoot !== await this.root()) throw new Error("demo_job_conflict");
     if (job.owner) {
-      const expected = path.join(job.serverRoot, job.owner.platform === "linux" ? "srcds_linux" : "srcds.exe");
-      if ((job.owner.platform === "linux" ? job.owner.identity.executable : job.owner.executable) !== expected ||
+      if (job.owner.platform !== "linux") throw new Error("demo_owner_platform_unsupported");
+      const expected = path.join(job.serverRoot, "srcds_linux");
+      if (job.owner.identity.executable !== expected ||
           job.owner.platform === "linux" && job.owner.identity.serverRoot !== job.serverRoot) throw new Error("demo_owner_conflict");
     }
     const directory = await maybeStat(this.directory(job));
@@ -194,8 +192,9 @@ export class MatchDemoLifecycle {
       if (this.stopped) throw new Error("demo_lifecycle_closed");
       const job = await this.read(id); if (!job) throw new Error("demo_job_missing");
       const parsed = ownerSchema.safeParse(owner); if (!parsed.success) throw new Error("demo_owner_invalid");
-      const expected = path.join(job.serverRoot, owner.platform === "linux" ? "srcds_linux" : "srcds.exe");
-      if ((owner.platform === "linux" ? owner.identity.executable : owner.executable) !== expected ||
+      if (owner.platform !== "linux") throw new Error("demo_owner_platform_unsupported");
+      const expected = path.join(job.serverRoot, "srcds_linux");
+      if (owner.identity.executable !== expected ||
           owner.platform === "linux" && owner.identity.serverRoot !== job.serverRoot) throw new Error("demo_owner_invalid");
       if (job.owner && JSON.stringify(job.owner) !== JSON.stringify(parsed.data)) throw new Error("demo_owner_conflict");
       if (!["prepared", "attached"].includes(job.stage)) return;

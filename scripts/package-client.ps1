@@ -1,12 +1,28 @@
+param([string]$ArtifactsDir = $env:COMPET_CLIENT_ARTIFACTS_DIR)
+
 $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "resolve-csharp-compiler.ps1")
 . (Join-Path $PSScriptRoot "package-common.ps1")
 $repo = Resolve-Path (Join-Path $PSScriptRoot "..")
-$artifacts = Join-Path $repo "artifacts"
+$artifactsBase = [IO.Path]::GetFullPath((Join-Path $repo "artifacts"))
+if ($ArtifactsDir -and -not [IO.Path]::IsPathFullyQualified($ArtifactsDir)) { throw "client_artifacts_path_invalid" }
+$artifacts = if ($ArtifactsDir) { [IO.Path]::GetFullPath($ArtifactsDir) } else { $artifactsBase }
+$relativeOutput = [IO.Path]::GetRelativePath($artifactsBase, $artifacts)
+if ([IO.Path]::IsPathRooted($relativeOutput) -or $relativeOutput -eq ".." -or $relativeOutput.StartsWith("..\") -or
+    $relativeOutput.Split([IO.Path]::DirectorySeparatorChar)[0] -in @("Compet-Server", "Compet-Client")) {
+  throw "client_artifacts_path_invalid"
+}
+for ($cursor = $artifacts; $cursor; $cursor = [IO.Path]::GetDirectoryName($cursor)) {
+  if ((Test-Path -LiteralPath $cursor) -and ((Get-Item -LiteralPath $cursor).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw "client_artifacts_linked"
+  }
+}
 $stagingRoot = Join-Path $artifacts "staging"
 $stage = Join-Path $stagingRoot "Compet-Client"
 $electronRuntimeRoot = Join-Path $stage "runtime\electron"
 $appRoot = Join-Path $electronRuntimeRoot "resources\app"
+$electronExePath = Join-Path $electronRuntimeRoot "electron.exe"
+$appIconDestination = Join-Path $appRoot "assets\compet-icon.ico"
 $archive = Join-Path $artifacts "Compet-Client.7z"
 $archiveTmp = "$archive.tmp"
 $supersededZip = Join-Path $artifacts "Compet-Client.zip"
@@ -17,7 +33,7 @@ $updaterSource = Join-Path $repo "scripts\launcher\CompetUpdater.cs"
 $iconSource = Join-Path $repo "packaging\assets\compet-icon.ico"
 $clientExe = "Compet Player Client.exe"
 $rcedit = Join-Path $repo "node_modules\rcedit\bin\rcedit-x64.exe"
-$repoLocal7z = Join-Path $repo ".local-tools\7zr.exe"
+$repoLocal7z = Join-Path $repo "packaging\client\tools\7zr.exe"
 $packageVersion = [string]((Get-Content -LiteralPath (Join-Path $repo "packaging\client\app-package.json") -Raw | ConvertFrom-Json).version)
 
 function Get-PackageVersion {
@@ -51,26 +67,6 @@ function Set-ExeVersionInfo {
     --set-file-version $version `
     --set-product-version $version
   if ($LASTEXITCODE -ne 0) { throw "rcedit failed with exit code $LASTEXITCODE" }
-}
-
-function Set-ExeIcon {
-  param(
-    [Parameter(Mandatory = $true)][string]$ExePath,
-    [Parameter(Mandatory = $true)][string]$IconPath
-  )
-
-  if (-not (Test-Path -LiteralPath $rcedit)) {
-    throw "Missing rcedit executable: $rcedit"
-  }
-  if (-not (Test-Path -LiteralPath $ExePath)) {
-    throw "Missing executable: $ExePath"
-  }
-  if (-not (Test-Path -LiteralPath $IconPath)) {
-    throw "Missing application icon: $IconPath"
-  }
-
-  & $rcedit $ExePath --set-icon $IconPath
-  if ($LASTEXITCODE -ne 0) { throw "rcedit icon update failed with exit code $LASTEXITCODE" }
 }
 
 function New-CSharpExe {
@@ -107,20 +103,34 @@ function Remove-UnusedElectronFiles {
 
 }
 
-Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw "client_platform_unsupported" }
+$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client\app-package.json", "packaging\assets\compet-icon.ico", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
+foreach ($relative in $required) {
+  $path = Join-Path $repo $relative
+  if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
+}
+
+foreach ($tool in @($rcedit, $repoLocal7z)) {
+  if (-not (Test-Path -LiteralPath $tool -PathType Leaf)) { throw "Missing packaging tool: $tool" }
+}
+Resolve-CSharpCompiler | Out-Null
+Initialize-ExecutableIconVerifier
+[CompetExecutableIcon]::ValidateIconSource($iconSource)
+
+if (Test-Path -LiteralPath $stage) {
+  Remove-Item -LiteralPath $stage -Recurse -ErrorAction Stop
+}
+if (Test-Path -LiteralPath $stage) {
+  throw "Unable to remove client staging directory: $stage"
+}
 foreach ($staleArtifact in @($archive, $archiveTmp, $supersededZip, $supersededTarXz)) {
   Remove-Item -LiteralPath $staleArtifact -Force -ErrorAction SilentlyContinue
   if (Test-Path -LiteralPath $staleArtifact) {
     throw "Unable to remove stale package artifact: $staleArtifact"
   }
 }
-New-Item -ItemType Directory -Path $stage -Force | Out-Null
+New-Item -ItemType Directory -Path $stage | Out-Null
 
-$required = @("out-player\main", "out-player\preload", "out-player\renderer", "packaging\client\app-package.json", "packaging\assets\compet-icon.ico", "node_modules\electron\dist", "scripts\launcher\CompetLauncher.cs", "scripts\launcher\CompetUpdater.cs")
-foreach ($relative in $required) {
-  $path = Join-Path $repo $relative
-  if (-not (Test-Path -LiteralPath $path)) { throw "Missing required path: $relative" }
-}
 
 New-Item -ItemType Directory -Path $electronRuntimeRoot -Force | Out-Null
 Copy-Item -Path (Join-Path $electronDist "*") -Destination $electronRuntimeRoot -Recurse
@@ -144,13 +154,20 @@ Set-ExeVersionInfo `
   -OriginalFilename "Compet Updater.exe" `
   -InternalName "Compet Updater"
 Set-ExeIcon -ExePath $clientExePath -IconPath $iconSource
+Set-ExeIcon -ExePath $electronExePath -IconPath $iconSource
+Set-ExeIcon -ExePath $updaterExePath -IconPath $iconSource
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
+
+New-Item -ItemType Directory -Path (Split-Path $appIconDestination -Parent) -Force | Out-Null
+Copy-Item -LiteralPath $iconSource -Destination $appIconDestination
 
 Copy-Item -LiteralPath (Join-Path $repo "out-player") -Destination $appRoot -Recurse
 Copy-Item -LiteralPath (Join-Path $repo "packaging\client\app-package.json") -Destination (Join-Path $appRoot "package.json")
 
 New-Item -ItemType Directory -Path $artifacts -Force | Out-Null
 $requiredArchiveEntries = @(
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath $updaterExePath),
+  (Get-ArchiveEntryPath -RootDir $stage -FilePath $appIconDestination),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $stage $clientExe)),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $electronRuntimeRoot "electron.exe")),
   (Get-ArchiveEntryPath -RootDir $stage -FilePath (Join-Path $electronRuntimeRoot "ffmpeg.dll")),
@@ -181,5 +198,10 @@ $updateBaseUrl = if ($env:COMPET_CLIENT_UPDATE_BASE_URL) { $env:COMPET_CLIENT_UP
   -LatestUrlBase $updateBaseUrl `
   -Version $packageVersion
 if ($LASTEXITCODE -ne 0) { throw "Client update manifest creation failed with exit code $LASTEXITCODE" }
-Remove-Item -LiteralPath $stagingRoot -Recurse -Force -ErrorAction SilentlyContinue
+if (Test-Path -LiteralPath $stage) {
+  Remove-Item -LiteralPath $stage -Recurse -ErrorAction Stop
+}
+if (Test-Path -LiteralPath $stage) {
+  throw "Unable to remove client staging directory: $stage"
+}
 Write-Host "Created $archive"

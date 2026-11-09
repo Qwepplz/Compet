@@ -1,10 +1,11 @@
 import type { ServerConfig } from "../config/config.js";
-import type { ServerLayout } from "../shared/serverPackageLayout.js";
+import { assertNativeServerPlatform, type ServerLayout } from "../shared/serverPackageLayout.js";
 import { installGracefulShutdown } from "./gracefulShutdown.js";
 import { createRuntime } from "./runtime.js";
 import { withLinuxFileLogging } from "./linuxFileLogging.js";
 
 export async function runServer(config: ServerConfig, layout?: ServerLayout): Promise<void> {
+  assertNativeServerPlatform(process.platform, process.arch);
   if (process.platform === "linux" && layout?.platform === "linux-x64") {
     return withLinuxFileLogging({ dataDir: config.dataDir, installRoot: layout.installRoot }, () => runServerRuntime(config, layout));
   }

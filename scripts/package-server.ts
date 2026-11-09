@@ -11,8 +11,8 @@ import { buildLogCompressor, fingerprintLzmaSdkRoot, LZMA_SDK_SOURCE_SHA256, pro
 import { createPackageInventory, verifyPackageInventory } from "./create-package-inventory.js";
 import { createServerUpdateFeed } from "./create-server-update-feed.js";
 import { createTarXzPackage, extractTarXzPackage } from "./create-tar-xz-package.js";
-import { assertPlainPath, fingerprintFile } from "../src/desktop/main/serverManagedFiles.js";
-import { resolveServerLayout, type ServerPlatform } from "../src/shared/serverPackageLayout.js";
+import { assertPlainPath, fingerprintFile } from "../src/shared/managedFiles.js";
+import { assertNativeServerPlatform, resolveServerLayout, type ServerPlatform } from "../src/shared/serverPackageLayout.js";
 import { isSemver } from "../src/shared/version.js";
 import { serverConfigSchema } from "../src/config/config.js";
 export interface PackageOptions { platform: ServerPlatform; requiredClientVersion: string; artifactsDir: string }
@@ -26,8 +26,8 @@ export function parsePackageOptions(args: string[]): PackageOptions {
   const requiredClientVersion = values["--required-client-version"];
   if (!requiredClientVersion || !isSemver(requiredClientVersion)) throw new Error("Invalid or missing required-client-version");
   const platform = values["--platform"] ?? process.platform + "-" + process.arch;
-  if (!["win32-x64", "linux-x64"].includes(platform)) throw new Error("Unsupported platform");
-  if (platform !== process.platform + "-" + process.arch) throw new Error("Package platform must match native host");
+  if (platform !== "linux-x64") throw new Error("server_platform_unsupported");
+  assertNativeServerPlatform(process.platform, process.arch);
   return { platform: platform as ServerPlatform, requiredClientVersion, artifactsDir: path.resolve(values["--artifacts-dir"] ?? path.join(repositoryRoot, "artifacts")) };
 }
 export async function validateArtifactsDirectory(directory: string): Promise<void> {
@@ -47,10 +47,10 @@ export async function readServerPackageMetadata(requiredClientVersion: string, r
   return { ...metadata, requiredClientVersion };
 }
 export async function validatePackageSources(root: string, platform: ServerPlatform): Promise<void> {
+  if (platform !== "linux-x64") throw new Error("server_platform_unsupported");
   const required = ["src/main.ts", "src/cli/main.ts", "src/sourcemod/compet_match_lock.sp",
     "packaging/server/app-package.json", "packaging/server/profile-seed/human-index.json",
-    "src/mysql_preinit/compet_mysql_preinit" + (platform === "win32-x64" ? ".ps1" : ".sh"),
-    ...(platform === "win32-x64" ? ["src/mysql_preinit/compet_mysql_preinit.cmd", "packaging/assets/compet-icon.ico"] : [])];
+    "src/mysql_preinit/compet_mysql_preinit.sh"];
   for (const relative of required) {
     const file = path.join(root, relative); await assertPlainPath(file);
     if (!await fs.stat(file).then(info => info.isFile(), () => false)) throw new Error("Missing required path: " + relative);
@@ -58,7 +58,8 @@ export async function validatePackageSources(root: string, platform: ServerPlatf
   validateProfileSeed(JSON.parse(await fs.readFile(path.join(root, "packaging/server/profile-seed/human-index.json"), "utf8")));
 }
 export async function copyManualMysqlEntries(root: string, appRoot: string, platform: ServerPlatform): Promise<void> {
-  const names = platform === "win32-x64" ? ["compet_mysql_preinit.ps1", "compet_mysql_preinit.cmd"] : ["compet_mysql_preinit.sh"];
+  if (platform !== "linux-x64") throw new Error("server_platform_unsupported");
+  const names = ["compet_mysql_preinit.sh"];
   for (const name of names) await copy(path.join(root, "src/mysql_preinit", name), path.join(appRoot, "mysql_preinit", name));
 }
 function run(executable: string, args: string[], cwd = repositoryRoot, env: NodeJS.ProcessEnv = process.env): string {
@@ -105,7 +106,7 @@ async function copyRuntimeModules(appRoot: string, platform: ServerPlatform): Pr
       for (const child of Object.keys(metadata.dependencies ?? {})) await dependency(child);
     }
   }
-  for (const name of ["argon2", "zod", ...(platform === "linux-x64" ? ["node-pty"] : [])]) await dependency(name);
+  for (const name of ["argon2", "zod", "node-pty"]) await dependency(name);
   await pruneModules(path.join(appRoot, "node_modules"), platform);
 }
 async function pinnedNode(platform: ServerPlatform): Promise<string> {
@@ -127,13 +128,8 @@ async function pinnedNode(platform: ServerPlatform): Promise<string> {
   const extracted = path.join(cache, "extracted");
   await assertPlainPath(extracted);
   await fs.mkdir(extracted, { recursive: true });
-  if (platform === "win32-x64") {
-    const quote = (value: string) => "\u0027" + value.replaceAll("\u0027", "\u0027\u0027") + "\u0027";
-    const command = "$ErrorActionPreference=\u0027Stop\u0027; $ProgressPreference=\u0027SilentlyContinue\u0027; Expand-Archive -LiteralPath " + quote(archive) + " -DestinationPath " + quote(extracted) + " -Force";
-    run("pwsh", ["-NoProfile", "-EncodedCommand", Buffer.from(command, "utf16le").toString("base64")]);
-  }
-  else run("tar", ["-xJf", archive, "-C", extracted]);
-  const node = path.join(extracted, "node-v" + versions.node.version + (platform === "win32-x64" ? "-win-x64/node.exe" : "-linux-x64/bin/node"));
+  run("tar", ["-xJf", archive, "-C", extracted]);
+  const node = path.join(extracted, "node-v" + versions.node.version + "-linux-x64/bin/node");
   if (run(node, ["-p", "process.versions.node"]).trim() !== versions.node.version) throw new Error("packaged_node_version_mismatch");
   if ((await fingerprintFile(node))?.sha256 !== (await fingerprintFile(process.execPath))?.sha256) throw new Error("build_node_differs_from_pinned_runtime");
   return node;
@@ -154,11 +150,9 @@ async function probePackage(root: string, platform: ServerPlatform): Promise<voi
   const source = 'const {DatabaseSync}=require("node:sqlite"); const db=new DatabaseSync(":memory:"); db.exec("SELECT 1"); db.close(); const a=require("argon2"); a.hash("package-probe").then(h=>a.verify(h,"package-probe")).then(ok=>{if(!ok)throw Error("argon2"); console.log(JSON.stringify({node:process.versions.node,abi:process.versions.modules,sqlite:process.versions.sqlite}));});';
   const env = { ...process.env }; for (const key of ["NODE_OPTIONS", "NODE_PATH", "ELECTRON_RUN_AS_NODE"]) delete env[key];
   process.stdout.write(run(layout.nodePath, ["-e", source], layout.appRoot, env));
-  await probeLogCompressor(path.join(layout.appRoot, "runtime/7z", platform === "win32-x64" ? "7zr.exe" : "7zr"));
-  if (platform === "linux-x64") {
-    const pty = 'const p=require("node-pty").spawn("/bin/sh",["-c","test -t 0 && printf COMPET_PTY_OK"],{name:"xterm",cols:80,rows:24,cwd:process.cwd(),env:process.env});let text="";p.onData(s=>text+=s);p.onExit(e=>{if(e.exitCode!==0||!text.includes("COMPET_PTY_OK"))process.exitCode=1;else console.log("COMPET_PTY_OK")});';
-    process.stdout.write(run(layout.nodePath, ["-e", pty], layout.appRoot, env));
-  }
+  await probeLogCompressor(path.join(layout.appRoot, "runtime/7z", "7zr"));
+  const pty = 'const p=require("node-pty").spawn("/bin/sh",["-c","test -t 0 && printf COMPET_PTY_OK"],{name:"xterm",cols:80,rows:24,cwd:process.cwd(),env:process.env});let text="";p.onData(s=>text+=s);p.onExit(e=>{if(e.exitCode!==0||!text.includes("COMPET_PTY_OK"))process.exitCode=1;else console.log("COMPET_PTY_OK")});';
+  process.stdout.write(run(layout.nodePath, ["-e", pty], layout.appRoot, env));
   process.stdout.write(run(layout.nodePath, [layout.cliEntry, "--help"], os.tmpdir(), env));
   for (const name of ["plan.json", "plan.txt"]) {
     const result = spawnSync(layout.nodePath, [layout.workerEntry, "--plan", path.join(root, "absent", name), "--mode", "validate"], { env, windowsHide: true, encoding: "utf8" });
@@ -183,114 +177,71 @@ async function probePackage(root: string, platform: ServerPlatform): Promise<voi
     if ((await fs.readdir(probeRoot)).join() !== "server.json") throw new Error("config_check_wrote_data");
   } finally { await fs.rm(probeRoot, { recursive: true, force: true }); }
 }
-export async function validateWindowsArchiveTools(root: string): Promise<void> {
-  const tools = ["packaging/server/runtime/7zr.exe", ".local-tools/7zr.exe"].map(name => path.join(root, name));
-  const license = path.join(root, "packaging/server/runtime/lzma-sdk.txt");
-  await assertPlainPath(license);
-  if (!(await fs.lstat(license)).isFile() || createHash("sha256").update(await fs.readFile(license)).digest("hex") !== "987cb5b55ea7d2a2cc1c52e0a3b524a2a8b831ed1e281fce4e063bdf44185b1f") throw new Error("seven_zip_license_invalid");
-  for (const tool of tools) {
-    await assertPlainPath(tool);
-    if (!(await fs.lstat(tool)).isFile()) throw new Error("seven_zip_tool_invalid");
-    const bytes = await fs.readFile(tool);
-    if (bytes.length < 64 || bytes.readUInt16LE(0) !== 0x5a4d) throw new Error("seven_zip_tool_invalid");
-    const offset = bytes.readUInt32LE(0x3c);
-    if (offset + 6 > bytes.length || bytes.readUInt32LE(offset) !== 0x4550 || bytes.readUInt16LE(offset + 4) !== 0x8664 ||
-        createHash("sha256").update(bytes).digest("hex") !== "ae23615622947262021cba6f4ae40c84702a9a55fef8e0b1bfab8b828748d63a") throw new Error("seven_zip_tool_invalid");
-  }
-  for (const tool of tools) await probeLogCompressor(tool);
-}
-
 export async function packageServer(options: PackageOptions): Promise<void> {
+  assertNativeServerPlatform(process.platform, process.arch);
+  if (options.platform !== "linux-x64") throw new Error("server_platform_unsupported");
   await validateArtifactsDirectory(options.artifactsDir);
   const stage = path.join(options.artifactsDir, "staging", options.platform);
   await assertPlainPath(stage);
   await validatePackageSources(repositoryRoot, options.platform);
-  const sdkRoot = options.platform === "linux-x64" ? process.env.COMPET_LZMA_SDK_ROOT ?? "" : undefined;
-  if (sdkRoot !== undefined) {
-    await validateLzmaSdkRoot(sdkRoot);
-    if (await fingerprintLzmaSdkRoot(sdkRoot) !== LZMA_SDK_SOURCE_SHA256) throw new Error("lzma_sdk_source_mismatch");
-  }
-  if (options.platform === "win32-x64") await validateWindowsArchiveTools(repositoryRoot);
+  const sdkRoot = process.env.COMPET_LZMA_SDK_ROOT ?? "";
+  await validateLzmaSdkRoot(sdkRoot);
+  if (await fingerprintLzmaSdkRoot(sdkRoot) !== LZMA_SDK_SOURCE_SHA256) throw new Error("lzma_sdk_source_mismatch");
   const metadata = await readServerPackageMetadata(options.requiredClientVersion);
   // SourcePawn must complete before build output, staging or existing archives are removed.
   await buildServer();
   const node = await pinnedNode(options.platform);
-  if (options.platform === "linux-x64") {
-    const release = await fs.readFile("/etc/os-release", "utf8");
-    const version = /VERSION_ID="([0-9.]+)"/.exec(release)?.[1];
-    if (!release.includes("ID=ubuntu") || !version || Number(version) > 26.04) throw new Error("Linux release build requires Ubuntu baseline <=26.04");
-  } else run(process.execPath, [path.join(repositoryRoot, "node_modules/electron-vite/bin/electron-vite.js"), "build"]);
-  const built = sdkRoot === undefined ? undefined : await buildLogCompressor({ sdkRoot, repositoryRoot });
+  const release = await fs.readFile("/etc/os-release", "utf8");
+  const version = /VERSION_ID="([0-9.]+)"/.exec(release)?.[1];
+  if (!release.includes("ID=ubuntu") || !version || Number(version) > 26.04) throw new Error("Linux release build requires Ubuntu baseline <=26.04");
+  const built = await buildLogCompressor({ sdkRoot, repositoryRoot });
   try {
     await fs.rm(stage, { recursive: true, force: true }); await fs.mkdir(stage, { recursive: true });
     const layout = resolveServerLayout({ platform: options.platform, installRoot: stage });
     await fs.mkdir(path.dirname(layout.nodePath), { recursive: true }); await copy(node, layout.nodePath);
     await fs.mkdir(path.dirname(layout.workerEntry), { recursive: true });
-    if (options.platform === "win32-x64") {
-      const electron = path.join(stage, "runtime/electron");
-      await copy(path.join(repositoryRoot, "node_modules/electron/dist"), electron);
-      await fs.rm(path.join(electron, "resources/default_app.asar"), { force: true });
-      const locales = path.join(electron, "locales");
-      for (const name of await fs.readdir(locales)) if (!["en-US.pak", "zh-CN.pak"].includes(name)) await fs.unlink(path.join(locales, name));
-      await copy(path.join(repositoryRoot, "out"), path.join(layout.appRoot, "out"));
-      await copy(path.join(repositoryRoot, "packaging/server/runtime/7zr.exe"), path.join(layout.appRoot, "runtime/7z/7zr.exe"));
-      await copy(path.join(repositoryRoot, "packaging/server/runtime/lzma-sdk.txt"), path.join(layout.appRoot, "runtime/7z/lzma-sdk.txt"));
-      run("pwsh", ["-NoProfile", "-File", path.join(repositoryRoot, "scripts/package-server-windows-resources.ps1"), "-Stage", stage, "-Version", JSON.parse(await fs.readFile(path.join(repositoryRoot, "packaging/server/app-package.json"), "utf8")).version]);
-      await copy(path.join(repositoryRoot, "packaging/server/windows/compet.cmd"), path.join(stage, "compet.cmd"));
-    } else {
-      await copy(path.join(repositoryRoot, "packaging/server/linux/compet"), path.join(stage, "bin/compet"));
-      if (!built) throw new Error("log_compressor_build_missing");
-      await copy(built.binaryPath, path.join(stage, "runtime/7z/7zr"));
-      await copy(built.licensePath, path.join(stage, "runtime/7z/lzma-sdk.txt"));
-    }
+    await copy(path.join(repositoryRoot, "packaging/server/linux/compet"), path.join(stage, "bin/compet"));
+    await copy(built.binaryPath, path.join(stage, "runtime/7z/7zr"));
+    await copy(built.licensePath, path.join(stage, "runtime/7z/lzma-sdk.txt"));
     await fs.mkdir(layout.appRoot, { recursive: true });
     await fs.writeFile(path.join(layout.appRoot, "package.json"), JSON.stringify(metadata, null, 2) + "\n");
     await copy(path.join(repositoryRoot, "packaging/server/profile-seed/human-index.json"), path.join(layout.appRoot, "runtime/profiles/human-index.json"));
     await copy(path.join(repositoryRoot, "src/sourcemod/compet_match_lock.smx"), path.join(layout.appRoot, "sourcemod/compet_match_lock.smx"));
     await copy(path.join(repositoryRoot, "src/run_csgo"), path.join(layout.appRoot, "run_csgo"));
-    const otherExtension = options.platform === "linux-x64" ? ".ps1" : ".sh";
-    await fs.unlink(path.join(layout.appRoot, "run_csgo/run_csgo" + otherExtension));
     await copyManualMysqlEntries(repositoryRoot, layout.appRoot, options.platform);
     for (const [entry, outfile] of [["src/main.ts", layout.serviceEntry], ["src/cli/main.ts", layout.cliEntry], ["scripts/server-worker-entry.ts", layout.workerEntry]]) {
       await build({ entryPoints: [path.join(repositoryRoot, entry!)], outfile, bundle: true, platform: "node", format: "cjs", target: "node24", external: ["argon2", "node-pty"], logLevel: "warning" });
     }
     await copyRuntimeModules(layout.appRoot, options.platform);
-    if (options.platform === "linux-x64") await normalizeModes(stage);
+    await normalizeModes(stage);
     await probePackage(stage, options.platform);
     await createPackageInventory(stage, metadata.version, options.platform);
     await verifyPackageInventory(stage, metadata.version, options.platform);
-    const archive = path.join(options.artifactsDir, options.platform === "win32-x64" ? "Compet-Server-win32-x64.7z" : "Compet-Server-linux-x64.tar.xz");
+    const archive = path.join(options.artifactsDir, "Compet-Server-linux-x64.tar.xz");
     const temporary = archive + ".tmp";
     await assertPlainPath(archive); await assertPlainPath(temporary); await fs.rm(temporary, { force: true });
     try {
-      if (options.platform === "win32-x64") {
-        const sevenZip = path.join(repositoryRoot, ".local-tools/7zr.exe");
-        run(sevenZip, ["a", "-t7z", temporary, ".", "-r", "-mx=7", "-bb0", "-bd", "-y"], stage);
-        run(sevenZip, ["t", temporary, "-bb0", "-bd", "-y"]);
-      } else await createTarXzPackage({ sourceRoot: stage, targetPath: temporary, compressorPath: built!.binaryPath });
+      await createTarXzPackage({ sourceRoot: stage, targetPath: temporary, compressorPath: built.binaryPath });
       const unpack = await fs.mkdtemp(path.join(options.artifactsDir, "package-verify-"));
       try {
-        if (options.platform === "win32-x64") run(path.join(repositoryRoot, ".local-tools/7zr.exe"), ["x", temporary, "-o" + unpack, "-y"]);
-        else await extractTarXzPackage({ archivePath: temporary, targetRoot: unpack, compressorPath: built!.binaryPath });
+        await extractTarXzPackage({ archivePath: temporary, targetRoot: unpack, compressorPath: built.binaryPath });
         await verifyPackageInventory(unpack, metadata.version, options.platform);
         await probePackage(unpack, options.platform);
       } finally { await fs.rm(unpack, { recursive: true, force: true }); }
-      if (options.platform === "linux-x64") await fs.chmod(temporary, 0o644);
+      await fs.chmod(temporary, 0o644);
       await createServerUpdateFeed({ packageRoot: stage, outputRoot: path.join(options.artifactsDir, "update/server"), platform: options.platform, version: metadata.version, baseUrl: process.env.COMPET_SERVER_UPDATE_BASE_URL ?? "https://qwepplz111.site/update/server/" });
       await fs.rename(temporary, archive);
-      if (options.platform === "linux-x64") {
-        const legacy = path.join(options.artifactsDir, "Compet-Server-linux-x64.tar.gz");
-        try {
-          await assertPlainPath(legacy);
-          const info = await fs.lstat(legacy).catch(error => { if (error.code === "ENOENT") return null; throw error; });
-          if (info && !info.isFile()) throw new Error("legacy_archive_type_invalid");
-          if (info) await fs.unlink(legacy);
-        } catch (error) {
-          throw new Error("package_archive_published: " + archive + "; legacy_archive_cleanup_failed: " + String(error), { cause: error });
-        }
+      const legacy = path.join(options.artifactsDir, "Compet-Server-linux-x64.tar.gz");
+      try {
+        await assertPlainPath(legacy);
+        const info = await fs.lstat(legacy).catch(error => { if (error.code === "ENOENT") return null; throw error; });
+        if (info && !info.isFile()) throw new Error("legacy_archive_type_invalid");
+        if (info) await fs.unlink(legacy);
+      } catch (error) {
+        throw new Error("package_archive_published: " + archive + "; legacy_archive_cleanup_failed: " + String(error), { cause: error });
       }
       process.stdout.write(JSON.stringify({ archive, ...(await fingerprintFile(archive)), platform: options.platform, requiredClientVersion: options.requiredClientVersion }) + "\n");
     } finally { await fs.rm(temporary, { force: true }); }
-  } finally { await built?.dispose().catch(error => process.stderr.write("Log compressor cleanup failed: " + String(error) + "\n")); }
+  } finally { await built.dispose().catch(error => process.stderr.write("Log compressor cleanup failed: " + String(error) + "\n")); }
 }
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) await packageServer(parsePackageOptions(process.argv.slice(2)));

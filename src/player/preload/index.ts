@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { IntegrityProgress, IntegrityReport, MaintenanceStartResult } from "../../desktop/updateTypes.js";
 import type { PlayerAuthenticatedSession, RestoreSessionResult, SavedPlayerLogin } from "../main/ipc.js";
-import type { AccountView } from "../../manager/shared/types.js";
+import type { AccountView } from "../../accounts/accountTypes.js";
 import { createPreviewPlayerApi } from "./previewPlayerApi.js";
 import type { SupportedLanguage } from "../../language/types.js";
 import type { RankmeDisplay } from "../../rankme/rankmeStandings.js";

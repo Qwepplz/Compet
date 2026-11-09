@@ -29,3 +29,8 @@ export function isActivityLogInput(value: unknown): value is ActivityLogInput {
     && LOG_LEVELS.includes(entry.level as LogLevel)
     && LOG_SOURCES.includes(entry.source as LogSource);
 }
+
+export interface LogEntry extends Omit<ActivityLogInput, "timestamp"> {
+  id: string;
+  timestamp: string;
+}

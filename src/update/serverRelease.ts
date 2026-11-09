@@ -1,6 +1,6 @@
 import path from "node:path";
 import fs from "node:fs/promises";
-import { assertPlainPath, assertServerProgramRelativePath, fingerprintFile, sameFingerprint } from "../desktop/main/serverManagedFiles.js";
+import { assertPlainPath, assertServerProgramRelativePath, fingerprintFile, sameFingerprint } from "../shared/managedFiles.js";
 import { ensureSameOrigin, downloadFile, fetchUpdateResponse } from "../shared/updateTransport.js";
 import { isSemver } from "../shared/version.js";
 import type { ServerPlatform } from "../shared/serverPackageLayout.js";
@@ -33,7 +33,7 @@ export function assertUniqueServerFiles(files: ServerPackageFile[]): void {
 export function validateServerInventory(raw: unknown, platform: ServerPlatform): ServerPackageInventory {
   const value = strictObject(raw, ["schemaVersion", "appId", "version", "platform", "files"]);
   if (value.platform !== platform) updateFailure("update_manifest_platform_mismatch");
-  if (!["win32-x64", "linux-x64"].includes(platform) || value.schemaVersion !== 1 || value.appId !== "compet-server-manager" ||
+  if (platform !== "linux-x64" || value.schemaVersion !== 1 || value.appId !== "compet-server-manager" ||
       typeof value.version !== "string" || !isSemver(value.version) || !Array.isArray(value.files) || !value.files.length) updateFailure("update_manifest_invalid");
   const files = value.files.map(file => validateServerFile(file, platform));
   assertUniqueServerFiles(files);
@@ -88,7 +88,7 @@ async function strictJson(url: string, signal: AbortSignal): Promise<unknown> {
 export async function loadServerRelease(input: {
   platform: ServerPlatform; currentVersion: string; action: "check" | "apply" | "repair"; sourceRoot?: string; signal?: AbortSignal;
 }): Promise<ServerRelease> {
-  if (!["win32-x64", "linux-x64"].includes(input.platform) || !isSemver(input.currentVersion) ||
+  if (input.platform !== "linux-x64" || !isSemver(input.currentVersion) ||
       !["check", "apply", "repair"].includes(input.action)) updateFailure("update_source_invalid");
   const source = new URL(input.platform + "/", input.sourceRoot ?? "https://qwepplz111.site/update/server/").toString();
   const signal = input.signal ? AbortSignal.any([input.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000);

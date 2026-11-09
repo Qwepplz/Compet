@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 
+import { assertNativeServerPlatform } from "../shared/serverPackageLayout.js";
 import type { SourceServerExitMonitorSpec } from "./sourceServerMonitor.js";
 
 export interface RunCsgoLaunchInput {
@@ -21,13 +22,10 @@ export interface RunCsgoLaunchSpec {
   serverExitMonitor?: SourceServerExitMonitorSpec;
 }
 
-const RUN_CSGO_LAUNCH_SCRIPT = "run_csgo.ps1";
-
 export function buildRunCsgoLaunchSpec(input: RunCsgoLaunchInput): RunCsgoLaunchSpec {
   validateInput(input);
-  const linux = process.platform === "linux";
-  if (!linux && process.platform !== "win32") throw new Error("game_platform_unsupported");
-  const launchScriptPath = path.normalize(path.join(input.serverRoot, linux ? "run_csgo.sh" : RUN_CSGO_LAUNCH_SCRIPT));
+  assertNativeServerPlatform(process.platform, process.arch);
+  const launchScriptPath = path.normalize(path.join(input.serverRoot, "run_csgo.sh"));
   if (!existsSync(launchScriptPath)) {
     throw new Error(`Missing run_csgo launch script: ${launchScriptPath}`);
   }
@@ -41,21 +39,13 @@ export function buildRunCsgoLaunchSpec(input: RunCsgoLaunchInput): RunCsgoLaunch
   };
 
   return {
-    command: linux ? "/bin/bash" : "powershell.exe",
-    args: linux ? [launchScriptPath] : ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", launchScriptPath],
+    command: "/bin/bash",
+    args: [launchScriptPath],
     cwd: input.serverRoot,
     env: commonEnv,
     port: input.port,
     clientPort: input.clientPort,
-    exitIndicatesServerExit: linux,
-    ...(linux ? {} : { serverExitMonitor: {
-      host: "127.0.0.1",
-      port: input.port,
-      intervalMs: 1_000,
-      queryTimeoutMs: 750,
-      missedResponsesBeforeExit: 3,
-      startupObservationTimeoutMs: 60_000,
-    } }),
+    exitIndicatesServerExit: true,
   };
 }
 

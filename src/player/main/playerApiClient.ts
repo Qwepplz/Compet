@@ -1,5 +1,5 @@
 import { isSemver } from "../../shared/version.js";
-import type { AccountView } from "../../manager/shared/types.js";
+import type { AccountView } from "../../accounts/accountTypes.js";
 import { requestJson } from "../../shared/httpJsonClient.js";
 import type {
   PlayerFriendDto,
