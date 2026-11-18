@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { withDatabaseTransaction } from "../storage/competDatabase.js";
-import type { MatchPlayerPolicyContext } from "./types.js";
+import { MATCH_FAILURE_CAUSES, type MatchFailureCause, type MatchPlayerPolicyContext } from "./types.js";
 
 export interface PlayerMatchPolicyState {
   accountId: string;
@@ -13,6 +13,7 @@ export interface PlayerMatchPolicyState {
 export interface PlayerMatchPolicyOutcome {
   matchId: string;
   outcome: "completed" | "failed";
+  failureCause?: MatchFailureCause;
   occurredAt: string;
   dev: boolean;
   humanAccountIds: string[];
@@ -57,17 +58,25 @@ export class PlayerMatchPolicyStore {
   applyOutcome(input: PlayerMatchPolicyOutcome, now: string): PolicyOutcomeResult {
     if (input.dev || !input.context) return "ignored";
     const payload = normalizeOutcome(input);
-    const payloadJson = JSON.stringify(payload);
+    const failureCause = payload.outcome === "failed" ? input.failureCause ?? "other" : undefined;
+    if (failureCause !== undefined && !MATCH_FAILURE_CAUSES.includes(failureCause)) {
+      throw new Error("Invalid player match policy failure cause");
+    }
+    const payloadJson = JSON.stringify(failureCause === undefined ? payload : { ...payload, policyVersion: 2, failureCause });
     return withDatabaseTransaction(this.database, () => {
       const receipt = this.database.prepare(
-        "SELECT payload_json FROM player_match_policy_receipts WHERE match_id = ?",
+        "SELECT outcome, payload_json FROM player_match_policy_receipts WHERE match_id = ?",
       ).get(input.matchId);
       if (receipt) {
-        if (receipt.payload_json !== payloadJson) throw new Error("Conflicting player match policy receipt");
+        if (receipt.outcome !== payload.outcome || (receipt.payload_json !== payloadJson &&
+            (failureCause === undefined || !matchesLegacyFailedReceipt(receipt.payload_json, payload)))) {
+          throw new Error("Conflicting player match policy receipt");
+        }
         return "duplicate";
       }
       const manual = new Set(payload.manualReadyAccountIds);
-      for (const accountId of payload.humanAccountIds) {
+      const affectedAccounts = failureCause === "other" ? [] : payload.humanAccountIds;
+      for (const accountId of affectedAccounts) {
         const account = this.database.prepare("SELECT role FROM accounts WHERE id = ?").get(accountId);
         if (account?.role !== "player") continue;
         const state = this.get(accountId);
@@ -114,4 +123,15 @@ function normalizeOutcome(input: PlayerMatchPolicyOutcome) {
   }
   return { matchId: input.matchId, outcome: input.outcome, occurredAt: input.occurredAt,
     dev: input.dev, forcedBalance: context.forcedBalance, humanAccountIds, manualReadyAccountIds };
+}
+
+function matchesLegacyFailedReceipt(raw: unknown, expected: ReturnType<typeof normalizeOutcome>): boolean {
+  if (typeof raw !== "string") return false;
+  let saved: Record<string, unknown>;
+  try { saved = JSON.parse(raw); }
+  catch { return false; }
+  if (!saved || typeof saved !== "object" || Array.isArray(saved)) return false;
+  const fields = Object.entries(expected);
+  return Object.keys(saved).length === fields.length && fields.every(([key, value]) =>
+    Object.hasOwn(saved, key) && JSON.stringify(saved[key]) === JSON.stringify(value));
 }

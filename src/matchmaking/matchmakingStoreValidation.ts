@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { MATCH_FAILURE_CAUSES } from "./types.js";
 import type { QueueFile, PartiesFile, PartyInvitationsFile, RoomsFile } from "./matchmakingStore.js";
 
 const participantSchema = z.object({
@@ -91,6 +92,7 @@ const roomsFileSchema = z.object({
       "connect", "live", "completed", "failed"]),
     dev: z.literal(true).optional(),
     databaseWriteStarted: z.boolean().optional(),
+    failureCause: z.enum(MATCH_FAILURE_CAUSES).optional(),
     matchPolicy: z.object({
       forcedBalance: z.boolean(),
       manualReadyAccountIds: z.array(z.string().min(1)),
@@ -126,7 +128,7 @@ const roomsFileSchema = z.object({
     }).optional(),
     createdAt: z.string(),
     terminalStateAt: z.string().optional(),
-  })),
+  }).refine(room => room.phase === "failed" || room.failureCause === undefined, { path: ["failureCause"] })),
   pendingBackupCleanupMatchIds: z.array(z.string().min(1)).optional(),
   pendingMatchFailedEvents: z.array(z.object({
     eventId: z.string(),

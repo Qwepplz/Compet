@@ -17,7 +17,9 @@ export async function prepareSourceModForServerStartup(serverRoot: string): Prom
   const corePath = path.join(sourceMod, "configs", "core.cfg");
   const pluginDir = path.join(sourceMod, "plugins");
   await prepareCoreConfig(corePath);
-  await disableNextmap(pluginDir);
+  for (const pluginFileName of ["nextmap.smx", "basebans.smx"]) {
+    await disablePlugin(pluginDir, pluginFileName);
+  }
 }
 
 async function prepareCoreConfig(corePath: string): Promise<void> {
@@ -217,10 +219,10 @@ function scanKeyValues(text: string): Token[] {
   return tokens;
 }
 
-async function disableNextmap(pluginDir: string): Promise<void> {
-  const source = path.join(pluginDir, "nextmap.smx");
+async function disablePlugin(pluginDir: string, pluginFileName: string): Promise<void> {
+  const source = path.join(pluginDir, pluginFileName);
   const disabled = path.join(pluginDir, "disabled");
-  const target = path.join(disabled, "nextmap.smx");
+  const target = path.join(disabled, pluginFileName);
   let sourceInfo;
   try {
     sourceInfo = await fs.lstat(source);

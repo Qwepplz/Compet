@@ -5,6 +5,9 @@ export type TeamSide = "teamA" | "teamB";
 export type GameSide = "t" | "ct";
 export type MatchPhase = "queue" | "ready" | "match_room" | "map_randomizing" | "server_prepare" | "connect" | "live" | "completed" | "failed";
 
+export const MATCH_FAILURE_CAUSES = ["compet_empty_server", "get5_insufficient_players", "other"] as const;
+export type MatchFailureCause = typeof MATCH_FAILURE_CAUSES[number];
+
 export interface MatchParticipant {
   id: string;
   kind: ParticipantKind;

@@ -98,8 +98,9 @@ export async function readGet5MatchResult(
 async function readStatsFile(filePath: string): Promise<string | null> {
   try {
     return await readFile(filePath, "utf8");
-  } catch {
-    return null;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
   }
 }
 

@@ -5,6 +5,8 @@ import type { GameProcessIdentity } from "./linuxProcess.js";
 export interface GameServerExitInfo {
   code: number | null;
   signal: NodeJS.Signals | null;
+  signalNumber?: number;
+  wrapperExitUnconfirmed?: true;
   output: string[];
 }
 

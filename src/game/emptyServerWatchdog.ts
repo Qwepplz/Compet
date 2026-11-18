@@ -1,4 +1,5 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
 import path from "node:path";
 
 export interface EmptyServerWatchdogConfig {
@@ -35,6 +36,8 @@ export class EmptyServerWatchdog {
   private emptyChecks = 0;
   private checking = false;
   private shutdownRequested = false;
+  private stopped = false;
+  private shutdownRequest?: Promise<void>;
   private startTimer?: ReturnType<typeof setTimeout>;
   private intervalTimer?: ReturnType<typeof setInterval>;
 
@@ -45,19 +48,24 @@ export class EmptyServerWatchdog {
       return;
     }
 
+    this.stopped = false;
     const delayMs = this.options.config?.initialDelayMs ?? DEFAULT_INITIAL_DELAY_MS;
+    const check = () => {
+      void this.checkOnce().catch(error => {
+        process.stderr.write("[Compet] Empty server watchdog " + this.options.matchId + ": " + String(error) + "\n");
+      });
+    };
     this.startTimer = setTimeout(() => {
       this.startTimer = undefined;
-      void this.checkOnce();
-      this.intervalTimer = setInterval(() => {
-        void this.checkOnce();
-      }, this.options.config?.intervalMs ?? DEFAULT_INTERVAL_MS);
+      check();
+      this.intervalTimer = setInterval(check, this.options.config?.intervalMs ?? DEFAULT_INTERVAL_MS);
       unrefTimer(this.intervalTimer);
     }, delayMs);
     unrefTimer(this.startTimer);
   }
 
   stop(): void {
+    this.stopped = true;
     if (this.startTimer) {
       clearTimeout(this.startTimer);
       this.startTimer = undefined;
@@ -68,15 +76,20 @@ export class EmptyServerWatchdog {
     }
   }
 
+  async stopAndDrain(): Promise<void> {
+    this.stop();
+    await this.shutdownRequest?.catch(() => undefined);
+  }
+
   async checkOnce(): Promise<void> {
-    if (this.checking || this.shutdownRequested) return;
+    if (this.stopped || this.checking || this.shutdownRequested) return;
     this.checking = true;
     try {
       const status = await readCurrentStatus(this.options.serverRoot, this.options.matchId, {
         staleAfterMs: this.options.config?.staleAfterMs ?? DEFAULT_STALE_AFTER_MS,
         nowMs: this.options.nowMs ?? Date.now,
       });
-      if (!status) return;
+      if (!status || this.stopped) return;
 
       if (status.humanCount > 0) {
         this.emptyChecks = 0;
@@ -87,9 +100,14 @@ export class EmptyServerWatchdog {
       const limit = this.options.config?.emptyChecksBeforeShutdown ?? DEFAULT_EMPTY_CHECKS_BEFORE_SHUTDOWN;
       if (this.emptyChecks < limit) return;
 
-      this.shutdownRequested = true;
-      this.stop();
-      await requestSourceModShutdown(this.options.serverRoot, this.options.matchId);
+      this.shutdownRequest = requestSourceModShutdown(this.options.serverRoot, this.options.matchId, "empty_server");
+      try {
+        await this.shutdownRequest;
+        this.shutdownRequested = true;
+        this.stop();
+      } finally {
+        this.shutdownRequest = undefined;
+      }
       await this.options.records?.appendEvent(this.options.matchId, {
         type: "empty_server_shutdown_requested",
         at: new Date(this.options.nowMs?.() ?? Date.now()).toISOString(),
@@ -121,10 +139,27 @@ export async function readCurrentStatus(
   return status;
 }
 
-export async function requestSourceModShutdown(serverRoot: string, matchId: string): Promise<void> {
+export async function requestSourceModShutdown(
+  serverRoot: string,
+  matchId: string,
+  reason: "empty_server" | "controlled" = "controlled",
+): Promise<void> {
   const flagPath = sourceModShutdownFlagPath(serverRoot);
   await mkdir(path.dirname(flagPath), { recursive: true });
-  await writeFile(flagPath, `${matchId}\n`, "utf8");
+  const temporary = flagPath + "." + randomUUID() + ".tmp";
+  const file = await open(temporary, "wx");
+  try {
+    try { await file.writeFile(matchId + "\n" + reason + "\n", "utf8"); }
+    finally { await file.close(); }
+    await rename(temporary, flagPath);
+  } catch (error) {
+    try {
+      await rm(temporary, { force: true });
+    } catch (cleanupError) {
+      process.stderr.write("[Compet] Could not remove shutdown request temporary file " + temporary + ": " + String(cleanupError) + "\n");
+    }
+    throw error;
+  }
 }
 
 export function sourceModStatusPath(serverRoot: string): string {

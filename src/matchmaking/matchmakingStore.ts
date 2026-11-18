@@ -1,7 +1,7 @@
 import path from "node:path";
 import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
-import type { MatchPhase, MatchTeam, MatchPlayerPolicyContext } from "./types.js";
+import type { MatchFailureCause, MatchPhase, MatchTeam, MatchPlayerPolicyContext } from "./types.js";
 import { assertQueueFile, assertPartiesFile, assertInvitationsFile, assertRoomsFile } from "./matchmakingStoreValidation.js";
 
 export interface QueueEntry {
@@ -71,6 +71,7 @@ export interface PendingMatchDraft {
 }
 
 export interface MatchRoomRecord {
+  failureCause?: MatchFailureCause;
   matchPolicy?: MatchPlayerPolicyContext;
   id: string;
   phase: MatchPhase;

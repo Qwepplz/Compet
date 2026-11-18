@@ -70,6 +70,12 @@ int g_SecondHalfScoreT = 0;
 int g_SecondHalfScoreCT = 0;
 int g_RegulationRoundsScored = 0;
 
+enum QuitSource { QuitSource_External, QuitSource_Empty, QuitSource_Controlled };
+QuitSource g_QuitSource = QuitSource_External;
+QuitSource g_PendingQuitSource = QuitSource_External;
+int g_QuitSourceToken;
+bool g_QuitObserved = false;
+
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
   g_RecordIndex = new StringMap();
@@ -80,8 +86,12 @@ public void OnPluginStart() {
   RegServerCmd("compet_lock_reset", Command_ResetLock);
   RegServerCmd("compet_lock_add", Command_AddPlayer);
   RegServerCmd("compet_lock_enable", Command_EnableLock);
+  RegServerCmd("compet_shutdown_source", Command_SetQuitSource);
   AddCommandListener(Command_JoinTeam, "jointeam");
   AddCommandListener(Command_JoinTeam, "joingame");
+  if (!AddCommandListener(Command_ObserveQuit, "quit")) {
+    LogError("[Compet] Could not register quit observation listener.");
+  }
   HookEvent("round_start", Event_RoundStart, EventHookMode_Post);
   HookEvent("round_end", Event_RoundEnd, EventHookMode_Post);
   HookEvent("player_hurt", Event_PlayerHurt, EventHookMode_Post);
@@ -160,6 +170,9 @@ public Action Command_ResetLock(int args) {
     GetCmdArg(1, g_MatchId, sizeof(g_MatchId));
   }
   ResetMatchStats();
+  g_QuitSource = QuitSource_External;
+  g_PendingQuitSource = QuitSource_External;
+  g_QuitObserved = false;
   ClearShutdownFlag();
   StartStatusTimer();
   return Plugin_Handled;
@@ -1117,6 +1130,67 @@ void WriteConsoleStatus() {
   delete file;
 }
 
+public Action Command_SetQuitSource(int args) {
+  if (args == 0) {
+    g_QuitSource = QuitSource_External;
+  } else if (args == 1 && g_PendingQuitSource != QuitSource_External && GetCmdArgInt(1) == g_QuitSourceToken) {
+    g_QuitSource = g_PendingQuitSource;
+    g_PendingQuitSource = QuitSource_External;
+  }
+  return Plugin_Handled;
+}
+
+public Action Command_ObserveQuit(int client, const char[] command, int argc) {
+  if (client != 0 || g_QuitObserved || g_MatchId[0] == '\0') {
+    return Plugin_Continue;
+  }
+  g_QuitObserved = true;
+  for (int i = 0; g_MatchId[i] != '\0'; i++) {
+    int c = g_MatchId[i];
+    if (!IsCharAlpha(c) && !IsCharNumeric(c) && c != '-' && c != '_') {
+      LogError("[Compet] Could not write quit observation for invalid match ID.");
+      return Plugin_Continue;
+    }
+  }
+  if (!EnsureCompetMatchDataDir()) {
+    LogError("[Compet] Could not create quit observation directory for %s.", g_MatchId);
+    return Plugin_Continue;
+  }
+
+  char path[PLATFORM_MAX_PATH];
+  char temporary[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet/matches/%s/shutdown-observation.json", g_MatchId);
+  BuildPath(Path_SM, temporary, sizeof(temporary), "data/compet/matches/%s/.shutdown-observation-%d-%d.tmp",
+    g_MatchId, GetTime(), GetURandomInt());
+  if (FileExists(path) || DirExists(path)) {
+    LogError("[Compet] Quit observation already exists for %s.", g_MatchId);
+    return Plugin_Continue;
+  }
+  File file = OpenFile(temporary, "wx");
+  if (file == null) {
+    LogError("[Compet] Could not open quit observation temporary file for %s.", g_MatchId);
+    return Plugin_Continue;
+  }
+
+  char kind[24];
+  switch (g_QuitSource) {
+    case QuitSource_Empty: strcopy(kind, sizeof(kind), "compet_empty_server");
+    case QuitSource_Controlled: strcopy(kind, sizeof(kind), "controlled");
+    default: strcopy(kind, sizeof(kind), "external");
+  }
+  bool written = WriteFileLine(file, "{\"version\":1,\"matchId\":\"%s\",\"kind\":\"%s\",\"atUnix\":%d}",
+    g_MatchId, kind, GetTime());
+  written = FlushFile(file) && written;
+  delete file;
+  if (!written || FileExists(path) || DirExists(path) || !RenameFile(path, temporary)) {
+    LogError("[Compet] Could not publish quit observation for %s.", g_MatchId);
+    if (!DeleteFile(temporary)) {
+      LogError("[Compet] Could not remove quit observation temporary file for %s.", g_MatchId);
+    }
+  }
+  return Plugin_Continue;
+}
+
 void CheckShutdownFlag() {
   char path[PLATFORM_MAX_PATH];
   BuildPath(Path_SM, path, sizeof(path), "data/compet/shutdown.flag");
@@ -1126,27 +1200,35 @@ void CheckShutdownFlag() {
 
   char requestedMatchId[128];
   requestedMatchId[0] = '\0';
+  char reason[32];
+  reason[0] = '\0';
   File file = OpenFile(path, "r");
   if (file != null) {
     ReadFileLine(file, requestedMatchId, sizeof(requestedMatchId));
+    ReadFileLine(file, reason, sizeof(reason));
     delete file;
   }
   DeleteFile(path);
   TrimString(requestedMatchId);
+  TrimString(reason);
 
   if (g_MatchId[0] == '\0' || !StrEqual(requestedMatchId, g_MatchId)) {
     PrintToServer("[Compet] Ignored shutdown flag for %s while running %s.", requestedMatchId, g_MatchId);
     return;
   }
 
-  PrintToServer("[Compet] Empty server shutdown requested for match %s.", g_MatchId);
+  g_PendingQuitSource = StrEqual(reason, "empty_server") ? QuitSource_Empty : QuitSource_Controlled;
+  g_QuitSourceToken = GetURandomInt();
+  PrintToServer("[Compet] Shutdown requested for match %s (%s).", g_MatchId,
+    g_PendingQuitSource == QuitSource_Empty ? "empty_server" : "controlled");
   if (!g_MatchFinalized) {
     RefreshAllNativeStats();
     WriteMatchStats();
     g_MatchFinalized = true;
     g_StatsActive = false;
   }
-  ServerCommand("quit");
+  // Arm the source at dispatch time so an earlier queued quit stays external.
+  ServerCommand("compet_shutdown_source %d; quit; compet_shutdown_source", g_QuitSourceToken);
 }
 
 void ClearShutdownFlag() {

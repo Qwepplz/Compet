@@ -9,6 +9,16 @@ export interface GameProcessIdentity {
   processGroupId: number;
 }
 
+export function isGameProcessIdentity(value: unknown): value is GameProcessIdentity {
+  if (!value || typeof value !== "object") return false;
+  const identity = value as Partial<GameProcessIdentity>;
+  return typeof identity.pid === "number" && Number.isSafeInteger(identity.pid) && identity.pid > 0 &&
+    typeof identity.processGroupId === "number" && Number.isSafeInteger(identity.processGroupId) && identity.processGroupId > 0 &&
+    typeof identity.startTimeTicks === "string" && /^[0-9]+$/.test(identity.startTimeTicks) &&
+    typeof identity.executable === "string" && path.posix.isAbsolute(identity.executable) &&
+    typeof identity.serverRoot === "string" && path.posix.isAbsolute(identity.serverRoot);
+}
+
 function parseStat(text: string) {
   const fields = text.slice(text.lastIndexOf(") ") + 2).trim().split(/\s+/);
   if (!/^[0-9]+$/.test(fields[19] ?? "") || !Number.isSafeInteger(Number(fields[2]))) {
@@ -31,17 +41,27 @@ export async function readLinuxProcessIdentity(pid: number, serverRoot: string):
 }
 
 export async function probeLinuxGameProcess(identity: GameProcessIdentity): Promise<"alive" | "gone" | "unknown"> {
-  if (!identity || !Number.isSafeInteger(identity.pid) || identity.pid <= 0 || typeof identity.startTimeTicks !== "string" || !/^[0-9]+$/.test(identity.startTimeTicks) ||
-      typeof identity.executable !== "string" || typeof identity.serverRoot !== "string" ||
-      !path.posix.isAbsolute(identity.executable) || !path.posix.isAbsolute(identity.serverRoot)) return "unknown";
+  const state = await inspectLinuxGameProcessIdentity(identity);
+  return state === "mismatch" ? "unknown" : state;
+}
+
+export async function inspectLinuxGameProcessIdentity(identity: GameProcessIdentity): Promise<"alive" | "gone" | "mismatch" | "unknown"> {
+  if (!isGameProcessIdentity(identity)) return "unknown";
+  const directory = "/proc/" + identity.pid;
   try {
-    const stat = parseStat(await fs.readFile("/proc/" + identity.pid + "/stat", "utf8"));
+    const stat = parseStat(await fs.readFile(directory + "/stat", "utf8"));
     if (stat.startTimeTicks !== identity.startTimeTicks || stat.state === "Z" || stat.state === "X") return "gone";
-    const executable = await fs.readlink("/proc/" + identity.pid + "/exe");
-    const cwd = await fs.readlink("/proc/" + identity.pid + "/cwd");
-    if (executable !== identity.executable || cwd !== identity.serverRoot || stat.processGroupId !== identity.processGroupId) return "unknown";
-    const checked = parseStat(await fs.readFile("/proc/" + identity.pid + "/stat", "utf8"));
-    return checked.startTimeTicks === identity.startTimeTicks ? "alive" : "gone";
+    const [executable, cwd] = await Promise.allSettled([
+      fs.readlink(directory + "/exe"),
+      fs.readlink(directory + "/cwd"),
+    ]);
+    const checked = parseStat(await fs.readFile(directory + "/stat", "utf8"));
+    if (checked.startTimeTicks !== identity.startTimeTicks || checked.state === "Z" || checked.state === "X") return "gone";
+    const stableGroup = stat.processGroupId === checked.processGroupId;
+    if ((executable.status === "fulfilled" && executable.value !== identity.executable) ||
+        (cwd.status === "fulfilled" && cwd.value !== identity.serverRoot) ||
+        (stableGroup && checked.processGroupId !== identity.processGroupId)) return "mismatch";
+    return stableGroup && executable.status === "fulfilled" && cwd.status === "fulfilled" ? "alive" : "unknown";
   } catch (error) {
     return ["ENOENT", "ESRCH"].includes((error as NodeJS.ErrnoException).code ?? "") ? "gone" : "unknown";
   }

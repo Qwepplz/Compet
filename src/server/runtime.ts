@@ -14,7 +14,8 @@ import { resolveServerLayout, type ServerLayout } from "../shared/serverPackageL
 import { isServerUpdateBlocked } from "../update/serverUpdate.js";
 import { FriendService } from "../friends/friendService.js";
 import { FriendStore } from "../friends/friendStore.js";
-import { MatchExecutor } from "../game/matchExecutor.js";
+import { GameServerShutdownRetryError, MatchExecutor } from "../game/matchExecutor.js";
+import { delay } from "../shared/async.js";
 import { MatchDemoLifecycle, probeDemoRoot, probeDemoOwner } from "../game/matchDemoLifecycle.js";
 import { readGet5DemoEvidence } from "../game/get5MatchResult.js";
 import { SevenZipTarXzCodec } from "../archive/tarXzCodec.js";
@@ -52,6 +53,18 @@ export interface Runtime {
 }
 
 const DEFAULT_OFFLINE_CLEANUP_GRACE_MS = 15_000;
+
+async function retryGameServerShutdown<T>(shutdown: () => Promise<T>): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await shutdown();
+    } catch (error) {
+      if (!(error instanceof GameServerShutdownRetryError)) throw error;
+      if (attempt === 1) console.error("Waiting to finish game server shutdown", error);
+      await delay(1000);
+    }
+  }
+}
 
 export async function createRuntime(config: ServerConfig, layout?: ServerLayout): Promise<Runtime> {
   if (!isSemver(config.requiredClientVersion)) throw new Error("Invalid requiredClientVersion");
@@ -143,6 +156,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       onServerExit: async (matchId, report) => {
         await matchmaking?.completeMatchFromServerExit(matchId, report);
       },
+      onServerExitReportPending: (matchId, retry) => matchmaking?.scheduleServerExitReportAssemblyRetry(matchId, retry),
       onGameServerPresence: (matchId, steam64s) => matchmaking?.updateGameServerPresence(matchId, steam64s),
     });
     const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
@@ -215,7 +229,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       const errors: unknown[] = [];
       const demoClose = demos?.close();
       void demoClose?.catch(() => undefined);
-      try { await matchmakingService.stopBackgroundTasks(); }
+      try { await retryGameServerShutdown(() => matchmakingService.stopBackgroundTasks()); }
       catch (error) { errors.push(error); }
       try { await demoClose; }
       catch (error) { errors.push(error); }
@@ -235,7 +249,7 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
         const demoClose = demos?.close();
         void demoClose?.catch(() => undefined);
         try {
-          return await matchmakingService.shutdownForServiceStop();
+          return await retryGameServerShutdown(() => matchmakingService.shutdownForServiceStop());
         } finally {
           await app.close();
         }

@@ -1,8 +1,10 @@
 import path from "node:path";
-import { readFile, rm } from "node:fs/promises";
-import type { MatchServerExitReport } from "../game/matchExecutor.js";
+import { lstat, readFile, rm } from "node:fs/promises";
+import type { MatchServerExitObservation, MatchServerExitReport } from "../game/matchExecutor.js";
 import { z } from "zod";
 import { isValidMr12FinalScore } from "../game/get5MatchResult.js";
+import { shutdownEvidenceSchema, shutdownLogBaselineSchema, type ShutdownEvidence, type ShutdownLogBaseline } from "../game/shutdownEvidence.js";
+import { assertPlainPath } from "../shared/managedFiles.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { MatchPlan, MatchSeriesResult } from "../matchmaking/types.js";
 import { withDatabaseTransaction } from "../storage/competDatabase.js";
@@ -37,12 +39,20 @@ const get5ResultSchema = z.object({
   && isValidMr12FinalScore(result.team1Score, result.team2Score, result.winner)
 ));
 const sideHalfSchema = z.object({ t: scoreSchema, ct: scoreSchema });
+const exitInfoSchema = z.object({
+  code: z.number().int().nullable(),
+  signal: z.custom<NodeJS.Signals>((value) => typeof value === "string" && /^SIG[A-Z0-9]+$/.test(value)).nullable(),
+  signalNumber: z.number().int().positive().optional(),
+  wrapperExitUnconfirmed: z.literal(true).optional(),
+  output: z.array(z.string()),
+});
+const serverExitObservationSchema = z.strictObject({
+  matchId: z.string().regex(SAFE_MATCH_ID_PATTERN),
+  observedAt: z.iso.datetime({ offset: true }),
+  exitInfo: exitInfoSchema,
+});
 const serverExitReportSchema = z.object({
-  exitInfo: z.object({
-    code: z.number().int().nullable(),
-    signal: z.custom<NodeJS.Signals>((value) => typeof value === "string" && /^SIG[A-Z0-9]+$/.test(value)).nullable(),
-    output: z.array(z.string()),
-  }),
+  exitInfo: exitInfoSchema,
   get5Result: z.union([
     z.object({ status: z.literal("normal"), result: get5ResultSchema }),
     z.object({ status: z.literal("abnormal"), reason: z.string().min(1) }),
@@ -215,7 +225,21 @@ export class MatchRecordStore {
 
   async readServer(matchId: string): Promise<unknown> {
     this.assertSafeMatchId(matchId);
-    return this.readOptionalMatchFile(matchId, "server.json");
+    const file = this.matchFile(matchId, "server.json");
+    let raw: string;
+    try {
+      raw = await readFile(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch (error) {
+      if (!(error instanceof SyntaxError)) throw error;
+      process.stderr.write("Invalid server.json for match " + matchId + "\n");
+      return null;
+    }
   }
 
   async saveServer(matchId: string, server: unknown): Promise<void> {
@@ -235,6 +259,30 @@ export class MatchRecordStore {
   async saveServerExitReport(matchId: string, report: MatchServerExitReport): Promise<void> {
     this.assertSafeMatchId(matchId);
     await this.saveMatchFile(matchId, "server-exit.json", report, { pretty: false, durable: true });
+  }
+
+  async readServerExitObservation(matchId: string): Promise<MatchServerExitObservation | undefined> {
+    return this.readShutdownCheckpoint(matchId, "server-exit-observed.json", serverExitObservationSchema);
+  }
+
+  async saveServerExitObservation(matchId: string, observation: MatchServerExitObservation): Promise<void> {
+    await this.saveShutdownCheckpoint(matchId, "server-exit-observed.json", serverExitObservationSchema, observation);
+  }
+
+  async readShutdownLogBaseline(matchId: string): Promise<ShutdownLogBaseline | undefined> {
+    return this.readShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema);
+  }
+
+  async saveShutdownLogBaseline(matchId: string, baseline: ShutdownLogBaseline): Promise<void> {
+    await this.saveShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema, baseline);
+  }
+
+  async readShutdownEvidence(matchId: string): Promise<ShutdownEvidence | undefined> {
+    return this.readShutdownCheckpoint(matchId, "shutdown-evidence.json", shutdownEvidenceSchema);
+  }
+
+  async saveShutdownEvidence(matchId: string, evidence: ShutdownEvidence): Promise<void> {
+    await this.saveShutdownCheckpoint(matchId, "shutdown-evidence.json", shutdownEvidenceSchema, evidence);
   }
 
   async saveStatus(matchId: string, status: unknown): Promise<void> {
@@ -284,11 +332,45 @@ export class MatchRecordStore {
     }
   }
 
+  private async readShutdownCheckpoint<T extends { matchId: string }>(
+    matchId: string, fileName: string, schema: z.ZodType<T>,
+  ): Promise<T | undefined> {
+    const file = this.matchFile(matchId, fileName);
+    await assertPlainPath(file);
+    let raw: string;
+    try {
+      if (!(await lstat(file)).isFile()) throw new Error("Invalid checkpoint file: " + file);
+      raw = await readFile(file, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    }
+    try {
+      const checkpoint = schema.parse(JSON.parse(raw));
+      if (checkpoint.matchId !== matchId) throw new Error("matchId mismatch");
+      return checkpoint;
+    } catch (error) {
+      throw new Error("Invalid " + fileName + " for " + matchId, { cause: error });
+    }
+  }
+
+  private async saveShutdownCheckpoint<T extends { matchId: string }>(
+    matchId: string, fileName: string, schema: z.ZodType<T>, input: T,
+  ): Promise<void> {
+    const checkpoint = schema.parse(input);
+    if (checkpoint.matchId !== matchId) throw new Error("Invalid matchId for " + fileName + ": " + matchId);
+    await this.saveMatchFile(matchId, fileName, checkpoint, {
+      pretty: false,
+      durable: true,
+      createParent: fileName === "shutdown-log-baseline.json",
+    });
+  }
+
   private async saveMatchFile(
     matchId: string,
     fileName: string,
     value: unknown,
-    options: { pretty?: boolean; durable?: boolean } = {},
+    options: { pretty?: boolean; durable?: boolean; createParent?: boolean } = {},
   ): Promise<void> {
     if (this.readMatchRow(matchId)) return;
     const filePath = this.matchFile(matchId, fileName);

@@ -1,8 +1,17 @@
 import path from "node:path";
+import { constants } from "node:os";
 import { delay } from "../shared/async.js";
 import type { GameServerLauncher, GameServerExitInfo, LaunchedGameServer } from "./gameServerLauncher.js";
 import type { RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
-import { findLinuxGameProcess, inspectLinuxProcessUdpPort, inspectLinuxUdpPort, probeLinuxGameProcess, type GameProcessIdentity } from "./linuxProcess.js";
+import {
+  findLinuxGameProcess, inspectLinuxGameProcessIdentity, inspectLinuxGameRoot, inspectLinuxProcessUdpPort,
+  inspectLinuxUdpPort, probeLinuxGameProcess, type GameProcessIdentity,
+} from "./linuxProcess.js";
+
+const WRAPPER_EXIT_GRACE_MS = 1_000;
+const signalNames = new Map(Object.entries(constants.signals).map(
+  ([name, number]) => [number, name as NodeJS.Signals],
+));
 
 function fail(code: string): never { throw Object.assign(new Error(code), { code }); }
 
@@ -23,7 +32,12 @@ export class LinuxGameServerLauncher implements GameServerLauncher {
       output.push(text); if (output.length > 200) output.shift();
       this.options.onStdout?.(text);
     });
-    const exitListener = child.onExit(info => { wrapperExit = info; });
+    let notifyWrapperExit!: () => void;
+    const wrapperExited = new Promise<void>(resolve => { notifyWrapperExit = resolve; });
+    const exitListener = child.onExit(info => {
+      wrapperExit = info;
+      notifyWrapperExit();
+    });
     const deadline = Date.now() + (this.options.startupTimeoutMs ?? 60_000);
     let identity;
     while (Date.now() < deadline) {
@@ -43,9 +57,31 @@ export class LinuxGameServerLauncher implements GameServerLauncher {
     let requestedSignal: NodeJS.Signals | null = null;
     const exitPromise = (async (): Promise<GameServerExitInfo> => {
       for (;;) {
-        if (await probeLinuxGameProcess(ownedIdentity) === "gone" && await inspectLinuxUdpPort(spec.port) === "free") {
-          exitInfo = { code: wrapperExit?.exitCode ?? null,
-            signal: requestedSignal ?? (wrapperExit?.signal === 15 ? "SIGTERM" : null), output: [...output] };
+        const processState = await inspectLinuxGameProcessIdentity(ownedIdentity);
+        const gameAbsent = processState === "gone" || (processState === "mismatch" && wrapperExit !== undefined &&
+          await inspectLinuxGameRoot(ownedIdentity.serverRoot) === "gone");
+        if (gameAbsent && await inspectLinuxUdpPort(spec.port) === "free") {
+          if (!wrapperExit) {
+            // waitpid delivery can trail /proc and UDP observations by a turn.
+            let timer: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([
+                wrapperExited,
+                new Promise<void>(resolve => { timer = setTimeout(resolve, WRAPPER_EXIT_GRACE_MS); }),
+              ]);
+            } finally {
+              clearTimeout(timer);
+            }
+          }
+          const signalNumber = wrapperExit?.signal;
+          const signal = signalNumber ? signalNames.get(signalNumber) : undefined;
+          exitInfo = {
+            code: wrapperExit?.exitCode ?? null,
+            signal: signal ?? requestedSignal,
+            ...(signalNumber && !signal ? { signalNumber } : {}),
+            ...(!wrapperExit ? { wrapperExitUnconfirmed: true as const } : {}),
+            output: [...output],
+          };
           dataListener.dispose(); exitListener.dispose();
           return exitInfo;
         }

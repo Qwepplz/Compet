@@ -6,7 +6,8 @@ import type { FriendListDto } from "../friends/friendService.js";
 import type { CompetMatchHalfScores, CompetMatchPlayerStats, CompetSideHalfScore } from "../game/competMatchStats.js";
 import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
-import type { GameServerShutdownResult, MatchConnectInfo, MatchServerExitReport } from "../game/matchExecutor.js";
+import { classifyFailureCause, type ShutdownEvidence } from "../game/shutdownEvidence.js";
+import { GameServerShutdownRetryError, type GameServerShutdownResult, type MatchConnectInfo, type MatchServerExitObservation, type MatchServerExitReport } from "../game/matchExecutor.js";
 import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import { rankmeDisplayFromLookup, type RankmeDisplay } from "../rankme/rankmeStandings.js";
 import type { GamePresenceChange, PresenceService } from "../presence/presenceService.js";
@@ -16,7 +17,7 @@ import type { PlayerMatchPolicyPort } from "./playerMatchPolicyStore.js";
 import type { PlayerMarkView } from "../shared/playerMarkTypes.js";
 import { assignDevTeams, assignTeams } from "./teamAssignment.js";
 import type { PartyInvitationDto } from "./partyInvitationTypes.js";
-import type { GameSide, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayerResult, MatchSeriesResult, MatchTeam, TeamSide } from "./types.js";
+import type { GameSide, MatchFailureCause, MatchHalfScore, MatchParticipant, MatchPlan, MatchPlayerResult, MatchSeriesResult, MatchTeam, TeamSide } from "./types.js";
 import {
   MatchmakingStore,
   type MatchMapSelectionState,
@@ -211,11 +212,15 @@ type ReadyTimeoutScheduler = (handler: () => void, timeoutMs: number) => ReadyTi
 type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
 
 export interface MatchExecutorPort {
+  collectShutdownEvidence?(matchId: string): Promise<ShutdownEvidence>;
   settleMatchDemos?(matchId: string): Promise<void>;
   getGameServerStatus?(): Promise<import("../server/adminStatus.js").AdminGameStatus>;
-  prepare(plan: MatchPlan): Promise<MatchConnectInfo>;
+  prepare(plan: MatchPlan, signal?: AbortSignal): Promise<MatchConnectInfo>;
   deleteMatchArtifacts?(matchId: string): Promise<void>;
   requestGameServerShutdown?(matchId: string): Promise<GameServerShutdownResult>;
+  waitForServerExitHandoffs?(): Promise<ReadonlySet<string>>;
+  flushPendingServerExitObservations?(): Promise<void>;
+  readObservedServerExitReport?(observation: MatchServerExitObservation): Promise<MatchServerExitReport>;
   stopGameServerPresence?(matchId: string): Promise<void>;
 }
 
@@ -237,7 +242,7 @@ export interface MatchmakingServiceDeps {
   botCatalog: BotCatalog;
   executor?: MatchExecutorPort;
   databaseBackup?: MatchDatabaseBackup;
-  records?: Pick<MatchRecordStore, "appendEvent" | "completeMatch" | "cleanupCompletedMatchFiles" | "deleteMatch" | "listPlayerCompletedMatches" | "listRecentMatchMaps" | "readCompletedMatch" | "readMatchPlan" | "saveMatchPlan" | "saveStatus"> & Partial<Pick<MatchRecordStore, "readServerExitReport" | "saveServerExitReport">>;
+  records?: Pick<MatchRecordStore, "appendEvent" | "completeMatch" | "cleanupCompletedMatchFiles" | "deleteMatch" | "listPlayerCompletedMatches" | "listRecentMatchMaps" | "readCompletedMatch" | "readMatchPlan" | "saveMatchPlan" | "saveStatus"> & Partial<Pick<MatchRecordStore, "readServerExitReport" | "readServerExitObservation" | "saveServerExitReport" | "readShutdownEvidence" | "saveShutdownEvidence">>;
   rankme?: RankmeScoreReader;
   events?: { publish(event: RealtimeEvent): void };
   presence?: Pick<PresenceService, "get" | "replaceInGameAccounts">;
@@ -299,6 +304,7 @@ type FailedMatchCleanupStage = "match_task" | "backup" | "server_presence" | "ar
 interface FailedMatchCleanupProgress {
   room: MatchRoomRecord;
   failedAt: string;
+  failureCause: MatchFailureCause;
   reason: "match_failed";
   readyDeclinedByDisplayName?: string;
   completed: Set<FailedMatchCleanupStage>;
@@ -327,6 +333,8 @@ export class MatchmakingService {
   private readonly failedMatchCleanups = new Map<string, FailedMatchCleanupProgress>();
   private readonly preparationCancellationFailureEvents = new Map<string, string>();
   private readonly pendingServerExitReports = new Map<string, MatchServerExitReport>();
+  private readonly pendingShutdownEvidence = new Map<string, ShutdownEvidence>();
+  private readonly serverExitTasks = new Map<string, Promise<PublicMatchRoomRecord | undefined>>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
   private readonly matchTasks = new Map<string, { controller: AbortController; backup: Promise<void>; draft?: Promise<void>; prepare?: Promise<void>; cancelled: boolean }>();
   private shutdownPromise?: Promise<ServiceShutdownSummary>;
@@ -467,7 +475,9 @@ export class MatchmakingService {
       await this.mutationQueue;
     } while (this.cleanupTasks.size > 0);
     this.clearPendingTimeouts();
+    await this.deps.executor?.flushPendingServerExitObservations?.();
     await this.enqueueMutation(() => this.flushPendingServerExitReports());
+    await this.flushPendingShutdownEvidence();
     this.failedMatchCleanups.clear();
     this.serverFailureCleanupReveals.clear();
     this.preparationCancellationFailureEvents.clear();
@@ -476,7 +486,10 @@ export class MatchmakingService {
   async shutdownForServiceStop(): Promise<ServiceShutdownSummary> {
     if (!this.shutdownPromise) {
       this.shutdownRequested = true;
-      this.shutdownPromise = this.performShutdownForServiceStop();
+      this.shutdownPromise = this.performShutdownForServiceStop().catch(error => {
+        if (error instanceof GameServerShutdownRetryError) delete this.shutdownPromise;
+        throw error;
+      });
     }
     return this.shutdownPromise;
   }
@@ -512,6 +525,7 @@ export class MatchmakingService {
       try {
         result = await this.deps.executor?.requestGameServerShutdown?.(room.id) ?? "not_observed";
       } catch (error) {
+        if (error instanceof GameServerShutdownRetryError) throw error;
         result = "timeout";
         process.stderr.write(`Failed to request game server shutdown for ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
       }
@@ -525,9 +539,19 @@ export class MatchmakingService {
       }
     }
 
+    // A timed-out probe can precede the launcher's exit notice. Drain the
+    // registered handoffs before snapshotting the observations and settlement tasks.
+    const deferredExits = await this.deps.executor?.waitForServerExitHandoffs?.();
+    await Promise.allSettled(this.serverExitTasks.values());
+    await this.deps.executor?.flushPendingServerExitObservations?.();
     await this.enqueueMutation(() => this.flushPendingServerExitReports());
+    await this.flushPendingShutdownEvidence();
     const blockedDemos = new Set<string>();
     for (const matchId of knownMatchIds) {
+      if (gameServerShutdown.get(matchId) === "exit_report_pending" || deferredExits?.has(matchId)) {
+        blockedDemos.add(matchId);
+        continue;
+      }
       try { await this.settleDemosOutsideMutation(matchId); }
       catch { blockedDemos.add(matchId); }
     }
@@ -555,7 +579,8 @@ export class MatchmakingService {
         if (isTerminalMatchPhase(room.phase)) continue;
         try {
           if (await this.deps.records?.readCompletedMatch?.(room.id)) completedMatchIds.add(room.id);
-          else if (await this.deps.records?.readServerExitReport?.(room.id)) pendingExitIds.add(room.id);
+          else if (await this.deps.records?.readServerExitReport?.(room.id) ||
+              await this.deps.records?.readServerExitObservation?.(room.id)) pendingExitIds.add(room.id);
         } catch (error) {
           completionLookupFailedIds.add(room.id);
           process.stderr.write(`Failed to check completed match before service-stop failure ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -571,7 +596,7 @@ export class MatchmakingService {
       const failedAt = this.now();
       const failedRooms = activeRooms.map((room) => ({
         previous: room,
-        failed: { ...room, phase: "failed" as const, terminalStateAt: failedAt },
+        failed: asFailedRoom(room, failedAt),
       }));
       if (failedRooms.length > 0) {
         const roomsWithFailures = rooms.map((room) => failedRooms.find((entry) => entry.previous.id === room.id)?.failed ?? room);
@@ -580,46 +605,46 @@ export class MatchmakingService {
       }
 
       const orphanedBackupCleanup = await this.cleanupOrphanedPendingBackups([...orphanedMatchIdsToDiscard].filter(id => !blockedDemos.has(id)), roomIds);
-      const policyMatchIds = failedRooms.filter(({ failed }) => failed.dev !== true && failed.matchPolicy).map(({ failed }) => failed.id);
-      if (policyMatchIds.length > 0) {
+      const failedIds = new Set(failedRooms.map(({ failed }) => failed.id));
+      if (failedIds.size > 0) {
         const indexed = await this.deps.store.listPendingBackupCleanupMatchIds();
-        await this.deps.store.savePendingBackupCleanupMatchIds([...new Set([...indexed, ...policyMatchIds])]);
+        await this.deps.store.savePendingBackupCleanupMatchIds([...new Set([...indexed, ...failedIds])]);
       }
-      const unlockedPartyIds: string[] = [];
-      for (const { failed } of failedRooms) {
-        if (await this.unlockPartyForRoom(failed, failedAt)) {
-          if (failed.partyId) unlockedPartyIds.push(failed.partyId);
-        }
-      }
-      unlockedPartyIds.push(...await this.unlockOrphanedPendingParties(failedAt, new Set([...orphanedBackupCleanup.protectedMatchIds, ...blockedDemos])));
 
+      const unlockedPartyIds: string[] = [];
+      const pendingCleanupMatchIds = new Set([
+        ...orphanedBackupCleanup.pendingMatchIds, ...pendingExitIds, ...blockedDemos, ...completionLookupFailedIds, ...failedIds,
+      ]);
+      for (const { previous, failed } of failedRooms) {
+        const shutdown = gameServerShutdown.get(failed.id) ?? "not_observed";
+        if (gameServerPresenceStopped.get(failed.id) === false || (shutdown !== "stopped" && shutdown !== "not_observed")) continue;
+        const hasBackup = await this.databaseBackupExists(failed.id);
+        if (hasBackup && previous.databaseWriteStarted !== false &&
+            await this.restoreMatchDatabase(failed.id, { preserveBackup: true })) continue;
+
+        this.applyFailedPlayerPolicy(failed);
+        if (hasBackup && !await this.discardMatchDatabaseBackup(failed.id)) continue;
+        try {
+          await this.deleteFailedMatchArtifacts(failed.id);
+        } catch {
+          continue;
+        }
+        if (await this.unlockPartyForRoom(failed, failedAt, { playerPolicyApplied: true }) && failed.partyId) {
+          unlockedPartyIds.push(failed.partyId);
+        }
+        pendingCleanupMatchIds.delete(failed.id);
+      }
+      unlockedPartyIds.push(...await this.unlockOrphanedPendingParties(failedAt,
+        new Set([...orphanedBackupCleanup.protectedMatchIds, ...pendingCleanupMatchIds])));
+
+      if (failedIds.size > 0) {
+        const indexed = await this.deps.store.listPendingBackupCleanupMatchIds();
+        await this.deps.store.savePendingBackupCleanupMatchIds(indexed.filter(id => !failedIds.has(id) || pendingCleanupMatchIds.has(id)));
+      }
       try {
         await this.emitOccupancyUpdated();
       } catch (error) {
-        process.stderr.write(`Failed to publish service-stop occupancy: ${error instanceof Error ? error.message : String(error)}\n`);
-      }
-
-      const pendingCleanupMatchIds = new Set<string>([...orphanedBackupCleanup.pendingMatchIds, ...pendingExitIds, ...blockedDemos, ...completionLookupFailedIds]);
-      for (const { previous } of failedRooms) {
-        if (!isServerManagedPhase(previous.phase)) continue;
-        const shutdownResult = gameServerShutdown.get(previous.id) ?? "not_observed";
-        if (gameServerPresenceStopped.get(previous.id) === false) pendingCleanupMatchIds.add(previous.id);
-        if (shutdownResult !== "stopped" && shutdownResult !== "not_observed") {
-          pendingCleanupMatchIds.add(previous.id);
-          continue;
-        }
-
-        const hasBackup = await this.databaseBackupExists(previous.id);
-        if (!hasBackup) continue;
-        const restoreError = await this.restoreMatchDatabase(previous.id, { preserveBackup: true });
-        if (restoreError || !await this.discardMatchDatabaseBackup(previous.id)) {
-          pendingCleanupMatchIds.add(previous.id);
-        }
-      }
-
-      if (policyMatchIds.length > 0) {
-        const indexed = await this.deps.store.listPendingBackupCleanupMatchIds();
-        await this.deps.store.savePendingBackupCleanupMatchIds(indexed.filter((id) => !policyMatchIds.includes(id) || pendingCleanupMatchIds.has(id)));
+        process.stderr.write("Failed to publish service-stop occupancy: " + String(error) + "\n");
       }
       return {
         failedMatchIds: failedRooms.map(({ failed }) => failed.id),
@@ -627,7 +652,9 @@ export class MatchmakingService {
         pendingCleanupMatchIds: [...pendingCleanupMatchIds],
       };
     });
+    const awaitingCleanup = new Set(summary.pendingCleanupMatchIds);
     for (const matchId of summary.failedMatchIds) {
+      if (awaitingCleanup.has(matchId)) continue;
       try {
         const pending = await this.deps.store.listPendingMatchFailedEvents();
         const failedEvent = pending.find((entry) => entry.matchId === matchId);
@@ -644,8 +671,13 @@ export class MatchmakingService {
     const pendingExits = new Set<string>();
     if (this.deps.records?.readServerExitReport) for (const room of await this.deps.store.listRooms()) {
       if (!isServerManagedPhase(room.phase) || onlyMatchIds && !onlyMatchIds.has(room.id)) continue;
-      const report = await this.deps.records?.readServerExitReport?.(room.id);
-      if (!report) continue;
+      let report = await this.deps.records.readServerExitReport(room.id);
+      if (!report) {
+        const observation = await this.deps.records.readServerExitObservation?.(room.id);
+        if (!observation) continue;
+        if (!this.deps.executor?.readObservedServerExitReport) throw new Error("Cannot assemble observed server exit: " + room.id);
+        report = await this.deps.executor.readObservedServerExitReport(observation);
+      }
       try {
         const completed = await this.completeMatchFromServerExit(room.id, report);
         if (completed && isServerManagedPhase(completed.phase)) pendingExits.add(room.id);
@@ -729,7 +761,7 @@ export class MatchmakingService {
                 const restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
                 if (restoreError) continue;
               }
-              const failed = { ...room, phase: "failed" as const, terminalStateAt: room.terminalStateAt ?? this.now() };
+              const failed = asFailedRoom(room, this.now());
               const outbox = await this.deps.store.listPendingMatchFailedEvents();
               const event = this.failedMatchEventOutboxEntry(failed, "match_failed");
               const locked = (await this.deps.store.listParties()).some((party) => party.lockedMatchId === matchId);
@@ -1330,6 +1362,7 @@ export class MatchmakingService {
     if (!room.terminalStateAt) throw new Error("Missing failed player policy terminal time");
     this.deps.playerPolicies.applyOutcome({
       matchId: room.id, outcome: "failed", occurredAt: room.terminalStateAt, dev: false,
+      failureCause: room.failureCause ?? "other",
       humanAccountIds: this.humanParticipantsForRoom(room).map((participant) => participant.accountId ?? participant.id),
       context: room.matchPolicy,
     }, this.now());
@@ -1969,10 +2002,24 @@ export class MatchmakingService {
     }
   }
 
+  scheduleServerExitReportAssemblyRetry(matchId: string, retry: () => Promise<void>): void {
+    this.scheduleStaleCompensationRetry(
+      "server-exit-report:" + matchId,
+      "Server exit report assembly",
+      () => this.trackCleanup(retry()),
+    );
+  }
+
   completeMatchFromServerExit(matchId: string, report: MatchServerExitReport): Promise<PublicMatchRoomRecord | undefined> {
+    const active = this.serverExitTasks.get(matchId);
+    if (active) return active;
     report = structuredClone(report);
     if (!this.pendingServerExitReports.has(matchId)) this.pendingServerExitReports.set(matchId, report);
-    return this.trackCleanup(this.processServerExit(matchId, report));
+    const task = this.trackCleanup(this.processServerExit(matchId, report));
+    this.serverExitTasks.set(matchId, task);
+    const clear = () => { this.serverExitTasks.delete(matchId); };
+    void task.then(clear, clear);
+    return task;
   }
 
   private async processServerExit(matchId: string, report: MatchServerExitReport): Promise<PublicMatchRoomRecord | undefined> {
@@ -1980,6 +2027,14 @@ export class MatchmakingService {
     try {
       await this.enqueueMutation(async () => { report = await this.persistServerExitReport(matchId, report); });
       await this.settleDemosOutsideMutation(matchId);
+      let evidence: ShutdownEvidence | undefined;
+      if (report.get5Result.status !== "normal") {
+        const eligible = await this.enqueueMutation(async () => {
+          const room = (await this.deps.store.listRooms()).find(candidate => candidate.id === matchId);
+          return room && isServerManagedPhase(room.phase) && !await this.deps.records?.readCompletedMatch?.(matchId);
+        });
+        if (eligible) evidence = await this.checkpointShutdownEvidence(matchId);
+      }
       const completed = await this.enqueueMutation(async () => {
         const rooms = await this.deps.store.listRooms();
         const room = rooms.find((candidate) => candidate.id === matchId);
@@ -1996,7 +2051,8 @@ export class MatchmakingService {
         if (report.get5Result.status !== "normal") {
           const restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
           if (restoreError) return this.toPublicRoom(room);
-          return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
+          const failureCause = classifyFailureCause(matchId, evidence, report.exitInfo, false);
+          return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed", undefined, undefined, failureCause));
         }
 
         let result: MatchSeriesResult;
@@ -2065,6 +2121,10 @@ export class MatchmakingService {
         return this.finalizeCommittedMatch(rooms, room, committedRecord);
       });
       this.pendingServerExitReports.delete(matchId);
+      if (report.get5Result.status !== "normal" && completed && isServerManagedPhase(completed.phase)) {
+        this.scheduleServerExitRecovery(matchId, report);
+        return completed;
+      }
       const key = "server-exit:" + matchId;
       const timer = this.staleCompensationRetryTimers.get(key);
       if (timer) this.clearTimeoutFn(timer);
@@ -2074,6 +2134,28 @@ export class MatchmakingService {
       this.scheduleServerExitRecovery(matchId, report);
       throw error;
     }
+  }
+
+  private async checkpointShutdownEvidence(matchId: string): Promise<ShutdownEvidence | undefined> {
+    const records = this.deps.records;
+    if (!records?.readShutdownEvidence || !records.saveShutdownEvidence) return undefined;
+    let evidence = this.pendingShutdownEvidence.get(matchId);
+    if (!evidence) {
+      const saved = await records.readShutdownEvidence(matchId);
+      if (saved) return saved;
+      evidence = await this.deps.executor?.collectShutdownEvidence?.(matchId);
+      if (!evidence) return undefined;
+      this.pendingShutdownEvidence.set(matchId, evidence);
+    }
+    await records.saveShutdownEvidence(matchId, evidence);
+    this.pendingShutdownEvidence.delete(matchId);
+    return evidence;
+  }
+
+  private async flushPendingShutdownEvidence(): Promise<void> {
+    const outcomes = await Promise.allSettled([...this.pendingShutdownEvidence.keys()].map(id => this.checkpointShutdownEvidence(id)));
+    const errors = outcomes.flatMap(result => result.status === "rejected" ? [result.reason] : []);
+    if (errors.length) throw new AggregateError(errors, "Failed to save pending shutdown evidence");
   }
 
   private async persistServerExitReport(matchId: string, report: MatchServerExitReport): Promise<MatchServerExitReport> {
@@ -2097,7 +2179,8 @@ export class MatchmakingService {
     const key = "server-exit:" + matchId;
     if (this.staleCompensationAttempts.has(key)) return;
     this.scheduleStaleCompensationRetry(key, "Server exit completion", async () => {
-      await this.completeMatchFromServerExit(matchId, report);
+      const room = await this.completeMatchFromServerExit(matchId, report);
+      if (room && isServerManagedPhase(room.phase)) throw new Error("Server exit settlement remains pending: " + matchId);
     }, 60000);
   }
 
@@ -2107,8 +2190,9 @@ export class MatchmakingService {
     completedAt: string,
     options: { discardDatabaseBackup: boolean },
   ): Promise<CommittedMatchRepair | undefined> {
+    const { failureCause: _failureCause, ...committedRoom } = room;
     const completed: MatchRoomRecord = {
-      ...room,
+      ...committedRoom,
       phase: "completed",
       terminalStateAt: completedAt,
     };
@@ -2727,7 +2811,7 @@ export class MatchmakingService {
             return true;
           });
           if (!permitted) return;
-          const connect = await this.deps.executor!.prepare(plan);
+          const connect = await this.deps.executor!.prepare(plan, task.controller.signal);
           await this.enqueueMutation(async () => {
             const current = await this.deps.store.listRooms();
             const target = current.find((entry) => entry.id === room.id);
@@ -3576,7 +3660,7 @@ export class MatchmakingService {
           const indexed = await this.deps.store.listPendingBackupCleanupMatchIds();
           await this.deps.store.savePendingBackupCleanupMatchIds([...new Set([...indexed, roomId])]);
           if (current.phase !== "failed") {
-            current = { ...current, phase: "failed", terminalStateAt: progress.failedAt };
+            current = asFailedRoom(current, progress.failedAt, progress.failureCause);
             rooms.splice(rooms.findIndex(room => room.id === roomId), 1, current);
             await this.deps.store.saveRoomsAndPendingMatchFailedEvents(rooms, [
               this.failedMatchEventOutboxEntry(current, progress.reason, progress.readyDeclinedByDisplayName),
@@ -3642,6 +3726,7 @@ export class MatchmakingService {
     reason: "match_failed",
     readyDeclinedByDisplayName?: string,
     shouldContinue: () => boolean = () => true,
+    failureCause: MatchFailureCause = "other",
   ): Promise<MatchRoomRecord> {
     if (this.shutdownRequested || !shouldContinue()) return room;
 
@@ -3654,7 +3739,7 @@ export class MatchmakingService {
       await this.deps.store.savePendingBackupCleanupMatchIds([...new Set([...pending, room.id])]);
       this.clearReadyTimeout(room.id); this.clearMapReveal(room.id);
       if (!this.failedMatchCleanups.has(room.id)) this.failedMatchCleanups.set(room.id, {
-        room, failedAt: this.now(), reason, ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
+        room, failedAt: this.now(), failureCause, reason, ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
         completed: new Set(), publishedServerPresenceAccountIds: new Set(), running: false,
       });
       this.runFailedMatchCleanup(room.id);
@@ -3662,7 +3747,7 @@ export class MatchmakingService {
     }
 
     const failedAt = room.phase === "failed" && room.terminalStateAt ? room.terminalStateAt : this.now();
-    const failedRoom: MatchRoomRecord = { ...room, phase: "failed", terminalStateAt: failedAt };
+    const failedRoom = asFailedRoom(room, failedAt, failureCause);
     const updatedRooms = rooms.map((candidate) => (candidate.id === room.id ? failedRoom : candidate));
     if (this.shutdownRequested || !shouldContinue()) return room;
     const failedEvent = this.failedMatchEventOutboxEntry(failedRoom, reason, readyDeclinedByDisplayName);
@@ -3700,6 +3785,7 @@ export class MatchmakingService {
       this.failedMatchCleanups.set(room.id, {
         room,
         failedAt,
+        failureCause: failedRoom.failureCause ?? "other",
         reason,
         ...(readyDeclinedByDisplayName ? { readyDeclinedByDisplayName } : {}),
         completed: new Set(),
@@ -3891,6 +3977,17 @@ export class MatchmakingService {
     if (this.roomAudience(room).includes(accountId)) return true;
     return [...room.teamA.participants, ...room.teamB.participants].some((participant) => participant.accountId === accountId);
   }
+}
+
+function asFailedRoom(
+  room: MatchRoomRecord, terminalStateAt: string, failureCause: MatchFailureCause = "other",
+): MatchRoomRecord & { terminalStateAt: string } {
+  return {
+    ...room,
+    phase: "failed",
+    terminalStateAt: room.phase === "failed" ? room.terminalStateAt ?? terminalStateAt : terminalStateAt,
+    failureCause: room.phase === "failed" ? room.failureCause ?? "other" : failureCause,
+  };
 }
 
 function isServerManagedPhase(phase: MatchRoomRecord["phase"]): boolean {
