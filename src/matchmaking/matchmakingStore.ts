@@ -1,6 +1,7 @@
 import path from "node:path";
 import { ensureJsonFile, readJsonFile, writeJsonFileAtomic } from "../storage/jsonFile.js";
 import type { MatchConnectInfo } from "../game/matchExecutor.js";
+import type { GameServerAttempt } from "../game/gameServerAttempt.js";
 import type { MatchFailureCause, MatchPhase, MatchTeam, MatchPlayerPolicyContext } from "./types.js";
 import { assertQueueFile, assertPartiesFile, assertInvitationsFile, assertRoomsFile } from "./matchmakingStoreValidation.js";
 
@@ -77,6 +78,7 @@ export interface MatchRoomRecord {
   phase: MatchPhase;
   dev?: true;
   databaseWriteStarted?: boolean;
+  gameServerAttempt?: GameServerAttempt;
   teamA: MatchTeam;
   teamB: MatchTeam;
   humanAccountIds?: string[];
@@ -187,10 +189,10 @@ export class MatchmakingStore {
   listRooms(): Promise<MatchRoomRecord[]> {
     return this.readRoomsFile().then((file) => file.rooms);
   }
-  saveRooms(rooms: MatchRoomRecord[]): Promise<void> {
+  saveRooms(rooms: MatchRoomRecord[], options?: { durable?: boolean }): Promise<void> {
     return this.enqueueRoomWrite(async () => {
       const file = await this.readRoomsFile();
-      await this.writeRoomsFile({ ...file, rooms });
+      await this.writeRoomsFile({ ...file, rooms }, options);
     });
   }
 
@@ -263,9 +265,9 @@ export class MatchmakingStore {
     });
   }
 
-  private async writeRoomsFile(file: RoomsFile): Promise<void> {
+  private async writeRoomsFile(file: RoomsFile, options?: { durable?: boolean }): Promise<void> {
     assertRoomsFile(file);
-    await writeJsonFileAtomic(this.roomsPath, file);
+    await writeJsonFileAtomic(this.roomsPath, file, options);
   }
 
   private async readFile(filePath: string, fallback: unknown): Promise<unknown> {

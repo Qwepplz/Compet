@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { gameServerAttemptSchema } from "../game/gameServerAttempt.js";
 import { MATCH_FAILURE_CAUSES } from "./types.js";
 import type { QueueFile, PartiesFile, PartyInvitationsFile, RoomsFile } from "./matchmakingStore.js";
 
@@ -92,6 +93,7 @@ const roomsFileSchema = z.object({
       "connect", "live", "completed", "failed"]),
     dev: z.literal(true).optional(),
     databaseWriteStarted: z.boolean().optional(),
+    gameServerAttempt: gameServerAttemptSchema.optional(),
     failureCause: z.enum(MATCH_FAILURE_CAUSES).optional(),
     matchPolicy: z.object({
       forcedBalance: z.boolean(),

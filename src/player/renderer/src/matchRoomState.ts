@@ -138,5 +138,6 @@ export function getSelectedMap(
 export function getMatchPresentationPhase(
   room: PlayerLiveMatchStateDto | null,
 ): PlayerLiveMatchStateDto["phase"] | undefined {
-  return room?.phase === "map_randomizing" ? "server_prepare" : room?.phase;
+  if (room?.phase === "map_randomizing" || (room?.phase === "connect" && !room.connect)) return "server_prepare";
+  return room?.phase;
 }

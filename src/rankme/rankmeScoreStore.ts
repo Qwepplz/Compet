@@ -15,6 +15,7 @@ import {
 const execFileAsync = promisify(execFile);
 const steam64Base = 76561197960265728n;
 const leaderboardCacheMs = 30_000;
+const leaderboardQueryTimeoutMs = 2_000;
 const leaderboardMaxBufferBytes = 16 * 1024 * 1024;
 export const DEFAULT_RANKME_SCORE = 1000;
 
@@ -27,6 +28,7 @@ export interface RankmeScoreReader {
   getScoreBySteam64(steam64: string): Promise<number | null>;
   lookupScoreBySteam64?(steam64: string): Promise<RankmeScoreLookup>;
   lookupStandingBySteam64(steam64: string): Promise<RankmeStandingLookup>;
+  getCachedStandingBySteam64?(steam64: string): RankmeDisplay | null;
   lookupStandingByBotName(botProfileName: string): Promise<RankmeStandingLookup>;
 }
 
@@ -135,6 +137,10 @@ export class RankmeLeaderboardCache {
     return this.lookup((snapshot) => snapshot.bySteam.get(normalized));
   }
 
+  getCachedSteamStanding(steam64: string): RankmeDisplay | null {
+    return this.snapshot?.bySteam.get(steam64.trim()) ?? null;
+  }
+
   async lookupBotName(botProfileName: string): Promise<RankmeStandingLookup> {
     const normalized = botProfileName.trim();
     if (!normalized) return { status: "unavailable" };
@@ -237,6 +243,10 @@ export class RankmeScoreStore implements RankmeScoreReader {
     return this.standings.lookupSteam(steam64);
   }
 
+  getCachedStandingBySteam64(steam64: string): RankmeDisplay | null {
+    return this.standings.getCachedSteamStanding(steam64);
+  }
+
   lookupStandingByBotName(botProfileName: string): Promise<RankmeStandingLookup> {
     return this.standings.lookupBotName(botProfileName);
   }
@@ -255,6 +265,8 @@ export class RankmeScoreStore implements RankmeScoreReader {
       ], {
         env: { ...process.env, MYSQL_PWD: this.config.password },
         maxBuffer: leaderboardMaxBufferBytes,
+        timeout: leaderboardQueryTimeoutMs,
+        killSignal: "SIGKILL",
         windowsHide: true,
       });
       const rows = parseMysqlLeaderboardRows(stdout);

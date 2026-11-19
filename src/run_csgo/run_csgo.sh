@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
+root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" && pwd -P)
 : "${COMPET_GAME_MAP:?COMPET_GAME_MAP must not be empty}"
 : "${COMPET_GAME_PORT:?COMPET_GAME_PORT must not be empty}"
 : "${COMPET_GAME_CLIENT_PORT:?COMPET_GAME_CLIENT_PORT must not be empty}"
@@ -14,4 +14,15 @@ args=(-norestart -language english -game csgo -console -usercon -tickrate 128 -w
   -port "$COMPET_GAME_PORT" +game_type 0 +game_mode 1 +mapgroup mg_active +map "$COMPET_GAME_MAP"
   +maxplayers_override 10 +tv_enable 1 +exec 1.cfg +clientport "$COMPET_GAME_CLIENT_PORT")
 if [[ -n "${COMPET_STEAM_ACCOUNT_TOKEN:-}" ]]; then args+=(+sv_setsteamaccount "$COMPET_STEAM_ACCOUNT_TOKEN"); fi
+# COMPET_GAME_ENGINE_EXEC_MARKER protocol 1
+if [[ -n "${COMPET_GAME_ENGINE_EXEC_MARKER:-}" || -n "${COMPET_GAME_ATTEMPT_ID:-}" ]]; then
+  : "${COMPET_GAME_ENGINE_EXEC_MARKER:?Engine execution marker path is required}"
+  : "${COMPET_GAME_ATTEMPT_ID:?Game attempt ID is required}"
+  marker="$COMPET_GAME_ENGINE_EXEC_MARKER"
+  [[ "$marker" == /* && ! -e "$marker" && ! -L "$marker" ]] || { echo "game_engine_exec_marker_conflict" >&2; exit 1; }
+  (umask 077; set -o noclobber; printf '%s\n' "$COMPET_GAME_ATTEMPT_ID" > "$marker") || {
+    echo "game_engine_exec_marker_write_failed" >&2
+    exit 1
+  }
+fi
 exec /bin/bash ./srcds_run "${args[@]}"

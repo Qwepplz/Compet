@@ -1,6 +1,7 @@
 import path from "node:path";
-import { lstat, readFile, rm } from "node:fs/promises";
+import { lstat, readFile, readdir, rm } from "node:fs/promises";
 import type { MatchServerExitObservation, MatchServerExitReport } from "../game/matchExecutor.js";
+import { gameServerAttemptSchema, gameServerRecordKey, type GameServerAttempt } from "../game/gameServerAttempt.js";
 import { z } from "zod";
 import { isValidMr12FinalScore } from "../game/get5MatchResult.js";
 import { shutdownEvidenceSchema, shutdownLogBaselineSchema, type ShutdownEvidence, type ShutdownLogBaseline } from "../game/shutdownEvidence.js";
@@ -44,6 +45,7 @@ const exitInfoSchema = z.object({
   signal: z.custom<NodeJS.Signals>((value) => typeof value === "string" && /^SIG[A-Z0-9]+$/.test(value)).nullable(),
   signalNumber: z.number().int().positive().optional(),
   wrapperExitUnconfirmed: z.literal(true).optional(),
+  startupFailure: z.literal("before_engine_exec").optional(),
   output: z.array(z.string()),
 });
 const serverExitObservationSchema = z.strictObject({
@@ -68,6 +70,8 @@ const serverExitReportSchema = z.object({
 });
 
 export class MatchRecordStore {
+  private readonly attemptExitWrites = new Map<string, Promise<void>>();
+
   constructor(
     private readonly recordsDir: string,
     private readonly database: DatabaseSync,
@@ -89,6 +93,7 @@ export class MatchRecordStore {
     matchId: string,
     result: MatchSeriesResult,
     status: unknown,
+    attempt?: GameServerAttempt,
   ): Promise<void> {
     this.assertSafeMatchId(matchId);
     const existing = this.readMatchRow(matchId);
@@ -105,7 +110,7 @@ export class MatchRecordStore {
 
     const plan = await this.readMatchPlan(matchId);
     if (plan.id !== matchId) throw new Error(`match plan id does not match matchId: ${matchId}`);
-    const server = await this.readOptionalMatchFile(matchId, "server.json");
+    const server = await this.readOptionalMatchFile(matchId, "server.json", attempt);
     const events = await this.readOptionalMatchFile(matchId, "events.json");
     const statusJson = status === undefined || status === null ? null : serializeJson(status);
     const resultJson = serializeJson(result);
@@ -223,9 +228,9 @@ export class MatchRecordStore {
       .filter((map) => map.length > 0);
   }
 
-  async readServer(matchId: string): Promise<unknown> {
-    this.assertSafeMatchId(matchId);
-    const file = this.matchFile(matchId, "server.json");
+  async readServer(matchId: string, attempt?: GameServerAttempt): Promise<unknown> {
+    const file = this.matchFile(matchId, "server.json", attempt);
+    if (attempt) await this.assertAttemptFile(file);
     let raw: string;
     try {
       raw = await readFile(file, "utf8");
@@ -242,47 +247,72 @@ export class MatchRecordStore {
     }
   }
 
-  async saveServer(matchId: string, server: unknown): Promise<void> {
-    this.assertSafeMatchId(matchId);
-    await this.saveMatchFile(matchId, "server.json", server);
+  async saveServer(matchId: string, server: unknown, attempt?: GameServerAttempt): Promise<void> {
+    await this.saveMatchFile(matchId, "server.json", server, { durable: !!attempt }, attempt);
   }
 
-  async readServerExitReport(matchId: string): Promise<MatchServerExitReport | undefined> {
+  async readServerExitReport(matchId: string, attempt?: GameServerAttempt): Promise<MatchServerExitReport | undefined> {
+    const file = this.matchFile(matchId, "server-exit.json", attempt);
+    if (attempt) await this.assertAttemptFile(file);
     let raw: string;
-    try { raw = await readFile(this.matchFile(matchId, "server-exit.json"), "utf8"); }
+    try { raw = await readFile(file, "utf8"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined; throw error; }
     const report = serverExitReportSchema.safeParse(JSON.parse(raw));
     if (!report.success) throw new Error("Invalid saved server exit report: " + matchId, { cause: report.error });
     return report.data;
   }
 
-  async saveServerExitReport(matchId: string, report: MatchServerExitReport): Promise<void> {
-    this.assertSafeMatchId(matchId);
-    await this.saveMatchFile(matchId, "server-exit.json", report, { pretty: false, durable: true });
+  async saveServerExitReport(matchId: string, report: MatchServerExitReport, attempt?: GameServerAttempt): Promise<void> {
+    const options = { pretty: false, durable: true };
+    if (attempt) {
+      await this.saveFirstAttemptExit(matchId, "server-exit.json", attempt, options,
+        serverExitReportSchema.parse(report), () => this.readServerExitReport(matchId, attempt));
+      return;
+    }
+    await this.saveMatchFile(matchId, "server-exit.json", report, options);
   }
 
-  async readServerExitObservation(matchId: string): Promise<MatchServerExitObservation | undefined> {
-    return this.readShutdownCheckpoint(matchId, "server-exit-observed.json", serverExitObservationSchema);
+  async readServerExitObservation(matchId: string, attempt?: GameServerAttempt): Promise<MatchServerExitObservation | undefined> {
+    return this.readShutdownCheckpoint(matchId, "server-exit-observed.json", serverExitObservationSchema, attempt);
   }
 
-  async saveServerExitObservation(matchId: string, observation: MatchServerExitObservation): Promise<void> {
-    await this.saveShutdownCheckpoint(matchId, "server-exit-observed.json", serverExitObservationSchema, observation);
+  async saveServerExitObservation(matchId: string, observation: MatchServerExitObservation, attempt?: GameServerAttempt): Promise<void> {
+    await this.saveShutdownCheckpoint(matchId, "server-exit-observed.json", serverExitObservationSchema, observation, attempt);
   }
 
-  async readShutdownLogBaseline(matchId: string): Promise<ShutdownLogBaseline | undefined> {
-    return this.readShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema);
+  async readShutdownLogBaseline(matchId: string, attempt?: GameServerAttempt): Promise<ShutdownLogBaseline | undefined> {
+    return this.readShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema, attempt);
   }
 
-  async saveShutdownLogBaseline(matchId: string, baseline: ShutdownLogBaseline): Promise<void> {
-    await this.saveShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema, baseline);
+  async saveShutdownLogBaseline(matchId: string, baseline: ShutdownLogBaseline, attempt?: GameServerAttempt): Promise<void> {
+    await this.saveShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema, baseline, attempt);
   }
 
-  async readShutdownEvidence(matchId: string): Promise<ShutdownEvidence | undefined> {
-    return this.readShutdownCheckpoint(matchId, "shutdown-evidence.json", shutdownEvidenceSchema);
+  async readShutdownEvidence(matchId: string, attempt?: GameServerAttempt): Promise<ShutdownEvidence | undefined> {
+    return this.readShutdownCheckpoint(matchId, "shutdown-evidence.json", shutdownEvidenceSchema, attempt);
   }
 
-  async saveShutdownEvidence(matchId: string, evidence: ShutdownEvidence): Promise<void> {
-    await this.saveShutdownCheckpoint(matchId, "shutdown-evidence.json", shutdownEvidenceSchema, evidence);
+  async saveShutdownEvidence(matchId: string, evidence: ShutdownEvidence, attempt?: GameServerAttempt): Promise<void> {
+    await this.saveShutdownCheckpoint(matchId, "shutdown-evidence.json", shutdownEvidenceSchema, evidence, attempt);
+  }
+
+  gameServerEngineExecPath(matchId: string, attempt: GameServerAttempt): string {
+    return this.matchFile(matchId, "engine-exec", attempt);
+  }
+
+  async listGameServerAttemptIds(matchId: string): Promise<string[]> {
+    const directory = this.matchFile(matchId, "attempts");
+    await assertPlainPath(directory);
+    try {
+      const entries = await readdir(directory, { withFileTypes: true });
+      return entries.filter(entry => gameServerAttemptSchema.shape.id.safeParse(entry.name).success).map(entry => {
+        if (!entry.isDirectory()) throw new Error("Invalid game server attempt directory: " + entry.name);
+        return entry.name;
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
   }
 
   async saveStatus(matchId: string, status: unknown): Promise<void> {
@@ -333,13 +363,14 @@ export class MatchRecordStore {
   }
 
   private async readShutdownCheckpoint<T extends { matchId: string }>(
-    matchId: string, fileName: string, schema: z.ZodType<T>,
+    matchId: string, fileName: string, schema: z.ZodType<T>, attempt?: GameServerAttempt,
   ): Promise<T | undefined> {
-    const file = this.matchFile(matchId, fileName);
-    await assertPlainPath(file);
+    const file = this.matchFile(matchId, fileName, attempt);
+    if (attempt) await this.assertAttemptFile(file);
+    else await assertPlainPath(file);
     let raw: string;
     try {
-      if (!(await lstat(file)).isFile()) throw new Error("Invalid checkpoint file: " + file);
+      if (!attempt && !(await lstat(file)).isFile()) throw new Error("Invalid checkpoint file: " + file);
       raw = await readFile(file, "utf8");
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
@@ -347,7 +378,7 @@ export class MatchRecordStore {
     }
     try {
       const checkpoint = schema.parse(JSON.parse(raw));
-      if (checkpoint.matchId !== matchId) throw new Error("matchId mismatch");
+      if (checkpoint.matchId !== gameServerRecordKey(matchId, attempt)) throw new Error("matchId mismatch");
       return checkpoint;
     } catch (error) {
       throw new Error("Invalid " + fileName + " for " + matchId, { cause: error });
@@ -355,15 +386,49 @@ export class MatchRecordStore {
   }
 
   private async saveShutdownCheckpoint<T extends { matchId: string }>(
-    matchId: string, fileName: string, schema: z.ZodType<T>, input: T,
+    matchId: string, fileName: string, schema: z.ZodType<T>, input: T, attempt?: GameServerAttempt,
   ): Promise<void> {
     const checkpoint = schema.parse(input);
-    if (checkpoint.matchId !== matchId) throw new Error("Invalid matchId for " + fileName + ": " + matchId);
-    await this.saveMatchFile(matchId, fileName, checkpoint, {
-      pretty: false,
-      durable: true,
-      createParent: fileName === "shutdown-log-baseline.json",
+    if (checkpoint.matchId !== gameServerRecordKey(matchId, attempt)) {
+      throw new Error("Invalid matchId for " + fileName + ": " + matchId);
+    }
+    const options = { pretty: false, durable: true, createParent: fileName === "shutdown-log-baseline.json" };
+    if (attempt && fileName === "server-exit-observed.json") {
+      await this.saveFirstAttemptExit(matchId, fileName, attempt, options, checkpoint,
+        () => this.readShutdownCheckpoint(matchId, fileName, schema, attempt));
+      return;
+    }
+    await this.saveMatchFile(matchId, fileName, checkpoint, options, attempt);
+  }
+
+  private async saveFirstAttemptExit<T>(
+    matchId: string, fileName: string, attempt: GameServerAttempt,
+    options: { pretty: boolean; durable: boolean; createParent?: boolean },
+    value: T, read: () => Promise<T | undefined>,
+  ): Promise<void> {
+    const file = this.matchFile(matchId, fileName, attempt);
+    const previous = this.attemptExitWrites.get(file) ?? Promise.resolve();
+    const write = previous.catch(() => {}).then(async () => {
+      // Reconfirm durability if an earlier write renamed the file and failed during sync.
+      const saved = await read();
+      await this.saveMatchFile(matchId, fileName, saved ?? value, options, attempt);
     });
+    this.attemptExitWrites.set(file, write);
+    try {
+      await write;
+    } finally {
+      if (this.attemptExitWrites.get(file) === write) this.attemptExitWrites.delete(file);
+    }
+  }
+
+  private async assertAttemptFile(file: string): Promise<void> {
+    await assertPlainPath(file);
+    try {
+      const info = await lstat(file);
+      if (!info.isFile() || info.nlink !== 1) throw new Error("Invalid attempt record file: " + file);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
   }
 
   private async saveMatchFile(
@@ -371,16 +436,22 @@ export class MatchRecordStore {
     fileName: string,
     value: unknown,
     options: { pretty?: boolean; durable?: boolean; createParent?: boolean } = {},
+    attempt?: GameServerAttempt,
   ): Promise<void> {
     if (this.readMatchRow(matchId)) return;
-    const filePath = this.matchFile(matchId, fileName);
+    const filePath = this.matchFile(matchId, fileName, attempt);
+    if (attempt) await this.assertAttemptFile(filePath);
     await writeJsonFileAtomic(filePath, value, options);
   }
 
-  private async readOptionalMatchFile(matchId: string, fileName: string): Promise<string | null> {
+  private async readOptionalMatchFile(matchId: string, fileName: string, attempt?: GameServerAttempt): Promise<string | null> {
+    const file = this.matchFile(matchId, fileName, attempt);
     try {
-      const value = await readJsonFile<unknown>(this.matchFile(matchId, fileName));
-      return serializeJson(value);
+      if (attempt) {
+        await this.assertAttemptFile(file);
+        return serializeJson(JSON.parse(await readFile(file, "utf8")));
+      }
+      return serializeJson(await readJsonFile<unknown>(file));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT" || (error instanceof Error && error.message.startsWith("JSON file does not exist:"))) return null;
       throw error;
@@ -417,9 +488,12 @@ export class MatchRecordStore {
     ));
   }
 
-  private matchFile(matchId: string, fileName: string): string {
+  private matchFile(matchId: string, fileName: string, attempt?: GameServerAttempt): string {
     this.assertSafeMatchId(matchId);
-    return path.join(this.recordsDir, "matches", matchId, fileName);
+    const directory = path.join(this.recordsDir, "matches", matchId);
+    return attempt
+      ? path.join(directory, "attempts", gameServerRecordKey(matchId, attempt), fileName)
+      : path.join(directory, fileName);
   }
 
   private assertSafeMatchId(matchId: string): void {

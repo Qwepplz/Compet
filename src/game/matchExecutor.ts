@@ -2,6 +2,7 @@ import { existsSync, type Dirent } from "node:fs";
 import { copyFile, mkdir, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 
+import { assertPlainPath, type FileFingerprint } from "../shared/managedFiles.js";
 import type { GameServerConfig } from "../config/config.js";
 import type { RealtimeEventBus } from "../realtime/eventBus.js";
 import type { MatchRecordStore } from "../records/matchRecordStore.js";
@@ -19,10 +20,11 @@ import {
   readGet5MatchResult,
   type Get5MatchResultClassification,
 } from "./get5MatchResult.js";
-import type { GameServerExitInfo, GameServerLauncher, LaunchedGameServer } from "./gameServerLauncher.js";
+import { GameServerStartupExitError, type GameServerExitInfo, type GameServerLauncher, type LaunchedGameServer } from "./gameServerLauncher.js";
+import { gameServerRecordKey, type GameServerAttempt } from "./gameServerAttempt.js";
 import { inspectLinuxGameProcessIdentity, isGameProcessIdentity, type GameProcessIdentity } from "./linuxProcess.js";
 import { installRunCsgoAssets, type RunCsgoSource } from "./runCsgoAssets.js";
-import { captureShutdownLogBaseline, collectShutdownEvidence, type ShutdownEvidence, type ShutdownLogHistoryCache } from "./shutdownEvidence.js";
+import { captureShutdownLogBaseline, collectShutdownEvidence, readGet5FlowAtExit, type Get5FlowAtExit, type ShutdownEvidence, type ShutdownEvidenceCollection, type ShutdownLogHistoryCache } from "./shutdownEvidence.js";
 import type { RunCsgoAssetTransaction } from "./runCsgoAssetState.js";
 import { legacyRunCsgoFiles } from "./legacyRunCsgoFiles.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
@@ -43,12 +45,12 @@ export interface MatchExecutorOptions {
   demos?: import("./matchDemoLifecycle.js").MatchDemoLifecycle;
   assets?: () => Promise<RunCsgoSource>;
   launcher: GameServerLauncher;
-  records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent"> & Partial<Pick<MatchRecordStore, "readServer" | "readShutdownLogBaseline" | "saveShutdownLogBaseline" | "readServerExitObservation" | "saveServerExitObservation">>;
+  records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent"> & Partial<Pick<MatchRecordStore, "readServer" | "readShutdownLogBaseline" | "saveShutdownLogBaseline" | "readServerExitObservation" | "saveServerExitObservation" | "gameServerEngineExecPath" | "listGameServerAttemptIds">>;
   events?: Pick<RealtimeEventBus, "publish">;
   config: GameServerConfig;
-  onServerExit?: (matchId: string, report: MatchServerExitReport) => Promise<void> | void;
-  onServerExitReportPending?: (matchId: string, retry: () => Promise<void>) => void;
-  onGameServerPresence?: (matchId: string, steam64s: readonly string[]) => Promise<void> | void;
+  onServerExit?: (matchId: string, report: MatchServerExitReport, attempt?: GameServerAttempt) => Promise<void> | void;
+  onServerExitReportPending?: (matchId: string, retry: () => Promise<void>, attempt?: GameServerAttempt) => void;
+  onGameServerPresence?: (matchId: string, steam64s: readonly string[], attempt?: GameServerAttempt) => Promise<void> | void;
   emptyServerWatchdog?: EmptyServerWatchdogConfig;
   gameServerShutdownTimeoutMs?: number;
   gameServerShutdownPollIntervalMs?: number;
@@ -71,6 +73,8 @@ export class ServerExitObservationPersistenceError extends GameServerShutdownRet
 }
 
 interface PendingServerExitObservation {
+  matchId: string;
+  attempt?: GameServerAttempt;
   observation: MatchServerExitObservation;
   write?: Promise<MatchServerExitObservation>;
 }
@@ -131,62 +135,70 @@ export class MatchExecutor {
 
   constructor(private readonly options: MatchExecutorOptions) {}
 
-  async prepare(matchPlan: MatchPlan, signal?: AbortSignal): Promise<MatchConnectInfo> {
+  async prepare(matchPlan: MatchPlan, signal?: AbortSignal, attempt?: GameServerAttempt): Promise<MatchConnectInfo> {
     signal?.throwIfAborted();
-    const assetRoot = path.resolve(this.options.config.serverRoot).toLowerCase();
+    const matchId = validateMatchId(matchPlan.id);
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const { serverRoot, portRange, publicConnectHost } = this.options.config;
+    const assetRoot = path.resolve(serverRoot).toLowerCase();
     if (activeAssetRoots.has(assetRoot)) throw new Error("asset_game_active");
-    activeAssetRoots.set(assetRoot, matchPlan.id);
+    activeAssetRoots.set(assetRoot, gameKey);
     let launchedGame = false;
     try {
-      const safeMatchId = validateMatchId(matchPlan.id);
-      const matchCfgPath = ACTIVE_MATCH_RUNTIME_CFG_PATH;
-
-      await this.prepareShutdownEvidence(safeMatchId, signal);
+      await this.prepareShutdownEvidence(matchId, signal, attempt);
       signal?.throwIfAborted();
-      await this.options.demos?.prepare({ matchId: safeMatchId, dev: matchPlan.dev === true });
-      await this.writeMatchFiles(matchPlan, safeMatchId, matchCfgPath);
-      await this.options.records?.saveStatus(matchPlan.id, { phase: "server_prepare" });
-      await this.options.records?.appendEvent(matchPlan.id, { type: "server_preparing", at: new Date().toISOString() });
-      this.options.events?.publish({ type: "server_preparing", matchId: matchPlan.id, accountIds: humanAudience(matchPlan) });
+      await this.options.demos?.prepare({ matchId: gameKey, dev: matchPlan.dev === true });
+      const launchScriptFingerprint = await this.writeMatchFiles(matchPlan, gameKey, ACTIVE_MATCH_RUNTIME_CFG_PATH);
+      await this.options.records?.saveStatus(matchId, { phase: "server_prepare" });
+      await this.options.records?.appendEvent(matchId, { type: "server_preparing", at: new Date().toISOString() });
+      this.options.events?.publish({ type: "server_preparing", matchId, accountIds: humanAudience(matchPlan) });
 
+      const marker = attempt && this.options.records?.gameServerEngineExecPath?.(matchId, attempt);
+      if (attempt && (!marker || !launchScriptFingerprint)) throw new Error("game_attempt_launch_assets_unavailable");
       const spec = buildRunCsgoLaunchSpec({
-        serverRoot: this.options.config.serverRoot,
-        map: matchPlan.map,
-        port: this.options.config.portRange.start,
-        clientPort: this.options.config.portRange.start + 1,
+        serverRoot, map: matchPlan.map, port: portRange.start, clientPort: portRange.start + 1,
+        ...(attempt && marker ? { engineExecMarker: { path: marker, attemptId: gameKey }, launchScriptFingerprint } : {}),
       });
 
       let launched: LaunchedGameServer;
       signal?.throwIfAborted();
       try { launched = await this.options.launcher.launch(spec); }
       catch (error) {
-        const identity = this.options.launcher.getIdentity?.(this.options.config.serverRoot);
-        if (identity) await this.options.records?.saveServer(matchPlan.id, { identity, port: spec.port });
-        await this.bindDemoOwner(matchPlan.id);
+        const saveOwner = async () => {
+          const identity = this.options.launcher.getIdentity?.(serverRoot);
+          if (identity) await this.options.records?.saveServer(matchId, { identity, port: spec.port }, attempt);
+          await this.bindDemoOwner(gameKey);
+        };
+        if (attempt && error instanceof GameServerStartupExitError) {
+          void this.handoffServerExit(matchId, Promise.resolve(error.exitInfo), attempt, saveOwner)
+            .catch(this.serverExitErrorLogger(matchId));
+        } else {
+          await saveOwner();
+        }
         throw error;
       }
       launchedGame = true;
-      const emptyServerWatchdog = this.createEmptyServerWatchdog(matchPlan.id);
-      this.emptyServerWatchdogs.set(matchPlan.id, emptyServerWatchdog);
-      const connect = buildConnectInfo(matchPlan, this.options.config.publicConnectHost, launched.port);
+      const watchdog = this.createEmptyServerWatchdog(matchId, attempt);
+      this.emptyServerWatchdogs.set(gameKey, watchdog);
+      const connect = buildConnectInfo(matchPlan, publicConnectHost, launched.port);
       try {
-        await this.bindDemoOwner(matchPlan.id, launched);
-        await this.saveConnectState(matchPlan.id, launched, connect);
+        await this.bindDemoOwner(gameKey, launched);
+        await this.saveConnectState(matchId, launched, connect, attempt);
       } catch (error) {
-        this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog);
-        emptyServerWatchdog.start();
+        this.watchServerExit(matchId, spec, launched, watchdog, undefined, attempt);
+        watchdog.start();
         throw error;
       }
-      const gameServerPresenceMonitor = this.createGameServerPresenceMonitor(matchPlan.id);
-      if (gameServerPresenceMonitor) {
-        this.gameServerPresenceMonitors.set(matchPlan.id, gameServerPresenceMonitor);
-        gameServerPresenceMonitor.start();
+      const monitor = this.createGameServerPresenceMonitor(matchId, attempt);
+      if (monitor) {
+        this.gameServerPresenceMonitors.set(gameKey, monitor);
+        monitor.start();
       }
-      this.watchServerExit(matchPlan.id, spec, launched, emptyServerWatchdog, gameServerPresenceMonitor);
-      emptyServerWatchdog.start();
+      this.watchServerExit(matchId, spec, launched, watchdog, monitor, attempt);
+      watchdog.start();
       return connect;
     } catch (error) {
-      if (!launchedGame) await this.settleMatchDemos(matchPlan.id).catch(() => undefined);
+      if (!launchedGame && !attempt) await this.settleMatchDemos(matchId).catch(() => undefined);
       throw error;
     }
   }
@@ -207,30 +219,62 @@ export class MatchExecutor {
     return { state: await querySourceServer("127.0.0.1", port, 500) ? "running" : "unknown", port };
   }
 
-  async stopGameServerPresence(matchId: string): Promise<void> {
-    const monitor = this.gameServerPresenceMonitors.get(matchId);
-    if (!monitor) return;
-    await this.stopGameServerPresenceMonitor(matchId, monitor);
+  async stopGameServerPresence(matchId: string, attempt?: GameServerAttempt): Promise<void> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const monitor = this.gameServerPresenceMonitors.get(gameKey);
+    if (monitor) await this.stopGameServerPresenceMonitor(gameKey, monitor);
   }
 
-  async requestGameServerShutdown(matchId: string): Promise<GameServerShutdownResult> {
-    await this.emptyServerWatchdogs.get(matchId)?.stopAndDrain();
+  async checkPendingGameServerStartup(matchId: string, attempt: GameServerAttempt): Promise<"pending" | "owned" | "reported" | undefined> {
     const { serverRoot } = this.options.config;
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const exit = await this.options.launcher.inspectPendingStartupExit?.(serverRoot, gameKey);
+    if (!exit || typeof exit === "string") return exit;
+    await this.handoffServerExit(matchId, Promise.resolve(exit), attempt, () => this.bindDemoOwner(gameKey));
+    return "reported";
+  }
+
+  async confirmGameServerExit(matchId: string, attempt: GameServerAttempt): Promise<boolean> {
+    if (process.platform !== "linux") return false;
+    const { serverRoot, portRange } = this.options.config;
+    const root = path.resolve(serverRoot);
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const owner = activeAssetRoots.get(root.toLowerCase());
+    if (owner && owner !== gameKey) return false;
+    const saved = await this.options.records?.readServer?.(matchId, attempt) as { identity?: unknown } | null | undefined;
+    const identity = isGameProcessIdentity(saved?.identity) ? saved.identity
+      : owner === gameKey ? this.options.launcher.getIdentity?.(root) : undefined;
+    if (identity) {
+      if (identity.serverRoot !== root) return false;
+      const state = await inspectLinuxGameProcessIdentity(identity);
+      if (state !== "gone" && state !== "mismatch") return false;
+    }
+    const { inspectLinuxGameRoot, inspectLinuxUdpPort } = await import("./linuxProcess.js");
+    return await inspectLinuxGameRoot(root) === "gone" && await inspectLinuxUdpPort(portRange.start) === "free";
+  }
+
+  async requestGameServerShutdown(matchId: string, attempt?: GameServerAttempt): Promise<GameServerShutdownResult> {
+    const { serverRoot } = this.options.config;
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const owner = activeAssetRoots.get(path.resolve(serverRoot).toLowerCase());
+    if (attempt && owner && owner !== gameKey) return "not_owned";
+    await this.emptyServerWatchdogs.get(gameKey)?.stopAndDrain();
+    if (attempt && await this.checkPendingGameServerStartup(matchId, attempt) === "reported") return "exit_report_pending";
     const { identity, owned } = await retryTemporaryServerIo(async () => {
-      const pending = this.pendingControlledShutdowns.get(matchId);
+      const pending = this.pendingControlledShutdowns.get(gameKey);
       let identity = pending?.identity ?? this.options.launcher.getIdentity?.(serverRoot);
       if (!identity) {
-        const saved = await this.options.records?.readServer?.(matchId) as { identity?: unknown } | null | undefined;
+        const saved = await this.options.records?.readServer?.(matchId, attempt) as { identity?: unknown } | null | undefined;
         if (isGameProcessIdentity(saved?.identity)) identity = saved.identity;
       }
-      const status = await readCurrentStatus(serverRoot, matchId, { staleAfterMs: 90_000, nowMs: Date.now });
+      const status = await readCurrentStatus(serverRoot, gameKey, { staleAfterMs: 90_000, nowMs: Date.now });
       const processState = identity && await inspectLinuxGameProcessIdentity(identity);
-      const trackedLaunch = this.emptyServerWatchdogs.has(matchId);
+      const trackedLaunch = this.emptyServerWatchdogs.has(gameKey);
       if (processState === "gone" || (processState === "mismatch" && !trackedLaunch)) {
-        this.pendingControlledShutdowns.delete(matchId);
+        this.pendingControlledShutdowns.delete(gameKey);
         return { identity: processState === "gone" ? identity : undefined, owned: false };
       }
-      const hasMatchEvidence = Boolean(status) || this.gameServerPresenceMonitors.has(matchId);
+      const hasMatchEvidence = Boolean(status) || this.gameServerPresenceMonitors.has(gameKey);
       // The watchdog is registered after launch, even if saving connection state fails.
       if (!identity || (!hasMatchEvidence && !trackedLaunch)) {
         // An unavailable ownership check cannot resolve an earlier failed publication.
@@ -242,12 +286,12 @@ export class MatchExecutor {
           const message = hasMatchEvidence ? "Game process ownership could not be verified" : "Waiting for game server match status";
           throw pending?.error ?? Object.assign(new Error(message), { code: "EAGAIN" });
         }
-        await requestSourceModShutdown(serverRoot, matchId, "controlled");
+        await requestSourceModShutdown(serverRoot, gameKey, "controlled");
       } catch (error) {
-        this.pendingControlledShutdowns.set(matchId, { identity, error });
+        this.pendingControlledShutdowns.set(gameKey, { identity, error });
         throw error;
       }
-      this.pendingControlledShutdowns.delete(matchId);
+      this.pendingControlledShutdowns.delete(gameKey);
       return { identity, owned: true };
     }).catch(error => {
       throw new GameServerShutdownRetryError([error], "Failed to prepare or publish controlled shutdown for " + matchId);
@@ -265,46 +309,65 @@ export class MatchExecutor {
       startupObservationTimeoutMs: GAME_SERVER_SHUTDOWN_STARTUP_OBSERVATION_TIMEOUT_MS,
     });
     if (result === "closed" || result === "not_observed") {
-      try { await this.serverExitHandoffs.get(matchId); }
+      if (attempt && await this.checkPendingGameServerStartup(matchId, attempt)) return "exit_report_pending";
+      try { await this.serverExitHandoffs.get(gameKey); }
       catch { return "exit_report_pending"; }
       return result === "closed" ? "stopped" : "not_observed";
     }
     return owned ? "timeout" : "not_owned";
   }
 
-  async settleMatchDemos(matchId: string): Promise<void> {
-    const result = await this.options.demos?.settle(matchId);
-    if (result === "blocked") throw Object.assign(new Error("demo_settle_blocked"), { code: "demo_settle_blocked" });
+  async settleMatchDemos(matchId: string, attempt?: GameServerAttempt): Promise<void> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
     const root = path.resolve(this.options.config.serverRoot).toLowerCase();
-    if (activeAssetRoots.get(root) === matchId) activeAssetRoots.delete(root);
+    const owner = activeAssetRoots.get(root);
+    if (attempt && owner && owner !== gameKey) throw new Error("asset_game_active");
+    const result = await this.options.demos?.settle(gameKey);
+    if (result === "blocked") throw Object.assign(new Error("demo_settle_blocked"), { code: "demo_settle_blocked" });
+    if (activeAssetRoots.get(root) === gameKey) activeAssetRoots.delete(root);
   }
 
-  async deleteMatchArtifacts(matchId: string): Promise<void> {
-    await this.settleMatchDemos(matchId);
-    const safeMatchId = validateMatchId(matchId);
-    await rm(path.dirname(competMatchStatsPath(this.options.config.serverRoot, safeMatchId)), { recursive: true, force: true });
+  async deleteMatchArtifacts(matchId: string, attempt?: GameServerAttempt): Promise<void> {
+    await this.settleMatchDemos(matchId, attempt);
+    const gameKeys = new Set([gameServerRecordKey(validateMatchId(matchId), attempt)]);
+    if (attempt) {
+      for (const id of await this.options.records?.listGameServerAttemptIds?.(matchId) ?? []) gameKeys.add(id);
+    }
+    for (const gameKey of gameKeys) {
+      const directory = path.dirname(competMatchStatsPath(this.options.config.serverRoot, gameKey));
+      if (attempt) await assertPlainPath(directory);
+      await rm(directory, { recursive: true, force: true });
+    }
   }
 
-  async collectShutdownEvidence(matchId: string): Promise<ShutdownEvidence> {
-    return collectShutdownEvidence(this.options.config.serverRoot, matchId,
-      async () => this.options.records?.readShutdownLogBaseline?.(matchId));
+  async readGet5FlowAtExit(matchId: string, attempt: GameServerAttempt): Promise<Get5FlowAtExit> {
+    return retryTemporaryServerIo(() =>
+      readGet5FlowAtExit(this.options.config.serverRoot, gameServerRecordKey(matchId, attempt)));
   }
 
-  private async prepareShutdownEvidence(matchId: string, signal?: AbortSignal): Promise<void> {
+  async collectShutdownEvidence(
+    matchId: string, attempt?: GameServerAttempt, includeGet5Flow = false, collection?: ShutdownEvidenceCollection,
+  ): Promise<ShutdownEvidence> {
+    return collectShutdownEvidence(this.options.config.serverRoot, gameServerRecordKey(matchId, attempt),
+      async () => this.options.records?.readShutdownLogBaseline?.(matchId, attempt), includeGet5Flow, collection);
+  }
+
+  private async prepareShutdownEvidence(matchId: string, signal?: AbortSignal, attempt?: GameServerAttempt): Promise<void> {
     const records = this.options.records;
     if (!records?.readShutdownLogBaseline || !records.saveShutdownLogBaseline) return;
-    if (await records.readShutdownLogBaseline(matchId)) throw new Error("shutdown_log_baseline_already_exists");
+    if (await records.readShutdownLogBaseline(matchId, attempt)) throw new Error("shutdown_log_baseline_already_exists");
     const { serverRoot } = this.options.config;
     if (process.platform === "linux") {
       const { inspectLinuxGameRoot } = await import("./linuxProcess.js");
       if (await inspectLinuxGameRoot(serverRoot) !== "gone") throw new Error("shutdown_log_game_root_busy");
     }
-    const baseline = await captureShutdownLogBaseline(serverRoot, matchId, { signal, historyCache: this.shutdownLogHistory });
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const baseline = await captureShutdownLogBaseline(serverRoot, gameKey, { signal, historyCache: this.shutdownLogHistory });
     signal?.throwIfAborted();
-    await records.saveShutdownLogBaseline(matchId, baseline);
+    await records.saveShutdownLogBaseline(matchId, baseline, attempt);
   }
 
-  private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<void> {
+  private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<FileFingerprint | undefined> {
     if (!this.options.assets) throw new Error("asset_source_required");
     const source = await this.options.assets();
     const transaction = await installRunCsgoAssets({ sourceRoot: source.root, serverRoot: this.options.config.serverRoot,
@@ -330,6 +393,7 @@ export class MatchExecutor {
       await ensureBaseCfgLoadsNoRandomBots(this.options.config.serverRoot, transaction);
       await ensureSourceModCfgLoadsActiveMatch(this.options.config.serverRoot, transaction);
       await transaction.commit();
+      return source.files.find(file => file.path === "run_csgo.sh");
     } catch (error) { await transaction.rollback(); throw error; }
   }
 
@@ -342,14 +406,16 @@ export class MatchExecutor {
     }
   }
 
-  private async saveConnectState(matchId: string, launched: LaunchedGameServer, connect: MatchConnectInfo): Promise<void> {
+  private async saveConnectState(
+    matchId: string, launched: LaunchedGameServer, connect: MatchConnectInfo, attempt?: GameServerAttempt,
+  ): Promise<void> {
     await this.options.records?.saveServer(matchId, {
       pid: launched.pid,
       ...(launched.identity ? { identity: launched.identity } : {}),
       port: launched.port,
       clientPort: launched.clientPort,
       connect,
-    });
+    }, attempt);
     await this.options.records?.saveStatus(matchId, { phase: "connect", connect });
   }
 
@@ -357,69 +423,69 @@ export class MatchExecutor {
     matchId: string,
     spec: RunCsgoLaunchSpec,
     launched: LaunchedGameServer,
-    emptyServerWatchdog: EmptyServerWatchdog,
-    gameServerPresenceMonitor?: GameServerPresenceMonitor,
+    watchdog: EmptyServerWatchdog,
+    monitor?: GameServerPresenceMonitor,
+    attempt?: GameServerAttempt,
   ): void {
-    const reportError = (error: unknown) => process.stderr.write("Server exit cleanup " + matchId + ": " + String(error) + "\n");
-    const stopWatchdog = () => {
-      emptyServerWatchdog.stop();
-      if (this.emptyServerWatchdogs.get(matchId) === emptyServerWatchdog) this.emptyServerWatchdogs.delete(matchId);
-    };
+    const gameKey = gameServerRecordKey(matchId, attempt);
     const stopMonitors = async () => {
-      stopWatchdog();
-      if (gameServerPresenceMonitor) {
-        await this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor);
-      }
-      if (!this.options.onServerExit) {
-        await this.settleMatchDemos(matchId);
-      }
-    };
-    const observeDemoOwner = async () => {
-      try { await this.bindDemoOwner(matchId, launched); }
-      catch (error) {
-        process.stderr.write("Demo owner " + matchId + ": " + (error instanceof Error ? error.message : String(error)) + "\n");
-      }
+      await watchdog.stopAndDrain();
+      if (this.emptyServerWatchdogs.get(gameKey) === watchdog) this.emptyServerWatchdogs.delete(gameKey);
+      if (monitor) await this.stopGameServerPresenceMonitor(gameKey, monitor);
     };
     const monitored = spec.serverExitMonitor;
     const exit = spec.exitIndicatesServerExit ? launched.waitForExit() : monitored
-      ? waitForSourceServerExit({ ...monitored, onObservation: observeDemoOwner }).then(result => ({
-          code: null, signal: null, output: [formatServerExitMonitorOutput(result, monitored)],
-        }))
+      ? waitForSourceServerExit({ ...monitored, onObservation: async () => {
+          try { await this.bindDemoOwner(gameKey, launched); }
+          catch (error) { this.serverExitErrorLogger(matchId)(error); }
+        } }).then(result => ({ code: null, signal: null, output: [formatServerExitMonitorOutput(result, monitored)] }))
       : undefined;
-    const onServerExit = this.options.onServerExit;
-    if (!exit || !onServerExit) {
-      if (exit) void exit.then(stopMonitors).catch(reportError);
-      else if (gameServerPresenceMonitor && !onServerExit) void stopMonitors().catch(reportError);
-      return;
-    }
+    const logError = this.serverExitErrorLogger(matchId);
+    if (exit) void this.handoffServerExit(matchId, exit, attempt, stopMonitors).catch(logError);
+    else if (monitor && !this.options.onServerExit) void stopMonitors().catch(logError);
+  }
 
-    const trackHandoff = (handoff: Promise<void>): Promise<void> => {
-      this.serverExitHandoffs.set(matchId, handoff);
+  private serverExitErrorLogger(matchId: string): (error: unknown) => void {
+    return error => { process.stderr.write("Server exit cleanup " + matchId + ": " + String(error) + "\n"); };
+  }
+
+  private handoffServerExit(
+    matchId: string, exit: Promise<GameServerExitInfo>, attempt?: GameServerAttempt, drain?: () => Promise<void>,
+  ): Promise<void> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const active = this.serverExitHandoffs.get(gameKey);
+    if (active) return active;
+    const onServerExit = this.options.onServerExit;
+    const track = (handoff: Promise<void>) => {
+      this.serverExitHandoffs.set(gameKey, handoff);
       void handoff.then(() => {
-        if (this.serverExitHandoffs.get(matchId) === handoff) this.serverExitHandoffs.delete(matchId);
+        if (this.serverExitHandoffs.get(gameKey) === handoff) this.serverExitHandoffs.delete(gameKey);
       }, () => undefined);
       return handoff;
     };
-    // Service stop waits for reads that have yet to reach the business callback.
-    const handoff = exit.then(async exitInfo => {
-      this.pendingControlledShutdowns.delete(matchId);
-      const pending = { observation: { matchId, observedAt: new Date().toISOString(), exitInfo } };
-      this.pendingServerExitObservations.set(matchId, pending);
-      stopWatchdog();
-      if (gameServerPresenceMonitor) await this.stopGameServerPresenceMonitor(matchId, gameServerPresenceMonitor).catch(reportError);
+    return track(exit.then(async exitInfo => {
+      this.pendingControlledShutdowns.delete(gameKey);
+      if (!onServerExit) {
+        await drain?.();
+        await this.settleMatchDemos(matchId, attempt);
+        return;
+      }
+      const pending = { matchId, attempt, observation: { matchId: gameKey, observedAt: new Date().toISOString(), exitInfo } };
+      this.pendingServerExitObservations.set(gameKey, pending);
       const submitReport = async () => {
+        await drain?.();
         const observation = await this.persistServerExitObservation(pending);
         const report = await this.readObservedServerExitReport(observation);
-        void Promise.resolve(onServerExit(matchId, report)).catch(reportError);
+        // Settlement may await the current prepare promise. Hand off without awaiting it.
+        void Promise.resolve(onServerExit(matchId, report, attempt)).catch(this.serverExitErrorLogger(matchId));
       };
       try {
         await submitReport();
       } catch (error) {
-        this.options.onServerExitReportPending?.(matchId, () => trackHandoff(submitReport()));
+        this.options.onServerExitReportPending?.(matchId, () => track(submitReport()), attempt);
         throw error;
       }
-    });
-    void trackHandoff(handoff).catch(reportError);
+    }));
   }
 
   async waitForServerExitHandoffs(): Promise<ReadonlySet<string>> {
@@ -443,15 +509,15 @@ export class MatchExecutor {
 
   private persistServerExitObservation(pending: PendingServerExitObservation): Promise<MatchServerExitObservation> {
     if (!pending.write) {
-      const { observation } = pending;
-      const { matchId } = observation;
+      const { matchId, attempt, observation } = pending;
+      const gameKey = observation.matchId;
       const records = this.options.records;
       pending.write = (async () => {
-        const saved = await retryTemporaryServerIo(async () => records?.readServerExitObservation?.(matchId));
+        const saved = await retryTemporaryServerIo(async () => records?.readServerExitObservation?.(matchId, attempt));
         const checkpoint = saved ?? observation;
         // A failed directory sync can leave a visible file. Confirm a durable write before clearing the pending exit.
-        await retryTemporaryServerIo(async () => records?.saveServerExitObservation?.(matchId, checkpoint));
-        if (this.pendingServerExitObservations.get(matchId) === pending) this.pendingServerExitObservations.delete(matchId);
+        await retryTemporaryServerIo(async () => records?.saveServerExitObservation?.(matchId, checkpoint, attempt));
+        if (this.pendingServerExitObservations.get(gameKey) === pending) this.pendingServerExitObservations.delete(gameKey);
         return checkpoint;
       })().catch(error => {
         delete pending.write;
@@ -472,22 +538,23 @@ export class MatchExecutor {
     };
   }
 
-  private createEmptyServerWatchdog(matchId: string): EmptyServerWatchdog {
+  private createEmptyServerWatchdog(matchId: string, attempt?: GameServerAttempt): EmptyServerWatchdog {
+    const records = this.options.records;
     return new EmptyServerWatchdog({
-      matchId,
+      matchId: gameServerRecordKey(matchId, attempt),
       serverRoot: this.options.config.serverRoot,
       config: this.options.emptyServerWatchdog,
-      records: this.options.records,
+      records: records && { appendEvent: (_gameKey, event) => records.appendEvent(matchId, event) },
     });
   }
 
-  private createGameServerPresenceMonitor(matchId: string): GameServerPresenceMonitor | undefined {
+  private createGameServerPresenceMonitor(matchId: string, attempt?: GameServerAttempt): GameServerPresenceMonitor | undefined {
     const onChange = this.options.onGameServerPresence;
     if (!onChange) return undefined;
     return new GameServerPresenceMonitor({
       serverRoot: this.options.config.serverRoot,
-      matchId,
-      onChange: (steam64s) => onChange(matchId, steam64s),
+      matchId: gameServerRecordKey(matchId, attempt),
+      onChange: (steam64s) => onChange(matchId, steam64s, attempt),
     });
   }
 

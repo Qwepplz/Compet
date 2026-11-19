@@ -153,11 +153,11 @@ export async function createRuntime(config: ServerConfig, layout?: ServerLayout)
       launcher: new LinuxGameServerLauncher({ onStdout: gameStdoutHandler }),
       records,
       config: config.gameServer,
-      onServerExit: async (matchId, report) => {
-        await matchmaking?.completeMatchFromServerExit(matchId, report);
+      onServerExit: async (matchId, report, attempt) => {
+        await matchmaking?.completeMatchFromServerExit(matchId, report, attempt);
       },
-      onServerExitReportPending: (matchId, retry) => matchmaking?.scheduleServerExitReportAssemblyRetry(matchId, retry),
-      onGameServerPresence: (matchId, steam64s) => matchmaking?.updateGameServerPresence(matchId, steam64s),
+      onServerExitReportPending: (matchId, retry, attempt) => matchmaking?.scheduleServerExitReportAssemblyRetry(matchId, retry, attempt),
+      onGameServerPresence: (matchId, steam64s, attempt) => matchmaking?.updateGameServerPresence(matchId, steam64s, attempt),
     });
     const botCatalog = await loadRuntimeBotCatalog(config.gameServer.serverRoot);
     const matchmakingService = new MatchmakingService({

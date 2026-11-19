@@ -5,8 +5,10 @@ import type { BotCatalog } from "../bots/botCatalog.js";
 import type { FriendListDto } from "../friends/friendService.js";
 import type { CompetMatchHalfScores, CompetMatchPlayerStats, CompetSideHalfScore } from "../game/competMatchStats.js";
 import type { Get5MatchSeriesResult } from "../game/get5MatchResult.js";
+import { gameServerRecordKey, type GameServerAttempt } from "../game/gameServerAttempt.js";
+import { GameServerStartupExitError, type GameServerExitInfo } from "../game/gameServerLauncher.js";
 import { calculateHltvRating2 } from "../game/matchRating.js";
-import { classifyFailureCause, type ShutdownEvidence } from "../game/shutdownEvidence.js";
+import { classifyFailureCause, type ShutdownEvidence, type ShutdownEvidenceCollection } from "../game/shutdownEvidence.js";
 import { GameServerShutdownRetryError, type GameServerShutdownResult, type MatchConnectInfo, type MatchServerExitObservation, type MatchServerExitReport } from "../game/matchExecutor.js";
 import { DEFAULT_RANKME_SCORE, lookupRankmeScore, type RankmeScoreReader } from "../rankme/rankmeScoreStore.js";
 import { rankmeDisplayFromLookup, type RankmeDisplay } from "../rankme/rankmeStandings.js";
@@ -212,16 +214,20 @@ type ReadyTimeoutScheduler = (handler: () => void, timeoutMs: number) => ReadyTi
 type ReadyTimeoutCanceler = (handle: ReadyTimeoutHandle) => void;
 
 export interface MatchExecutorPort {
-  collectShutdownEvidence?(matchId: string): Promise<ShutdownEvidence>;
-  settleMatchDemos?(matchId: string): Promise<void>;
+  collectShutdownEvidence?(
+    matchId: string, attempt?: GameServerAttempt, includeGet5Flow?: boolean, collection?: ShutdownEvidenceCollection,
+  ): Promise<ShutdownEvidence>;
+  settleMatchDemos?(matchId: string, attempt?: GameServerAttempt): Promise<void>;
   getGameServerStatus?(): Promise<import("../server/adminStatus.js").AdminGameStatus>;
-  prepare(plan: MatchPlan, signal?: AbortSignal): Promise<MatchConnectInfo>;
-  deleteMatchArtifacts?(matchId: string): Promise<void>;
-  requestGameServerShutdown?(matchId: string): Promise<GameServerShutdownResult>;
+  prepare(plan: MatchPlan, signal?: AbortSignal, attempt?: GameServerAttempt): Promise<MatchConnectInfo>;
+  deleteMatchArtifacts?(matchId: string, attempt?: GameServerAttempt): Promise<void>;
+  requestGameServerShutdown?(matchId: string, attempt?: GameServerAttempt): Promise<GameServerShutdownResult>;
+  checkPendingGameServerStartup?(matchId: string, attempt: GameServerAttempt): Promise<"pending" | "owned" | "reported" | undefined>;
+  confirmGameServerExit?(matchId: string, attempt: GameServerAttempt): Promise<boolean>;
   waitForServerExitHandoffs?(): Promise<ReadonlySet<string>>;
   flushPendingServerExitObservations?(): Promise<void>;
   readObservedServerExitReport?(observation: MatchServerExitObservation): Promise<MatchServerExitReport>;
-  stopGameServerPresence?(matchId: string): Promise<void>;
+  stopGameServerPresence?(matchId: string, attempt?: GameServerAttempt): Promise<void>;
 }
 
 export interface MatchDatabaseBackup {
@@ -298,6 +304,23 @@ interface CommittedMatchReconciliation {
   retryRequired: boolean;
 }
 
+interface MatchTask {
+  controller: AbortController;
+  backup: Promise<void>;
+  draft?: Promise<void>;
+  prepare?: Promise<void>;
+  cancelled: boolean;
+  plan?: MatchPlan;
+  attempt?: GameServerAttempt;
+  nextAttempt?: GameServerAttempt;
+}
+
+interface AttemptExitCheckpoint<T> {
+  matchId: string;
+  attempt?: GameServerAttempt;
+  value: T;
+}
+
 type StopMatchTaskOptions = { discardBackup: boolean };
 type FailedMatchCleanupStage = "match_task" | "backup" | "server_presence" | "artifacts" | "party_unlock" | "event";
 
@@ -332,11 +355,13 @@ export class MatchmakingService {
   private readonly staleCompensationAttempts = new Map<string, { description: string; run: () => Promise<void>; delayMs: number }>();
   private readonly failedMatchCleanups = new Map<string, FailedMatchCleanupProgress>();
   private readonly preparationCancellationFailureEvents = new Map<string, string>();
-  private readonly pendingServerExitReports = new Map<string, MatchServerExitReport>();
-  private readonly pendingShutdownEvidence = new Map<string, ShutdownEvidence>();
+  private readonly pendingServerExitReports = new Map<string, AttemptExitCheckpoint<MatchServerExitReport>>();
+  private readonly pendingShutdownEvidence = new Map<string, AttemptExitCheckpoint<ShutdownEvidence>>();
   private readonly serverExitTasks = new Map<string, Promise<PublicMatchRoomRecord | undefined>>();
   private mutationQueue: Promise<unknown> = Promise.resolve();
-  private readonly matchTasks = new Map<string, { controller: AbortController; backup: Promise<void>; draft?: Promise<void>; prepare?: Promise<void>; cancelled: boolean }>();
+  private activeRetryRollback?: symbol;
+  private readonly retryRollbackReaders = new Set<(window: symbol) => void>();
+  private readonly matchTasks = new Map<string, MatchTask>();
   private shutdownPromise?: Promise<ServiceShutdownSummary>;
   private shutdownRequested = false;
   private maintenanceRequested = false;
@@ -523,7 +548,7 @@ export class MatchmakingService {
       if (!isServerManagedPhase(room.phase)) continue;
       let result: GameServerShutdownResult = "not_observed";
       try {
-        result = await this.deps.executor?.requestGameServerShutdown?.(room.id) ?? "not_observed";
+        result = await this.deps.executor?.requestGameServerShutdown?.(room.id, room.gameServerAttempt) ?? "not_observed";
       } catch (error) {
         if (error instanceof GameServerShutdownRetryError) throw error;
         result = "timeout";
@@ -531,7 +556,7 @@ export class MatchmakingService {
       }
       gameServerShutdown.set(room.id, result);
       try {
-        await this.deps.executor?.stopGameServerPresence?.(room.id);
+        await this.deps.executor?.stopGameServerPresence?.(room.id, room.gameServerAttempt);
         gameServerPresenceStopped.set(room.id, true);
       } catch (error) {
         gameServerPresenceStopped.set(room.id, false);
@@ -548,11 +573,14 @@ export class MatchmakingService {
     await this.flushPendingShutdownEvidence();
     const blockedDemos = new Set<string>();
     for (const matchId of knownMatchIds) {
-      if (gameServerShutdown.get(matchId) === "exit_report_pending" || deferredExits?.has(matchId)) {
+      const attempt = roomsBeforeStop.find(room => room.id === matchId)?.gameServerAttempt;
+      const shutdown = gameServerShutdown.get(matchId);
+      if (shutdown === "exit_report_pending" || deferredExits?.has(gameServerRecordKey(matchId, attempt)) ||
+          (attempt && shutdown && shutdown !== "stopped" && shutdown !== "not_observed")) {
         blockedDemos.add(matchId);
         continue;
       }
-      try { await this.settleDemosOutsideMutation(matchId); }
+      try { await this.settleDemosOutsideMutation(matchId, attempt); }
       catch { blockedDemos.add(matchId); }
     }
     const summary = await this.enqueueMutation(async () => {
@@ -579,8 +607,8 @@ export class MatchmakingService {
         if (isTerminalMatchPhase(room.phase)) continue;
         try {
           if (await this.deps.records?.readCompletedMatch?.(room.id)) completedMatchIds.add(room.id);
-          else if (await this.deps.records?.readServerExitReport?.(room.id) ||
-              await this.deps.records?.readServerExitObservation?.(room.id)) pendingExitIds.add(room.id);
+          else if (await this.deps.records?.readServerExitReport?.(room.id, room.gameServerAttempt) ||
+              await this.deps.records?.readServerExitObservation?.(room.id, room.gameServerAttempt)) pendingExitIds.add(room.id);
         } catch (error) {
           completionLookupFailedIds.add(room.id);
           process.stderr.write(`Failed to check completed match before service-stop failure ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -667,25 +695,38 @@ export class MatchmakingService {
     return summary;
   }
 
-  async recoverInterruptedMatches(onlyMatchIds?: ReadonlySet<string>): Promise<ServiceShutdownSummary> {
+  async recoverInterruptedMatches(
+    onlyMatchIds?: ReadonlySet<string>, expectedAttempt?: GameServerAttempt,
+  ): Promise<ServiceShutdownSummary> {
     const pendingExits = new Set<string>();
+    const restarted = new Set<string>();
     if (this.deps.records?.readServerExitReport) for (const room of await this.deps.store.listRooms()) {
       if (!isServerManagedPhase(room.phase) || onlyMatchIds && !onlyMatchIds.has(room.id)) continue;
-      let report = await this.deps.records.readServerExitReport(room.id);
+      const attempt = room.gameServerAttempt;
+      if (expectedAttempt && !sameGameServerAttempt(attempt, expectedAttempt)) continue;
+      if (attempt && onlyMatchIds && !this.startupRecoveryPending &&
+          await this.deps.executor?.checkPendingGameServerStartup?.(room.id, attempt) === "pending") {
+        pendingExits.add(room.id);
+        continue;
+      }
+      let report = await this.deps.records.readServerExitReport(room.id, attempt);
       if (!report) {
-        const observation = await this.deps.records.readServerExitObservation?.(room.id);
+        const observation = await this.deps.records.readServerExitObservation?.(room.id, attempt);
         if (!observation) continue;
         if (!this.deps.executor?.readObservedServerExitReport) throw new Error("Cannot assemble observed server exit: " + room.id);
         report = await this.deps.executor.readObservedServerExitReport(observation);
       }
       try {
-        const completed = await this.completeMatchFromServerExit(room.id, report);
-        if (completed && isServerManagedPhase(completed.phase)) pendingExits.add(room.id);
+        const completed = await this.completeMatchFromServerExit(room.id, report, attempt);
+        const current = (await this.deps.store.listRooms()).find(entry => entry.id === room.id);
+        if (current && !sameGameServerAttempt(current.gameServerAttempt, attempt)) restarted.add(room.id);
+        else if (completed && isServerManagedPhase(completed.phase)) pendingExits.add(room.id);
       } catch (error) {
         pendingExits.add(room.id);
         process.stderr.write("Saved server exit remains pending for " + room.id + ": " + String(error) + "\n");
       }
     }
+    const recoveryAttempts = new Map<string, GameServerAttempt | undefined>();
     const scope = await this.enqueueMutation(async () => {
       const [rooms, parties, indexed] = await Promise.all([
         this.deps.store.listRooms(),
@@ -704,28 +745,53 @@ export class MatchmakingService {
         for (const id of this.pendingPartyMatchIdsWithoutRoom(parties, roomIds)) candidates.add(id);
         for (const id of this.matchTasks.keys()) if (!roomIds.has(id)) candidates.add(id);
       }
-      for (const id of pendingExits) candidates.delete(id);
+      if (expectedAttempt) {
+        for (const id of candidates) {
+          const room = rooms.find(entry => entry.id === id);
+          if (!sameGameServerAttempt(room?.gameServerAttempt, expectedAttempt)) candidates.delete(id);
+        }
+      }
+      for (const room of rooms) {
+        if (isServerManagedPhase(room.phase) && this.serverExitTasks.has(gameServerRecordKey(room.id, room.gameServerAttempt))) {
+          pendingExits.add(room.id);
+        }
+        if (candidates.has(room.id)) recoveryAttempts.set(room.id, room.gameServerAttempt);
+      }
+      for (const id of [...pendingExits, ...restarted]) candidates.delete(id);
       await this.deps.store.savePendingBackupCleanupMatchIds([...new Set([...indexed, ...candidates])]);
       return candidates;
     });
-    await Promise.all([...scope].map((matchId) => this.stopMatchTask(matchId, { discardBackup: false })));
+    await Promise.all([...scope].map(matchId => {
+      const task = this.matchTasks.get(matchId);
+      const attempt = recoveryAttempts.get(matchId);
+      if (task?.attempt && !sameGameServerAttempt(task.attempt, attempt) &&
+          !(task.nextAttempt && sameGameServerAttempt(task.nextAttempt, attempt))) {
+        scope.delete(matchId);
+        return undefined;
+      }
+      return this.stopMatchTask(matchId, { discardBackup: false });
+    }));
 
     const gameServerShutdown = new Map<string, GameServerShutdownResult>();
     const gameServerPresenceStopped = new Map<string, boolean>();
     for (const room of await this.deps.store.listRooms()) {
       if (!scope.has(room.id) || room.phase === "completed") continue;
+      if (!sameGameServerAttempt(room.gameServerAttempt, recoveryAttempts.get(room.id))) {
+        gameServerShutdown.set(room.id, "not_owned");
+        continue;
+      }
       let result: GameServerShutdownResult = "not_observed";
       try {
         if (isServerManagedPhase(room.phase)
           || (room.phase === "failed" && room.databaseWriteStarted !== false && await this.databaseBackupExists(room.id))) {
-          result = await this.deps.executor?.requestGameServerShutdown?.(room.id) ?? "not_observed";
+          result = await this.deps.executor?.requestGameServerShutdown?.(room.id, room.gameServerAttempt) ?? "not_observed";
         }
       } catch {
         result = "timeout";
       }
       gameServerShutdown.set(room.id, result);
       try {
-        await this.deps.executor?.stopGameServerPresence?.(room.id);
+        await this.deps.executor?.stopGameServerPresence?.(room.id, room.gameServerAttempt);
         gameServerPresenceStopped.set(room.id, true);
       } catch {
         gameServerPresenceStopped.set(room.id, false);
@@ -736,7 +802,7 @@ export class MatchmakingService {
     for (const matchId of scope) {
       const shutdown = gameServerShutdown.get(matchId);
       if (shutdown && shutdown !== "stopped" && shutdown !== "not_observed") { blockedDemos.add(matchId); continue; }
-      try { await this.settleDemosOutsideMutation(matchId); }
+      try { await this.settleDemosOutsideMutation(matchId, recoveryAttempts.get(matchId)); }
       catch { blockedDemos.add(matchId); }
     }
     let recoveryError: unknown;
@@ -750,6 +816,7 @@ export class MatchmakingService {
           const rooms = await this.deps.store.listRooms();
           const room = rooms.find((candidate) => candidate.id === matchId);
           if (room) {
+            if (!sameGameServerAttempt(room.gameServerAttempt, recoveryAttempts.get(matchId))) continue;
             const committed = await this.reconcileCommittedMatchIfPresent(rooms, room);
             if (committed) {
               if (committed.retryRequired) continue;
@@ -812,7 +879,8 @@ export class MatchmakingService {
       return { failedMatchIds, unlockedPartyIds: [...new Set(unlockedPartyIds)], pendingCleanupMatchIds: [...new Set([...pendingCleanupMatchIds, ...pendingExits])] };
     });
     for (const matchId of scope) {
-      const key = "interrupted-recovery:" + matchId;
+      const attempt = recoveryAttempts.get(matchId);
+      const key = interruptedRecoveryKey(matchId, attempt);
       if (!summary.pendingCleanupMatchIds.includes(matchId)) {
         const timer = this.staleCompensationRetryTimers.get(key);
         if (timer) this.clearTimeoutFn(timer);
@@ -820,13 +888,7 @@ export class MatchmakingService {
         this.staleCompensationAttempts.delete(key);
         continue;
       }
-      this.scheduleStaleCompensationRetry(key, "Interrupted match recovery", async () => {
-        const pending = this.recoverInterruptedMatches(new Set([matchId])).then((result) => {
-          if (result.pendingCleanupMatchIds.includes(matchId)) throw new Error("interrupted recovery remains pending");
-        });
-        this.cleanupTasks.add(pending);
-        try { await pending; } finally { this.cleanupTasks.delete(pending); }
-      });
+      this.scheduleInterruptedMatchRecovery(matchId, attempt, "Interrupted match recovery");
     }
     if (recoveryError && !onlyMatchIds) throw recoveryError;
     await this.deliverPendingFailedMatchEvents();
@@ -1201,12 +1263,12 @@ export class MatchmakingService {
     return (await this.deps.store.listRooms()).some((room) => room.id === party.lockedMatchId && !isTerminalMatchPhase(room.phase));
   }
 
-  updateGameServerPresence(matchId: string, steam64s: readonly string[]): Promise<void> {
+  updateGameServerPresence(matchId: string, steam64s: readonly string[], attempt?: GameServerAttempt): Promise<void> {
     return this.enqueueMutation(async () => {
       const room = (await this.deps.store.listRooms()).find((candidate) => (
         candidate.id === matchId && !isTerminalMatchPhase(candidate.phase)
       ));
-      if (!room || !this.deps.presence) return;
+      if (!room || !this.deps.presence || !sameGameServerAttempt(room.gameServerAttempt, attempt)) return;
 
       const activeSteam64s = new Set(steam64s.filter((steam64) => steam64.trim().length > 0));
       const inGameAccountIds = this.humanParticipantsForRoom(room)
@@ -1740,7 +1802,7 @@ export class MatchmakingService {
     room: PublicMatchRoomRecord | null;
     occupancy: MatchmakingOccupancySummary;
   }> {
-    const snapshot = await this.enqueueMutation(async () => {
+    const readSnapshot = async () => {
       const queue = (await this.deps.store.listQueue()).filter((entry) => entry.accountId === accountId);
       const parties = await this.deps.store.listParties();
       const pendingCleanupMatchIds = new Set(await this.deps.store.listPendingBackupCleanupMatchIds());
@@ -1758,10 +1820,13 @@ export class MatchmakingService {
         partyRecord,
         pendingInvitations,
         occupancy: await this.occupancySummary(allRooms, parties, pendingCleanupMatchIds),
+        readDuringRollback: this.activeRetryRollback !== undefined,
       };
-    });
+    };
 
-    const party = snapshot.partyRecord ? await this.toPlayerPublicParty(snapshot.partyRecord) : null;
+    const snapshot = await this.readMatchmakingSnapshot(readSnapshot);
+    const cachedRankme = snapshot.readDuringRollback || this.activeRetryRollback !== undefined;
+    const party = snapshot.partyRecord ? await this.toPlayerPublicParty(snapshot.partyRecord, cachedRankme) : null;
     const partyInvitations = await Promise.all(
       snapshot.pendingInvitations.map((invitation) => this.toPartyInvitationDto(invitation)),
     );
@@ -1894,7 +1959,7 @@ export class MatchmakingService {
       if (room.phase === "failed") await this.stopMatchTask(room.id, { discardBackup: false });
       try {
         if (isTerminalMatchPhase(room.phase) || await this.deps.records?.readCompletedMatch?.(room.id)) {
-          await this.settleDemosOutsideMutation(room.id);
+          await this.settleDemosOutsideMutation(room.id, room.gameServerAttempt);
         }
       } catch { deferred.add(room.id); this.scheduleCommittedMatchRecoveryRetry(room.id); }
     }
@@ -1929,7 +1994,7 @@ export class MatchmakingService {
         const party = parties.find((candidate) => candidate.lockedMatchId === room.id);
         if (!party) continue;
         try {
-          this.assertDemosSettled(room.id);
+          this.assertDemosSettled(room.id, room.gameServerAttempt);
           await this.unlockPartyForRoom(room, room.terminalStateAt ?? this.now());
         } catch (error) {
           recoveryFailed = true;
@@ -1959,7 +2024,8 @@ export class MatchmakingService {
     if (!records?.readCompletedMatch) return;
     const committed = await records.readCompletedMatch(matchId);
     if (!committed) return;
-    await this.settleDemosOutsideMutation(matchId);
+    const previous = (await this.deps.store.listRooms()).find(entry => entry.id === matchId);
+    await this.settleDemosOutsideMutation(matchId, previous?.gameServerAttempt);
     await this.enqueueMutation(async () => {
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === matchId);
@@ -1990,68 +2056,122 @@ export class MatchmakingService {
 
   private readonly settledDemoMatchIds = new Set<string>();
 
-  private async settleDemosOutsideMutation(matchId: string): Promise<void> {
-    if (this.settledDemoMatchIds.has(matchId)) return;
-    await this.deps.executor?.settleMatchDemos?.(matchId);
-    this.settledDemoMatchIds.add(matchId);
+  private async settleDemosOutsideMutation(matchId: string, attempt?: GameServerAttempt): Promise<void> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    if (this.settledDemoMatchIds.has(gameKey)) return;
+    await this.deps.executor?.settleMatchDemos?.(matchId, attempt);
+    this.settledDemoMatchIds.add(gameKey);
   }
 
-  private assertDemosSettled(matchId: string): void {
-    if (this.deps.executor?.settleMatchDemos && !this.settledDemoMatchIds.has(matchId)) {
+  private assertDemosSettled(matchId: string, attempt?: GameServerAttempt): void {
+    if (this.deps.executor?.settleMatchDemos && !this.settledDemoMatchIds.has(gameServerRecordKey(matchId, attempt))) {
       throw Object.assign(new Error("demo_settle_blocked"), { code: "demo_settle_blocked" });
     }
   }
 
-  scheduleServerExitReportAssemblyRetry(matchId: string, retry: () => Promise<void>): void {
+  scheduleServerExitReportAssemblyRetry(matchId: string, retry: () => Promise<void>, attempt?: GameServerAttempt): void {
     this.scheduleStaleCompensationRetry(
-      "server-exit-report:" + matchId,
+      "server-exit-report:" + gameServerRecordKey(matchId, attempt),
       "Server exit report assembly",
-      () => this.trackCleanup(retry()),
+      async () => {
+        if (attempt) {
+          const room = (await this.deps.store.listRooms()).find(entry => entry.id === matchId);
+          if (!room || !sameGameServerAttempt(room.gameServerAttempt, attempt)) return;
+        }
+        await this.trackCleanup(retry());
+      },
     );
   }
 
-  completeMatchFromServerExit(matchId: string, report: MatchServerExitReport): Promise<PublicMatchRoomRecord | undefined> {
-    const active = this.serverExitTasks.get(matchId);
+  completeMatchFromServerExit(
+    matchId: string, report: MatchServerExitReport, attempt?: GameServerAttempt,
+  ): Promise<PublicMatchRoomRecord | undefined> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const active = this.serverExitTasks.get(gameKey);
     if (active) return active;
-    report = structuredClone(report);
-    if (!this.pendingServerExitReports.has(matchId)) this.pendingServerExitReports.set(matchId, report);
-    const task = this.trackCleanup(this.processServerExit(matchId, report));
-    this.serverExitTasks.set(matchId, task);
-    const clear = () => { this.serverExitTasks.delete(matchId); };
+    const task = this.trackCleanup(this.processServerExit(matchId, structuredClone(report), attempt));
+    this.serverExitTasks.set(gameKey, task);
+    const clear = () => { this.serverExitTasks.delete(gameKey); };
     void task.then(clear, clear);
     return task;
   }
 
-  private async processServerExit(matchId: string, report: MatchServerExitReport): Promise<PublicMatchRoomRecord | undefined> {
-    await this.matchTasks.get(matchId)?.prepare;
+  private async processServerExit(
+    matchId: string, report: MatchServerExitReport, attempt?: GameServerAttempt,
+  ): Promise<PublicMatchRoomRecord | undefined> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const task = this.matchTasks.get(matchId);
+    if (task && sameGameServerAttempt(task.attempt, attempt)) await task.prepare;
+    let registeredRetry = false;
+    let restoreError: string | undefined;
     try {
-      await this.enqueueMutation(async () => { report = await this.persistServerExitReport(matchId, report); });
-      await this.settleDemosOutsideMutation(matchId);
+      const roomAtExit = await this.enqueueMutation(async () => {
+        const room = (await this.deps.store.listRooms()).find(candidate => candidate.id === matchId);
+        if (!room || !sameGameServerAttempt(room.gameServerAttempt, attempt)) return undefined;
+        report = await this.persistServerExitReport(matchId, report, attempt);
+        return room;
+      });
+      if (!roomAtExit) return undefined;
+
+      const retryCandidate = attempt && report.get5Result.status !== "normal" &&
+        isServerManagedPhase(roomAtExit.phase) && isUnexpectedServerExit(report.exitInfo) &&
+        Boolean(this.gameServerRetryTask(roomAtExit, attempt));
+      if (!retryCandidate) await this.settleDemosOutsideMutation(matchId, attempt);
+
       let evidence: ShutdownEvidence | undefined;
-      if (report.get5Result.status !== "normal") {
-        const eligible = await this.enqueueMutation(async () => {
-          const room = (await this.deps.store.listRooms()).find(candidate => candidate.id === matchId);
-          return room && isServerManagedPhase(room.phase) && !await this.deps.records?.readCompletedMatch?.(matchId);
-        });
-        if (eligible) evidence = await this.checkpointShutdownEvidence(matchId);
+      let retry = false;
+      if (report.get5Result.status !== "normal" && isServerManagedPhase(roomAtExit.phase)
+          && !await this.deps.records?.readCompletedMatch?.(matchId)) {
+        evidence = await this.checkpointShutdownEvidence(matchId, attempt, Boolean(retryCandidate));
+        if (retryCandidate) {
+          const quit = evidence?.quit;
+          const flow = evidence?.get5FlowAtExit;
+          retry = report.exitInfo.startupFailure === "before_engine_exec"
+            ? !quit && flow === "missing"
+            : quit?.kind === "external" && !evidence?.get5 && flow === "before_get5";
+          if (retry) {
+            if (!await this.deps.executor?.confirmGameServerExit?.(matchId, attempt)) {
+              throw new Error("Game server exit remains unconfirmed: " + matchId);
+            }
+            retry = await this.withdrawRetryConnection(matchId, attempt);
+          }
+        }
       }
+      if (retryCandidate) await this.settleDemosOutsideMutation(matchId, attempt);
       const completed = await this.enqueueMutation(async () => {
         const rooms = await this.deps.store.listRooms();
-        const room = rooms.find((candidate) => candidate.id === matchId);
-        if (!room) return undefined;
+        const room = rooms.find(candidate => candidate.id === matchId);
+        if (!room || !sameGameServerAttempt(room.gameServerAttempt, attempt)) return undefined;
 
         const committed = await this.deps.records?.readCompletedMatch?.(matchId);
-        if (committed) {
-          return this.finalizeCommittedMatch(rooms, room, committed);
-        }
+        if (committed) return this.finalizeCommittedMatch(rooms, room, committed);
         if (!isServerManagedPhase(room.phase)) return this.toPublicRoom(room);
-        report = await this.deps.records?.readServerExitReport?.(matchId) ?? report;
-        this.assertDemosSettled(matchId);
+        const savedReport = await this.deps.records?.readServerExitReport?.(matchId, attempt);
+        report = savedReport ?? report;
+        this.assertDemosSettled(matchId, attempt);
 
         if (report.get5Result.status !== "normal") {
-          const restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
+          const retryTask = retry && attempt ? this.gameServerRetryTask(room, attempt) : undefined;
+          if (retryTask) {
+            if (!savedReport) throw new Error("Startup exit report is not durable: " + matchId);
+            if (!await this.databaseBackupExists(matchId)) throw new Error("Required startup retry backup is unavailable: " + matchId);
+          }
+          restoreError = retryTask?.nextAttempt ? undefined
+            : await this.restoreMatchDatabase(matchId, { preserveBackup: true }, Boolean(retryTask));
           if (restoreError) return this.toPublicRoom(room);
-          const failureCause = classifyFailureCause(matchId, evidence, report.exitInfo, false);
+          if (retryTask && attempt && this.gameServerRetryTask(room, attempt) === retryTask) {
+            if (!await this.deps.executor?.confirmGameServerExit?.(matchId, attempt)) {
+              throw new Error("Game server exit changed during rollback: " + matchId);
+            }
+            const lateCompletion = await this.deps.records?.readCompletedMatch?.(matchId);
+            if (lateCompletion) return this.finalizeCommittedMatch(rooms, room, lateCompletion);
+            if (this.canLaunchMatchTask(retryTask)) {
+              const reserved = await this.reserveGameServerRetry(rooms, room, attempt, retryTask);
+              registeredRetry = true;
+              return this.toPublicRoom(reserved);
+            }
+          }
+          const failureCause = classifyFailureCause(gameKey, evidence, report.exitInfo, false);
           return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed", undefined, undefined, failureCause));
         }
 
@@ -2077,14 +2197,14 @@ export class MatchmakingService {
           } as MatchSeriesResult;
         } catch (error) {
           process.stderr.write(`Match result processing failed for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`);
-          const restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
+          restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
           if (restoreError) return this.toPublicRoom(room);
           return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
         }
         const completedStatus = { phase: "completed", completedAt: result.completedAt, result, serverExit: report.exitInfo };
         try {
           if (!this.deps.records?.completeMatch) throw new Error("match records unavailable");
-          await this.deps.records.completeMatch(matchId, result, completedStatus);
+          await this.deps.records.completeMatch(matchId, result, completedStatus, attempt);
         } catch (error) {
           let committedAfterFailure;
           try {
@@ -2097,7 +2217,7 @@ export class MatchmakingService {
             return this.finalizeCommittedMatch(rooms, room, committedAfterFailure);
           }
           process.stderr.write(`Match result persistence failed for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`);
-          const restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
+          restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
           if (restoreError) return this.toPublicRoom(room);
           return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
         }
@@ -2114,73 +2234,146 @@ export class MatchmakingService {
           committedRecord = { plan: savedPlan, result };
         }
         if (!committedRecord) {
-          const restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
+          restoreError = await this.restoreMatchDatabase(matchId, { preserveBackup: true });
           if (restoreError) return this.toPublicRoom(room);
           return this.toPublicRoom(await this.failMatchRoom(rooms, room, "match_failed"));
         }
         return this.finalizeCommittedMatch(rooms, room, committedRecord);
       });
-      this.pendingServerExitReports.delete(matchId);
-      if (report.get5Result.status !== "normal" && completed && isServerManagedPhase(completed.phase)) {
-        this.scheduleServerExitRecovery(matchId, report);
+      this.pendingServerExitReports.delete(gameKey);
+      if (!registeredRetry && completed && isServerManagedPhase(completed.phase) &&
+          (report.get5Result.status !== "normal" || (attempt && restoreError))) {
+        this.scheduleServerExitRecovery(matchId, report, attempt);
         return completed;
       }
-      const key = "server-exit:" + matchId;
+      const key = "server-exit:" + gameKey;
       const timer = this.staleCompensationRetryTimers.get(key);
       if (timer) this.clearTimeoutFn(timer);
       this.staleCompensationRetryTimers.delete(key); this.staleCompensationAttempts.delete(key);
       return completed;
     } catch (error) {
-      this.scheduleServerExitRecovery(matchId, report);
+      this.scheduleServerExitRecovery(matchId, report, attempt);
       throw error;
     }
   }
 
-  private async checkpointShutdownEvidence(matchId: string): Promise<ShutdownEvidence | undefined> {
+  private withdrawRetryConnection(matchId: string, attempt: GameServerAttempt): Promise<boolean> {
+    return this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find(candidate => candidate.id === matchId);
+      if (!room || !isServerManagedPhase(room.phase) || !sameGameServerAttempt(room.gameServerAttempt, attempt) ||
+          await this.deps.records?.readCompletedMatch?.(matchId) || !this.gameServerRetryTask(room, attempt)) return false;
+      if (room.phase !== "connect" && !room.connect) return true;
+
+      const preparing = { ...room, connect: undefined };
+      await this.deps.store.saveRooms(rooms.map(candidate => candidate.id === matchId ? preparing : candidate), { durable: true });
+      await this.emitRoomUpdated(preparing);
+      return true;
+    });
+  }
+
+  private gameServerRetryTask(room: MatchRoomRecord, attempt: GameServerAttempt): MatchTask | undefined {
+    const task = this.matchTasks.get(room.id);
+    if (attempt.number === 3 || room.phase === "live" || !task?.plan ||
+        !this.deps.databaseBackup || !this.canLaunchMatchTask(task) || !sameGameServerAttempt(task.attempt, attempt) ||
+        this.failedMatchCleanups.has(room.id) || this.serverFailureCleanupReveals.has(room.id)) return undefined;
+    return task;
+  }
+
+  private async reserveGameServerRetry(
+    rooms: MatchRoomRecord[], room: MatchRoomRecord, previous: GameServerAttempt, task: MatchTask,
+  ): Promise<MatchRoomRecord> {
+    const next = task.nextAttempt ??= { id: randomUUID(), number: previous.number === 1 ? 2 : 3 };
+    let reserved: MatchRoomRecord;
+    try {
+      reserved = await this.registerGameServerAttempt(rooms, room, next);
+    } catch (error) {
+      // Visible but unconfirmed reservations, or an unreadable pointer, follow interruption recovery.
+      const persisted = await this.deps.store.listRooms().catch(() => undefined);
+      const current = persisted?.find(entry => entry.id === room.id);
+      if (!current || !sameGameServerAttempt(current.gameServerAttempt, previous)) {
+        this.schedulePreparationFailureRecovery(room.id, "server_preparation", error, current?.gameServerAttempt);
+      }
+      throw error;
+    }
+    task.nextAttempt = undefined;
+    if (this.canLaunchMatchTask(task)) {
+      task.attempt = next;
+      task.prepare = Promise.resolve().then(() => this.prepareRegisteredGameServer(task, task.plan!, next))
+        .catch(error => this.handleGameServerPreparationFailure(room.id, error, next));
+    }
+    return reserved;
+  }
+
+  private async checkpointShutdownEvidence(
+    matchId: string, attempt?: GameServerAttempt, includeGet5Flow = false,
+  ): Promise<ShutdownEvidence | undefined> {
     const records = this.deps.records;
     if (!records?.readShutdownEvidence || !records.saveShutdownEvidence) return undefined;
-    let evidence = this.pendingShutdownEvidence.get(matchId);
-    if (!evidence) {
-      const saved = await records.readShutdownEvidence(matchId);
-      if (saved) return saved;
-      evidence = await this.deps.executor?.collectShutdownEvidence?.(matchId);
-      if (!evidence) return undefined;
-      this.pendingShutdownEvidence.set(matchId, evidence);
-    }
-    await records.saveShutdownEvidence(matchId, evidence);
-    this.pendingShutdownEvidence.delete(matchId);
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const pending = this.pendingShutdownEvidence.get(gameKey);
+    if (pending) await this.persistShutdownEvidence(pending);
+    const saved = pending?.value ?? await records.readShutdownEvidence(matchId, attempt);
+    if (saved && !saved.get5LogPending && !saved.unverifiedObservationFiles) return saved;
+    const persist = (value: ShutdownEvidence) => this.persistShutdownEvidence({ matchId, attempt, value });
+    const evidence = await this.deps.executor?.collectShutdownEvidence?.(matchId, attempt, includeGet5Flow, {
+      saved, saveObservation: persist,
+    });
+    if (evidence) await persist(evidence);
+    else if (saved) throw new Error("Shutdown evidence cannot be completed: " + matchId);
     return evidence;
   }
 
+  private async persistShutdownEvidence(checkpoint: AttemptExitCheckpoint<ShutdownEvidence>): Promise<void> {
+    const records = this.deps.records;
+    if (!records?.saveShutdownEvidence) throw new Error("Shutdown evidence persistence is unavailable");
+    const { matchId, attempt, value } = checkpoint;
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    this.pendingShutdownEvidence.set(gameKey, checkpoint);
+    await records.saveShutdownEvidence(matchId, value, attempt);
+    if (this.pendingShutdownEvidence.get(gameKey) === checkpoint) this.pendingShutdownEvidence.delete(gameKey);
+  }
+
   private async flushPendingShutdownEvidence(): Promise<void> {
-    const outcomes = await Promise.allSettled([...this.pendingShutdownEvidence.keys()].map(id => this.checkpointShutdownEvidence(id)));
+    const outcomes = await Promise.allSettled([...this.pendingShutdownEvidence.values()].map(
+      checkpoint => this.persistShutdownEvidence(checkpoint),
+    ));
     const errors = outcomes.flatMap(result => result.status === "rejected" ? [result.reason] : []);
     if (errors.length) throw new AggregateError(errors, "Failed to save pending shutdown evidence");
   }
 
-  private async persistServerExitReport(matchId: string, report: MatchServerExitReport): Promise<MatchServerExitReport> {
-    if (!this.pendingServerExitReports.has(matchId)) this.pendingServerExitReports.set(matchId, report);
-    const saved = await this.deps.records?.readServerExitReport?.(matchId);
-    report = saved ?? this.pendingServerExitReports.get(matchId)!;
-    await this.deps.records?.saveServerExitReport?.(matchId, report);
-    this.pendingServerExitReports.delete(matchId);
+  private async persistServerExitReport(
+    matchId: string, report: MatchServerExitReport, attempt?: GameServerAttempt,
+  ): Promise<MatchServerExitReport> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const pending = this.pendingServerExitReports.get(gameKey) ?? { matchId, attempt, value: report };
+    this.pendingServerExitReports.set(gameKey, pending);
+    const saved = await this.deps.records?.readServerExitReport?.(matchId, attempt);
+    report = saved ?? pending.value;
+    await this.deps.records?.saveServerExitReport?.(matchId, report, attempt);
+    this.pendingServerExitReports.delete(gameKey);
     return report;
   }
 
   private async flushPendingServerExitReports(): Promise<void> {
-    const results = await Promise.allSettled([...this.pendingServerExitReports].map(
-      ([matchId, report]) => this.persistServerExitReport(matchId, report),
+    const results = await Promise.allSettled([...this.pendingServerExitReports.values()].map(
+      ({ matchId, attempt, value }) => this.persistServerExitReport(matchId, value, attempt),
     ));
     const errors = results.flatMap((result) => result.status === "rejected" ? [result.reason] : []);
     if (errors.length) throw new AggregateError(errors, "Failed to save pending server exit reports");
   }
 
-  private scheduleServerExitRecovery(matchId: string, report: MatchServerExitReport): void {
-    const key = "server-exit:" + matchId;
+  private scheduleServerExitRecovery(matchId: string, report: MatchServerExitReport, attempt?: GameServerAttempt): void {
+    const key = "server-exit:" + gameServerRecordKey(matchId, attempt);
     if (this.staleCompensationAttempts.has(key)) return;
     this.scheduleStaleCompensationRetry(key, "Server exit completion", async () => {
-      const room = await this.completeMatchFromServerExit(matchId, report);
-      if (room && isServerManagedPhase(room.phase)) throw new Error("Server exit settlement remains pending: " + matchId);
+      const room = await this.completeMatchFromServerExit(matchId, report, attempt);
+      if (room && isServerManagedPhase(room.phase)) {
+        const current = (await this.deps.store.listRooms()).find(entry => entry.id === matchId);
+        if (current && sameGameServerAttempt(current.gameServerAttempt, attempt)) {
+          throw new Error("Server exit settlement remains pending: " + matchId);
+        }
+      }
     }, 60000);
   }
 
@@ -2219,6 +2412,7 @@ export class MatchmakingService {
       ? await this.discardMatchDatabaseBackup(room.id)
       : true;
     try {
+      if (room.gameServerAttempt) await this.deps.executor?.deleteMatchArtifacts?.(room.id, room.gameServerAttempt);
       await this.deps.records?.cleanupCompletedMatchFiles?.(room.id);
     } catch (error) {
       process.stderr.write(`Failed to clean completed match files ${room.id}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -2244,7 +2438,7 @@ export class MatchmakingService {
     room: MatchRoomRecord,
     committed: Pick<CompletedMatchRecord, "plan" | "result" | "completionEventPublished">,
   ): Promise<CommittedMatchReconciliation | undefined> {
-    try { this.assertDemosSettled(room.id); }
+    try { this.assertDemosSettled(room.id, room.gameServerAttempt); }
     catch { return { room, retryRequired: true }; }
     try {
       this.applyCompletedPlayerPolicy(room.id, committed);
@@ -2686,6 +2880,53 @@ export class MatchmakingService {
     });
   }
 
+  private async readMatchmakingSnapshot<T extends object>(read: () => Promise<T>): Promise<T> {
+    const window = this.activeRetryRollback;
+    if (window) {
+      const snapshot = await this.readDuringRetryRollback(window, read);
+      if (snapshot !== undefined && this.activeRetryRollback === window) return snapshot;
+    }
+
+    let pending: { read: () => Promise<T>; resolve: (snapshot: T) => void; reject: (error: unknown) => void } | undefined;
+    const result = new Promise<T>((resolve, reject) => { pending = { read, resolve, reject }; });
+    const takePending = () => {
+      const operation = pending;
+      // A reader served during rollback leaves only an empty slot in the write queue.
+      pending = undefined;
+      this.retryRollbackReaders.delete(onRollback);
+      return operation;
+    };
+    const onRollback = (window: symbol) => {
+      const rollbackRead = pending?.read;
+      if (!rollbackRead) return;
+      void this.readDuringRetryRollback(window, rollbackRead).then(snapshot => {
+        if (snapshot !== undefined && this.activeRetryRollback === window) takePending()?.resolve(snapshot);
+      }, error => {
+        if (this.activeRetryRollback === window) takePending()?.reject(error);
+      });
+    };
+    this.retryRollbackReaders.add(onRollback);
+    void this.enqueueMutation(async () => {
+      const operation = takePending();
+      if (!operation) return;
+      try { operation.resolve(await operation.read()); }
+      catch (error) { operation.reject(error); }
+    });
+    if (this.activeRetryRollback) onRollback(this.activeRetryRollback);
+    return result;
+  }
+
+  private async readDuringRetryRollback<T extends object>(window: symbol, read: () => Promise<T>): Promise<T | undefined> {
+    // Restore holds the write queue without changing the persisted matchmaking state.
+    try {
+      const snapshot = await read();
+      if (this.activeRetryRollback === window) return snapshot;
+    } catch (error) {
+      if (this.activeRetryRollback === window) throw error;
+    }
+    return undefined;
+  }
+
   private enqueueMutation<T>(run: () => Promise<T>): Promise<T> {
     const next = this.mutationQueue.then(run, run);
     this.mutationQueue = next.catch(() => undefined);
@@ -2762,8 +3003,10 @@ export class MatchmakingService {
     matchId: string,
     stage: "room_transition" | "server_preparation",
     error: unknown,
+    attempt?: GameServerAttempt,
   ): void {
     const details: Record<string, string> = { matchId, stage };
+    if (attempt) details.attemptId = attempt.id;
     if (typeof error === "string") details.message = error;
     if (error && typeof error === "object") {
       const fields = error as Record<string, unknown>;
@@ -2774,14 +3017,17 @@ export class MatchmakingService {
     process.stderr.write("Match preparation failed: " + JSON.stringify(details) + "\n");
     this.clearReadyTimeout(matchId);
     this.clearMapReveal(matchId);
-    const key = "interrupted-recovery:" + matchId;
+    this.scheduleInterruptedMatchRecovery(matchId, attempt, "Match preparation recovery");
+  }
+
+  private scheduleInterruptedMatchRecovery(matchId: string, attempt: GameServerAttempt | undefined, description: string): void {
+    const key = interruptedRecoveryKey(matchId, attempt);
     if (this.staleCompensationAttempts.has(key)) return;
-    this.scheduleStaleCompensationRetry(key, "Match preparation recovery", async () => {
-      const pending = this.recoverInterruptedMatches(new Set([matchId])).then((result) => {
+    this.scheduleStaleCompensationRetry(key, description, async () => {
+      const pending = this.recoverInterruptedMatches(new Set([matchId]), attempt).then(result => {
         if (result.pendingCleanupMatchIds.includes(matchId)) throw new Error("interrupted recovery remains pending");
       });
-      this.cleanupTasks.add(pending);
-      try { await pending; } finally { this.cleanupTasks.delete(pending); }
+      await this.trackCleanup(pending);
     });
   }
 
@@ -2802,32 +3048,76 @@ export class MatchmakingService {
           const saved = await this.readSavedMatchPlan(room.id);
           const plan = saved?.map === finalMap ? saved : await this.buildMatchPlan(preparing, finalMap);
           if (plan !== saved) await this.deps.records?.saveMatchPlan(plan);
-          const permitted = await this.enqueueMutation(async () => {
+          const attempt = await this.enqueueMutation(async () => {
             const current = await this.deps.store.listRooms();
             const target = current.find((entry) => entry.id === room.id);
-            if (task.cancelled || target?.phase !== "server_prepare" || target.databaseWriteStarted) return false;
+            if (!this.canLaunchMatchTask(task) || target?.phase !== "server_prepare" ||
+                target.databaseWriteStarted || target.gameServerAttempt) return undefined;
             await this.assertNoUnresolvedFailedDatabaseBackups(current, room.id);
-            await this.deps.store.saveRooms(current.map((entry) => entry.id === room.id ? { ...entry, databaseWriteStarted: true } : entry));
-            return true;
+            const first: GameServerAttempt = { id: randomUUID(), number: 1 };
+            await this.registerGameServerAttempt(current, target, first);
+            task.plan = plan;
+            task.attempt = first;
+            return first;
           });
-          if (!permitted) return;
-          const connect = await this.deps.executor!.prepare(plan, task.controller.signal);
-          await this.enqueueMutation(async () => {
-            const current = await this.deps.store.listRooms();
-            const target = current.find((entry) => entry.id === room.id);
-            if (task.cancelled || target?.phase !== "server_prepare") return;
-            const connected: MatchRoomRecord = { ...target, phase: "connect", connect };
-            await this.deps.store.saveRooms(current.map((entry) => entry.id === room.id ? connected : entry));
-            await this.deps.records?.saveStatus(room.id, { phase: "connect", connect });
-            await this.emit({ type: "connect_ready", matchId: room.id, accountIds: this.roomAudience(connected), connect }, room.id);
-          });
+          if (attempt) await this.prepareRegisteredGameServer(task, plan, attempt);
         } catch (error) {
-          this.schedulePreparationFailureRecovery(room.id, "server_preparation", error);
+          this.handleGameServerPreparationFailure(room.id, error, task.attempt);
         }
       });
       void task.prepare.catch((error: unknown) => process.stderr.write(`Match task failed: ${String(error)}\n`));
     }
     return preparing;
+  }
+
+  private canLaunchMatchTask(task: MatchTask): boolean {
+    return !task.cancelled && !this.shutdownRequested && !this.backgroundTasksStopping && !this.startupRecoveryPending;
+  }
+
+  private handleGameServerPreparationFailure(matchId: string, error: unknown, attempt?: GameServerAttempt): void {
+    if (error instanceof GameServerStartupExitError) {
+      // The executor is already handing the observed exit off or scheduling its durable checkpoint.
+      process.stderr.write("Game server exited during preparation for " + matchId + "\n");
+      return;
+    }
+    this.schedulePreparationFailureRecovery(matchId, "server_preparation", error, attempt);
+  }
+
+  private async registerGameServerAttempt(
+    rooms: MatchRoomRecord[], room: MatchRoomRecord, attempt: GameServerAttempt,
+  ): Promise<MatchRoomRecord> {
+    const reserved: MatchRoomRecord = { ...room, gameServerAttempt: attempt, databaseWriteStarted: true };
+    try {
+      await this.deps.store.saveRooms(rooms.map(entry => entry.id === room.id ? reserved : entry), { durable: true });
+    } catch (error) {
+      const persisted = await this.deps.store.listRooms();
+      const current = persisted.find(entry => entry.id === room.id);
+      if (current?.gameServerAttempt?.id !== attempt.id || current.gameServerAttempt.number !== attempt.number ||
+          current.databaseWriteStarted !== true) throw error;
+      // A failed directory sync may leave the candidate visible before it is durable.
+      await this.deps.store.saveRooms(persisted, { durable: true });
+      return current;
+    }
+    return reserved;
+  }
+
+  private async prepareRegisteredGameServer(task: MatchTask, plan: MatchPlan, attempt: GameServerAttempt): Promise<void> {
+    if (!this.canLaunchMatchTask(task) || this.matchTasks.get(plan.id) !== task ||
+        !sameGameServerAttempt(task.attempt, attempt)) return;
+    const connect = await this.deps.executor!.prepare(plan, task.controller.signal, attempt);
+    await this.enqueueMutation(async () => {
+      const rooms = await this.deps.store.listRooms();
+      const room = rooms.find(entry => entry.id === plan.id);
+      if (!this.canLaunchMatchTask(task) || !room || (room.phase !== "server_prepare" && room.phase !== "connect") ||
+          room.gameServerAttempt?.id !== attempt.id) return;
+      if (this.deps.records?.readCompletedMatch && await this.deps.records.readCompletedMatch(room.id)) return;
+      if (!this.canLaunchMatchTask(task)) return;
+      const connected: MatchRoomRecord = { ...room, phase: "connect", connect };
+      await this.deps.store.saveRooms(rooms.map(entry => entry.id === room.id ? connected : entry));
+      await this.deps.records?.saveStatus(room.id, { phase: "connect", connect });
+      if (!this.canLaunchMatchTask(task)) return;
+      await this.emit({ type: "connect_ready", matchId: room.id, accountIds: this.roomAudience(connected), connect }, room.id);
+    });
   }
 
   private async buildMatchPlan(room: MatchRoomRecord, map: string): Promise<MatchPlan> {
@@ -2905,12 +3195,19 @@ export class MatchmakingService {
   private async restoreMatchDatabase(
     matchId: string,
     options: { preserveBackup?: boolean } = {},
+    allowRetrySnapshot = false,
   ): Promise<string | undefined> {
     if (!this.deps.databaseBackup) return undefined;
+    const window = allowRetrySnapshot ? Symbol() : undefined;
+    if (window) {
+      this.activeRetryRollback = window;
+      for (const notify of this.retryRollbackReaders) notify(window);
+    }
     try {
-      this.assertDemosSettled(matchId);
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === matchId);
+      const attempt = room?.gameServerAttempt;
+      this.assertDemosSettled(matchId, attempt);
       if (room?.databaseWriteStarted === false) return undefined;
       const backupTime = Date.parse(await this.deps.databaseBackup.createdAt?.(matchId) ?? "");
       for (const candidate of rooms) {
@@ -2926,12 +3223,17 @@ export class MatchmakingService {
           throw new Error(`Database restore blocked by conflicting match ${candidate.id}`);
         }
       }
+      if (attempt && !await this.deps.executor?.confirmGameServerExit?.(matchId, attempt)) {
+        throw new Error("Game server exit remains unconfirmed before database restore: " + matchId);
+      }
       await this.deps.databaseBackup.restore(matchId, options);
       return undefined;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       process.stderr.write(`Failed to restore mysql backup for ${matchId}: ${message}\n`);
       return message;
+    } finally {
+      if (window) this.activeRetryRollback = undefined;
     }
   }
 
@@ -2970,12 +3272,15 @@ export class MatchmakingService {
   }
 
   private async deleteFailedMatchArtifacts(matchId: string): Promise<void> {
-    this.assertDemosSettled(matchId);
     const room = (await this.deps.store.listRooms()).find((candidate) => candidate.id === matchId);
+    const attempt = room?.gameServerAttempt;
+    this.assertDemosSettled(matchId, attempt);
     if (room) {
       if (await this.deps.records?.readCompletedMatch?.(matchId)) throw new Error("Cannot delete authoritative completed match");
       this.applyFailedPlayerPolicy(room);
     }
+    // Keep the attempt directory index until its game-side artifacts have been removed.
+    if (attempt) await this.deps.executor?.deleteMatchArtifacts?.(matchId, attempt);
     let cleanupError: unknown;
     try {
       await this.deps.records?.deleteMatch(matchId);
@@ -2985,7 +3290,7 @@ export class MatchmakingService {
     }
 
     try {
-      await this.deps.executor?.deleteMatchArtifacts?.(matchId);
+      if (!attempt) await this.deps.executor?.deleteMatchArtifacts?.(matchId);
     } catch (error) {
       cleanupError ??= error;
       process.stderr.write(`Failed to delete failed match artifacts for ${matchId}: ${error instanceof Error ? error.message : String(error)}\n`);
@@ -3025,11 +3330,11 @@ export class MatchmakingService {
     };
   }
 
-  private async toPlayerPublicParty(party: PartyRecord): Promise<PublicPartyRecord> {
+  private async toPlayerPublicParty(party: PartyRecord, cachedRankme = false): Promise<PublicPartyRecord> {
     const rankmeEntries = await Promise.all(
       party.memberAccountIds.map(async (accountId) => {
         const account = await this.deps.accounts.getById(accountId);
-        const standing = account ? (await this.rankmeStandingForSteam64(account.steam64)) ?? null : null;
+        const standing = account ? (await this.rankmeStandingForSteam64(account.steam64, cachedRankme)) ?? null : null;
         return [accountId, standing] as const;
       }),
     );
@@ -3174,9 +3479,14 @@ export class MatchmakingService {
     return this.deps.records?.listRecentMatchMaps(RECENT_MAP_EXCLUSION_COUNT) ?? [];
   }
 
+  private hasInterruptedMatchRecovery(matchId: string, attempt?: GameServerAttempt): boolean {
+    return this.staleCompensationAttempts.has(interruptedRecoveryKey(matchId, attempt)) ||
+      this.staleCompensationAttempts.has(interruptedRecoveryKey(matchId));
+  }
+
   private scheduleMapReveal(room: MatchRoomRecord): void {
     if (this.shutdownRequested || this.backgroundTasksStopping) return;
-    if (this.staleCompensationAttempts.has("interrupted-recovery:" + room.id)) return;
+    if (this.hasInterruptedMatchRecovery(room.id, room.gameServerAttempt)) return;
     if (room.phase !== "map_randomizing" && room.phase !== "server_prepare" && room.phase !== "connect") return;
     if (!room.mapSelection?.startedAt || !room.mapSelection.revealAt || !Number.isFinite(Date.parse(room.mapSelection.startedAt)) || !Number.isFinite(Date.parse(room.mapSelection.revealAt))) return;
     this.clearMapReveal(room.id);
@@ -3188,9 +3498,9 @@ export class MatchmakingService {
     this.mapRevealTimers.set(room.id, timeout);
   }
 
-  private scheduleMapRevealRetry(roomId: string, revealAt: string): void {
+  private scheduleMapRevealRetry(roomId: string, revealAt: string, attempt?: GameServerAttempt): void {
     if (this.backgroundTasksStopping) return;
-    if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return;
+    if (this.hasInterruptedMatchRecovery(roomId, attempt)) return;
     if (this.shutdownRequested) return;
     this.clearMapReveal(roomId);
     const timeout = this.setTimeoutFn(() => {
@@ -3221,7 +3531,7 @@ export class MatchmakingService {
     if (room
       && ["map_randomizing", "server_prepare", "connect"].includes(room.phase)
       && room.mapSelection?.revealAt === revealAt) {
-      this.scheduleMapRevealRetry(roomId, revealAt);
+      this.scheduleMapRevealRetry(roomId, revealAt, room.gameServerAttempt);
     } else {
       this.clearMapReveal(roomId);
     }
@@ -3243,9 +3553,21 @@ export class MatchmakingService {
     shouldContinue: () => boolean,
   ): Promise<boolean> {
     const revealAt = room.mapSelection?.revealAt;
+    const attempt = room.gameServerAttempt;
     const shutdownAlreadyConfirmed = () => revealAt !== undefined && this.serverFailureCleanupReveals.get(room.id) === revealAt;
     const mayContinueCleanup = () => shutdownAlreadyConfirmed() || shouldContinue();
     if (!mayContinueCleanup()) return false;
+    if (attempt) {
+      const stillCurrent = await this.enqueueMutation(async () => {
+        const current = (await this.deps.store.listRooms()).find(entry => entry.id === room.id);
+        if (!current || !isServerManagedPhase(current.phase) || !sameGameServerAttempt(current.gameServerAttempt, attempt) ||
+            !mayContinueCleanup()) return false;
+        const task = this.matchTasks.get(room.id);
+        if (task) task.cancelled = true;
+        return true;
+      });
+      if (!stillCurrent) return false;
+    }
     await this.stopMatchTask(room.id, { discardBackup: false });
     if (!mayContinueCleanup()) return false;
 
@@ -3255,24 +3577,24 @@ export class MatchmakingService {
         throw new Error(`Cannot safely fail server-managed match ${room.id}: game server shutdown is unavailable`);
       }
       // After shutdown succeeds, retries must finish the irreversible cleanup even after reconnect.
-      const shutdown = await requestShutdown.call(this.deps.executor, room.id);
+      const shutdown = await requestShutdown.call(this.deps.executor, room.id, attempt);
       if (shutdown !== "stopped" && shutdown !== "not_observed") {
         throw new Error(`Cannot safely fail server-managed match ${room.id}: shutdown result was ${shutdown}`);
       }
       this.serverFailureCleanupReveals.set(room.id, revealAt ?? "");
     }
 
-    await this.deps.executor?.stopGameServerPresence?.(room.id);
-    await this.settleDemosOutsideMutation(room.id);
+    await this.deps.executor?.stopGameServerPresence?.(room.id, attempt);
+    await this.settleDemosOutsideMutation(room.id, attempt);
     return true;
   }
 
   private revealMap(roomId: string, revealAt: string): Promise<void> {
     let waitForServerPreparation = false;
     return this.enqueueMutation(async () => {
-      if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return;
       const rooms = await this.deps.store.listRooms();
       const room = rooms.find((candidate) => candidate.id === roomId);
+      if (this.hasInterruptedMatchRecovery(roomId, room?.gameServerAttempt)) return;
       if (!room
         || (room.phase !== "map_randomizing" && room.phase !== "server_prepare" && room.phase !== "connect")
         || room.mapSelection?.revealAt !== revealAt) {
@@ -3302,9 +3624,9 @@ export class MatchmakingService {
       await this.waitForServerPreparation(roomId);
 
       const eligibleRoom = await this.enqueueMutation(async () => {
-        if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return undefined;
         const rooms = await this.deps.store.listRooms();
         const room = rooms.find((candidate) => candidate.id === roomId);
+        if (this.hasInterruptedMatchRecovery(roomId, room?.gameServerAttempt)) return undefined;
         if (!room
           || !isServerManagedPhase(room.phase)
           || room.mapSelection?.revealAt !== revealAt) {
@@ -3335,10 +3657,11 @@ export class MatchmakingService {
       }
 
       await this.enqueueMutation(async () => {
-        if (this.staleCompensationAttempts.has("interrupted-recovery:" + roomId)) return;
         const rooms = await this.deps.store.listRooms();
         const room = rooms.find((candidate) => candidate.id === roomId);
+        if (this.hasInterruptedMatchRecovery(roomId, room?.gameServerAttempt)) return;
         if (!room
+          || !sameGameServerAttempt(room.gameServerAttempt, eligibleRoom.gameServerAttempt)
           || !isServerManagedPhase(room.phase)
           || room.mapSelection?.revealAt !== revealAt) {
           this.clearMapReveal(roomId);
@@ -3444,10 +3767,11 @@ export class MatchmakingService {
     return undefined;
   }
 
-  private async rankmeStandingForSteam64(steam64: string): Promise<RankmeDisplay | undefined> {
+  private async rankmeStandingForSteam64(steam64: string, cachedOnly = false): Promise<RankmeDisplay | undefined> {
     const rankme = this.deps.rankme;
     const normalizedSteam64 = steam64.trim();
     if (!rankme || !normalizedSteam64) return undefined;
+    if (cachedOnly) return rankme.getCachedStandingBySteam64?.(normalizedSteam64) ?? undefined;
     return (
       rankmeDisplayFromLookup(await rankme.lookupStandingBySteam64(normalizedSteam64), 6, null) ?? undefined
     );
@@ -3571,7 +3895,8 @@ export class MatchmakingService {
   }
 
   private async deliverFailedMatchEvent(entry: MatchFailedEventOutboxEntry): Promise<void> {
-    await this.settleDemosOutsideMutation(entry.matchId);
+    const room = (await this.deps.store.listRooms()).find(candidate => candidate.id === entry.matchId);
+    await this.settleDemosOutsideMutation(entry.matchId, room?.gameServerAttempt);
     await this.enqueueMutation(async () => {
       const pendingEvents = await this.deps.store.listPendingMatchFailedEvents();
       const currentEntry = pendingEvents.find((pending) => pending.eventId === entry.eventId);
@@ -3641,7 +3966,7 @@ export class MatchmakingService {
           await this.stopMatchTask(progress.room.id, { discardBackup: false });
           progress.completed.add("match_task");
         }
-        await this.settleDemosOutsideMutation(roomId);
+        await this.settleDemosOutsideMutation(roomId, progress.room.gameServerAttempt);
         let failedEventToDeliver: MatchFailedEventOutboxEntry | undefined;
         await this.enqueueMutation(async () => {
           const rooms = await this.deps.store.listRooms();
@@ -3734,7 +4059,8 @@ export class MatchmakingService {
     if (committed) return committed.room;
     if (this.shutdownRequested || !shouldContinue()) return room;
 
-    if (isServerManagedPhase(room.phase) && this.deps.executor?.settleMatchDemos && !this.settledDemoMatchIds.has(room.id)) {
+    if (isServerManagedPhase(room.phase) && this.deps.executor?.settleMatchDemos &&
+        !this.settledDemoMatchIds.has(gameServerRecordKey(room.id, room.gameServerAttempt))) {
       const pending = await this.deps.store.listPendingBackupCleanupMatchIds();
       await this.deps.store.savePendingBackupCleanupMatchIds([...new Set([...pending, room.id])]);
       this.clearReadyTimeout(room.id); this.clearMapReveal(room.id);
@@ -3811,7 +4137,7 @@ export class MatchmakingService {
       await this.publishGamePresenceChanges([change]);
       progress.publishedServerPresenceAccountIds.add(change.accountId);
     }
-    await this.deps.executor?.stopGameServerPresence?.(room.id);
+    await this.deps.executor?.stopGameServerPresence?.(room.id, room.gameServerAttempt);
   }
 
   private async publishGamePresenceChanges(changes: readonly GamePresenceChange[]): Promise<void> {
@@ -3988,6 +4314,22 @@ function asFailedRoom(
     terminalStateAt: room.phase === "failed" ? room.terminalStateAt ?? terminalStateAt : terminalStateAt,
     failureCause: room.phase === "failed" ? room.failureCause ?? "other" : failureCause,
   };
+}
+
+function sameGameServerAttempt(left?: GameServerAttempt, right?: GameServerAttempt): boolean {
+  return left?.id === right?.id && left?.number === right?.number;
+}
+
+function isUnexpectedServerExit(exit: GameServerExitInfo): boolean {
+  const stopSignals = [1, 2, 3, 15];
+  if (exit.wrapperExitUnconfirmed || ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"].includes(exit.signal ?? "") ||
+      stopSignals.includes(exit.signalNumber ?? 0) || (exit.code !== null && stopSignals.includes(exit.code - 128))) return false;
+  return (exit.code === null ? exit.startupFailure === "before_engine_exec" : exit.code !== 0) ||
+    exit.signal !== null || exit.signalNumber !== undefined;
+}
+
+function interruptedRecoveryKey(matchId: string, attempt?: GameServerAttempt): string {
+  return "interrupted-recovery:" + gameServerRecordKey(matchId, attempt);
 }
 
 function isServerManagedPhase(phase: MatchRoomRecord["phase"]): boolean {

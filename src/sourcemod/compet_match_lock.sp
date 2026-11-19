@@ -76,6 +76,25 @@ QuitSource g_PendingQuitSource = QuitSource_External;
 int g_QuitSourceToken;
 bool g_QuitObserved = false;
 
+// These flags cover the observed process, independent of map changes and team locks.
+bool g_Get5FlowContinuous;
+bool g_Get5InitialPluginsDone;
+bool g_Get5InitialConfigsDone;
+bool g_Get5FlowEntered;
+bool g_Get5FlowPublished;
+char g_Get5FlowKey[128];
+int g_Get5QuitAtUnix;
+int g_Get5QuitTick;
+bool g_Get5QuitMapEnded;
+
+native int Get5_GetGameState();
+
+public APLRes AskPluginLoad2(Handle myself, bool late, char[] error, int err_max) {
+  MarkNativeAsOptional("Get5_GetGameState");
+  g_Get5FlowContinuous = !late;
+  return APLRes_Success;
+}
+
 public void OnPluginStart() {
   g_PlayerTeams = new StringMap();
   g_RecordIndex = new StringMap();
@@ -90,6 +109,7 @@ public void OnPluginStart() {
   AddCommandListener(Command_JoinTeam, "jointeam");
   AddCommandListener(Command_JoinTeam, "joingame");
   if (!AddCommandListener(Command_ObserveQuit, "quit")) {
+    g_Get5FlowContinuous = false;
     LogError("[Compet] Could not register quit observation listener.");
   }
   HookEvent("round_start", Event_RoundStart, EventHookMode_Post);
@@ -100,7 +120,48 @@ public void OnPluginStart() {
   PrintToServer("[Compet] Match lock plugin loaded; waiting for compet_lock_reset.");
 }
 
+public void OnAllPluginsLoaded() {
+  g_Get5InitialPluginsDone = true;
+  if (!SampleGet5FlowState()) {
+    g_Get5FlowContinuous = false;
+  }
+}
+
+public void OnLibraryAdded(const char[] name) {
+  if (g_Get5InitialPluginsDone && StrEqual(name, "get5")) {
+    g_Get5FlowContinuous = false;
+    SampleGet5FlowState();
+  }
+}
+
+public void OnLibraryRemoved(const char[] name) {
+  if (StrEqual(name, "get5")) {
+    g_Get5FlowContinuous = false;
+  }
+}
+
+public void OnPluginPauseChange(bool pause) {
+  if (pause) {
+    g_Get5FlowContinuous = false;
+  }
+}
+
+public void OnConfigsExecuted() {
+  g_Get5InitialConfigsDone = true;
+}
+
+public void OnMapStart() {
+  g_Get5QuitAtUnix = 0;
+}
+
 public void OnPluginEnd() {
+  if (g_Get5QuitAtUnix > 0 && g_Get5QuitMapEnded && g_Get5FlowContinuous
+      && SampleGet5FlowState() && !g_Get5FlowEntered) {
+    char payload[256];
+    FormatEx(payload, sizeof(payload), "{\"version\":1,\"matchId\":\"%s\",\"quitAtUnix\":%d,\"phase\":\"before_get5\"}",
+      g_MatchId, g_Get5QuitAtUnix);
+    PublishMatchObservation("get5-flow-at-exit.json", payload);
+  }
   StopEnforceTimer();
   StopStatusTimer();
   delete g_PlayerRecords;
@@ -109,6 +170,9 @@ public void OnPluginEnd() {
 }
 
 public void OnMapEnd() {
+  if (g_Get5QuitAtUnix > 0 && g_Get5QuitTick == GetGameTickCount()) {
+    g_Get5QuitMapEnded = true;
+  }
   if (!g_MatchFinalized) {
     RefreshAllNativeStats();
   }
@@ -169,6 +233,7 @@ public Action Command_ResetLock(int args) {
   if (args >= 1) {
     GetCmdArg(1, g_MatchId, sizeof(g_MatchId));
   }
+  BindGet5Flow();
   ResetMatchStats();
   g_QuitSource = QuitSource_External;
   g_PendingQuitSource = QuitSource_External;
@@ -216,6 +281,48 @@ public Action Command_EnableLock(int args) {
   }
   PrintToServer("[Compet] Match lock %s for %s", g_LockEnabled ? "enabled" : "disabled", g_MatchId);
   return Plugin_Handled;
+}
+
+void BindGet5Flow() {
+  g_Get5QuitAtUnix = 0;
+  if (!StrEqual(g_Get5FlowKey, g_MatchId)) {
+    if (g_Get5FlowKey[0] != '\0' || g_Get5InitialConfigsDone || !g_Get5InitialPluginsDone) {
+      g_Get5FlowContinuous = false;
+    }
+    strcopy(g_Get5FlowKey, sizeof(g_Get5FlowKey), g_MatchId);
+    g_Get5FlowPublished = false;
+  }
+  if (!SampleGet5FlowState()) {
+    g_Get5FlowContinuous = false;
+  }
+  if (g_Get5FlowEntered) {
+    MarkGet5FlowEntered();
+  }
+}
+
+bool SampleGet5FlowState() {
+  if (!LibraryExists("get5") || GetFeatureStatus(FeatureType_Native, "Get5_GetGameState") != FeatureStatus_Available) {
+    return false;
+  }
+  if (Get5_GetGameState() != 0) {
+    MarkGet5FlowEntered();
+  }
+  return true;
+}
+
+void MarkGet5FlowEntered() {
+  g_Get5FlowEntered = true;
+  if (g_MatchId[0] == '\0' || g_Get5FlowPublished) {
+    return;
+  }
+  char payload[192];
+  FormatEx(payload, sizeof(payload), "{\"version\":1,\"matchId\":\"%s\",\"entered\":true}", g_MatchId);
+  g_Get5FlowPublished = PublishMatchObservation("get5-flow-entered.json", payload);
+}
+
+public void Get5_OnGameStateChanged(Handle event) {
+  // Get5 calls this forward only on a change, before assigning the new state.
+  MarkGet5FlowEntered();
 }
 
 public void Get5_OnKnifeRoundStarted(Handle event) {
@@ -1145,50 +1252,77 @@ public Action Command_ObserveQuit(int client, const char[] command, int argc) {
     return Plugin_Continue;
   }
   g_QuitObserved = true;
-  for (int i = 0; g_MatchId[i] != '\0'; i++) {
-    int c = g_MatchId[i];
-    if (!IsCharAlpha(c) && !IsCharNumeric(c) && c != '-' && c != '_') {
-      LogError("[Compet] Could not write quit observation for invalid match ID.");
-      return Plugin_Continue;
-    }
-  }
-  if (!EnsureCompetMatchDataDir()) {
-    LogError("[Compet] Could not create quit observation directory for %s.", g_MatchId);
-    return Plugin_Continue;
-  }
-
-  char path[PLATFORM_MAX_PATH];
-  char temporary[PLATFORM_MAX_PATH];
-  BuildPath(Path_SM, path, sizeof(path), "data/compet/matches/%s/shutdown-observation.json", g_MatchId);
-  BuildPath(Path_SM, temporary, sizeof(temporary), "data/compet/matches/%s/.shutdown-observation-%d-%d.tmp",
-    g_MatchId, GetTime(), GetURandomInt());
-  if (FileExists(path) || DirExists(path)) {
-    LogError("[Compet] Quit observation already exists for %s.", g_MatchId);
-    return Plugin_Continue;
-  }
-  File file = OpenFile(temporary, "wx");
-  if (file == null) {
-    LogError("[Compet] Could not open quit observation temporary file for %s.", g_MatchId);
-    return Plugin_Continue;
-  }
-
   char kind[24];
   switch (g_QuitSource) {
     case QuitSource_Empty: strcopy(kind, sizeof(kind), "compet_empty_server");
     case QuitSource_Controlled: strcopy(kind, sizeof(kind), "controlled");
     default: strcopy(kind, sizeof(kind), "external");
   }
-  bool written = WriteFileLine(file, "{\"version\":1,\"matchId\":\"%s\",\"kind\":\"%s\",\"atUnix\":%d}",
-    g_MatchId, kind, GetTime());
-  written = FlushFile(file) && written;
-  delete file;
-  if (!written || FileExists(path) || DirExists(path) || !RenameFile(path, temporary)) {
-    LogError("[Compet] Could not publish quit observation for %s.", g_MatchId);
-    if (!DeleteFile(temporary)) {
-      LogError("[Compet] Could not remove quit observation temporary file for %s.", g_MatchId);
-    }
+  int atUnix = GetTime();
+  char payload[256];
+  FormatEx(payload, sizeof(payload), "{\"version\":1,\"matchId\":\"%s\",\"kind\":\"%s\",\"atUnix\":%d}",
+    g_MatchId, kind, atUnix);
+  bool published = PublishMatchObservation("shutdown-observation.json", payload);
+  if (published && g_QuitSource == QuitSource_External && g_Get5FlowContinuous
+      && SampleGet5FlowState() && !g_Get5FlowEntered) {
+    g_Get5QuitAtUnix = atUnix;
+    g_Get5QuitTick = GetGameTickCount();
+    g_Get5QuitMapEnded = false;
+    RequestFrame(Frame_InvalidateGet5Quit);
   }
   return Plugin_Continue;
+}
+
+public void Frame_InvalidateGet5Quit(any data) {
+  // A blocked quit or a changelevel followed by another frame cannot prove termination.
+  g_Get5QuitAtUnix = 0;
+}
+
+bool PublishMatchObservation(const char[] filename, const char[] payload) {
+  if (g_MatchId[0] == '\0') {
+    return false;
+  }
+  for (int i = 0; g_MatchId[i] != '\0'; i++) {
+    int c = g_MatchId[i];
+    if (!IsCharAlpha(c) && !IsCharNumeric(c) && c != '-' && c != '_') {
+      LogError("[Compet] Could not write %s for invalid match ID.", filename);
+      return false;
+    }
+  }
+  if (!EnsureCompetMatchDataDir()) {
+    LogError("[Compet] Could not create observation directory for %s.", g_MatchId);
+    return false;
+  }
+
+  char path[PLATFORM_MAX_PATH];
+  char temporary[PLATFORM_MAX_PATH];
+  BuildPath(Path_SM, path, sizeof(path), "data/compet/matches/%s/%s", g_MatchId, filename);
+  BuildPath(Path_SM, temporary, sizeof(temporary), "data/compet/matches/%s/.%s-%d-%d.tmp",
+    g_MatchId, filename, GetTime(), GetURandomInt());
+  File file = OpenFile(temporary, "wx");
+  if (file == null) {
+    LogError("[Compet] Could not open %s temporary file for %s.", filename, g_MatchId);
+    return false;
+  }
+
+  bool written = WriteFileLine(file, "%s", payload);
+  written = FlushFile(file) && written;
+  delete file;
+  // Reserve the destination exclusively so no earlier observation can be overwritten.
+  if (written) {
+    File reservation = OpenFile(path, "wx");
+    if (reservation != null) {
+      delete reservation;
+      if (RenameFile(path, temporary)) {
+        return true;
+      }
+    }
+  }
+  LogError("[Compet] Could not publish %s for %s.", filename, g_MatchId);
+  if (!DeleteFile(temporary)) {
+    LogError("[Compet] Could not remove %s temporary file for %s.", filename, g_MatchId);
+  }
+  return false;
 }
 
 void CheckShutdownFlag() {

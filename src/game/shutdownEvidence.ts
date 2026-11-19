@@ -60,21 +60,40 @@ const quitObservationSchema = z.strictObject({
   kind: z.enum(["compet_empty_server", "controlled", "external"]),
   atUnix: nonnegative.min(1),
 });
+const get5FlowEnteredSchema = z.strictObject({
+  version: z.literal(1), matchId: matchIdSchema, entered: z.literal(true),
+});
+const get5FlowAtExitSchema = z.strictObject({
+  version: z.literal(1), matchId: matchIdSchema, quitAtUnix: nonnegative.min(1),
+  phase: z.literal("before_get5"),
+});
 const get5EvidenceSchema = z.strictObject({
   relativePath: logPath, byteOffset: nonnegative, line: z.string().regex(GET5_LINE),
   activeClients: nonnegative.max(9),
   verifiedAgainstHistory: z.literal(true).optional(), // Legacy index covered active logs only.
   historyIndexVersion: historyIndexVersionSchema.optional(),
 }).refine(evidence => Number(GET5_LINE.exec(evidence.line)?.[1]) === evidence.activeClients);
+const get5FlowStatusSchema = z.enum(["before_get5", "entered", "missing", "unknown"]);
+const observationFileSchema = z.enum(["shutdown-observation.json", "get5-flow-entered.json", "get5-flow-at-exit.json"]);
 export const shutdownEvidenceSchema = z.strictObject({
   version: z.literal(1), matchId: matchIdSchema,
   quit: quitObservationSchema.optional(), get5: get5EvidenceSchema.optional(),
+  get5FlowAtExit: get5FlowStatusSchema.optional(),
+  get5LogPending: z.literal(true).optional(),
+  unverifiedObservationFiles: z.array(observationFileSchema).min(1).max(observationFileSchema.options.length).optional(),
 }).refine(evidence => (!evidence.quit || evidence.quit.matchId === evidence.matchId) &&
-  (!evidence.get5 || evidence.quit?.kind === "external"));
+  (!evidence.get5 || evidence.quit?.kind === "external") &&
+  (!evidence.get5LogPending || (evidence.quit?.kind === "external" && !evidence.get5)) &&
+  (!evidence.unverifiedObservationFiles || (!evidence.get5FlowAtExit && !evidence.get5)));
 
 export type QuitObservation = z.infer<typeof quitObservationSchema>;
 export type ShutdownLogBaseline = z.infer<typeof shutdownLogBaselineSchema>;
 export type ShutdownEvidence = z.infer<typeof shutdownEvidenceSchema>;
+export type Get5FlowAtExit = z.infer<typeof get5FlowStatusSchema>;
+export interface ShutdownEvidenceCollection {
+  saved?: ShutdownEvidence;
+  saveObservation(evidence: ShutdownEvidence): Promise<void>;
+}
 type FileIdentity = { dev: string; ino: string };
 type LogDirectory = z.infer<typeof directorySchema>;
 type LogFile = FileIdentity & { relativePath: string; size: number; changedAt: string };
@@ -154,27 +173,37 @@ async function listLogs(serverRoot: string, signal?: AbortSignal): Promise<{
 }
 
 async function readRegular<T>(absolute: string, action: (handle: FileHandle, size: number) => Promise<T>, expected?: LogFile): Promise<T> {
-  await assertPlainPath(absolute);
-  const before = await lstat(absolute, { bigint: true });
+  await assertPlainPath(path.dirname(absolute));
+  const before = await lstat(absolute, { bigint: true }).catch(error => {
+    const code = errorCode(error);
+    if (code === "ENOTDIR" || (expected && code === "ENOENT")) unsafe();
+    throw error;
+  });
   if (!before.isFile() || before.nlink !== 1n || !Number.isSafeInteger(Number(before.size))) unsafe();
-  const handle = await open(absolute, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW | constants.O_NONBLOCK : 0));
   try {
-    const check = async () => {
-      const opened = await handle.stat({ bigint: true });
-      const linked = await lstat(absolute, { bigint: true });
-      if (!opened.isFile() || opened.nlink !== 1n || !linked.isFile() || linked.nlink !== 1n ||
-          opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size ||
-          linked.dev !== opened.dev || linked.ino !== opened.ino || linked.size !== opened.size ||
-          opened.mtimeNs !== before.mtimeNs || opened.ctimeNs !== before.ctimeNs ||
-          (expected && (expected.dev !== String(opened.dev) || expected.ino !== String(opened.ino) ||
-            expected.size !== Number(opened.size) || expected.changedAt !== statChangeTime(opened)))) unsafe();
-    };
-    await check();
-    const value = await action(handle, Number(before.size));
-    await check();
-    return value;
-  } finally {
-    await handle.close();
+    const handle = await open(absolute, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW | constants.O_NONBLOCK : 0));
+    try {
+      const check = async () => {
+        const opened = await handle.stat({ bigint: true });
+        const linked = await lstat(absolute, { bigint: true });
+        if (!opened.isFile() || opened.nlink !== 1n || !linked.isFile() || linked.nlink !== 1n ||
+            opened.dev !== before.dev || opened.ino !== before.ino || opened.size !== before.size ||
+            linked.dev !== opened.dev || linked.ino !== opened.ino || linked.size !== opened.size ||
+            opened.mtimeNs !== before.mtimeNs || opened.ctimeNs !== before.ctimeNs ||
+            (expected && (expected.dev !== String(opened.dev) || expected.ino !== String(opened.ino) ||
+              expected.size !== Number(opened.size) || expected.changedAt !== statChangeTime(opened)))) unsafe();
+      };
+      await check();
+      const value = await action(handle, Number(before.size));
+      await check();
+      return value;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    // An observed file disappearing is a change in the evidence, including during open.
+    if (errorCode(error) === "ENOENT") unsafe();
+    throw error;
   }
 }
 
@@ -359,34 +388,97 @@ async function collectGet5(
   return evidence;
 }
 
-export async function collectShutdownEvidence(
-  serverRoot: string,
-  matchId: string,
-  baseline?: ShutdownLogBaseline | (() => Promise<ShutdownLogBaseline | undefined>),
-): Promise<ShutdownEvidence> {
-  matchIdSchema.parse(matchId);
-  serverRoot = path.resolve(serverRoot);
-  const evidence: ShutdownEvidence = { version: 1, matchId };
-  const observation = path.join(path.dirname(competMatchStatsPath(serverRoot, matchId)), "shutdown-observation.json");
+type ShutdownObservationFile = z.infer<typeof observationFileSchema>;
+type ShutdownObservationReader = <T extends { matchId: string }>(
+  filename: ShutdownObservationFile, schema: z.ZodType<T>,
+) => Promise<T | "missing" | "invalid">;
+
+async function readMatchObservation<T extends { matchId: string }>(
+  directory: string, filename: ShutdownObservationFile, matchId: string, schema: z.ZodType<T>,
+): Promise<T | "missing" | "invalid"> {
   try {
-    evidence.quit = await readRegular(observation, async (handle, size) => {
+    return await readRegular(path.join(directory, filename), async (handle, size) => {
       try {
         const raw = size <= 4096 ? JSON.parse(await handle.readFile("utf8")) : undefined;
-        const parsed = quitObservationSchema.safeParse(raw);
+        const parsed = schema.safeParse(raw);
         if (parsed.success && parsed.data.matchId === matchId) return parsed.data;
       } catch (error) {
         if (!(error instanceof SyntaxError)) throw error;
       }
-      diagnostic(matchId, "invalid quit observation");
-      return undefined;
+      diagnostic(matchId, "invalid " + filename);
+      return "invalid";
     });
   } catch (error) {
     const code = errorCode(error);
-    if (code !== "ENOENT" && code !== UNSAFE_LOG_BOUNDARY && code !== "managed_path_linked" && code !== "managed_path_type_conflict") throw error;
-    diagnostic(matchId, "no usable quit observation (" + code + ")");
+    if (code === "ENOENT") return "missing";
+    if (code !== UNSAFE_LOG_BOUNDARY && code !== "managed_path_linked" && code !== "managed_path_type_conflict" && code !== "ELOOP") throw error;
+    diagnostic(matchId, "unusable " + filename + " (" + code + ")");
+    return "invalid";
   }
-  if (!evidence.quit) return { version: 1, matchId };
-  if (evidence.quit.kind !== "external") return evidence;
+}
+
+export async function readGet5FlowAtExit(serverRoot: string, matchId: string): Promise<Get5FlowAtExit> {
+  matchIdSchema.parse(matchId);
+  const directory = path.dirname(competMatchStatsPath(path.resolve(serverRoot), matchId));
+  return readGet5Flow((filename, schema) => readMatchObservation(directory, filename, matchId, schema));
+}
+
+async function readGet5Flow(
+  read: ShutdownObservationReader, observedQuit?: QuitObservation | "missing" | "invalid",
+): Promise<Get5FlowAtExit> {
+  const entered = await read("get5-flow-entered.json", get5FlowEnteredSchema);
+  if (typeof entered !== "string") return "entered";
+  if (entered === "invalid" || observedQuit === "invalid") return "unknown";
+  const exit = await read("get5-flow-at-exit.json", get5FlowAtExitSchema);
+  if (exit === "invalid") return "unknown";
+  const quit = observedQuit ?? await read("shutdown-observation.json", quitObservationSchema);
+  if (exit === "missing" && quit === "missing") return "missing";
+  return typeof exit !== "string" && typeof quit !== "string" && quit.kind === "external" && quit.atUnix === exit.quitAtUnix
+    ? "before_get5" : "unknown";
+}
+
+export async function collectShutdownEvidence(
+  serverRoot: string,
+  matchId: string,
+  baseline?: ShutdownLogBaseline | (() => Promise<ShutdownLogBaseline | undefined>),
+  includeGet5Flow = false,
+  collection?: ShutdownEvidenceCollection,
+): Promise<ShutdownEvidence> {
+  matchIdSchema.parse(matchId);
+  serverRoot = path.resolve(serverRoot);
+  const saved = collection?.saved;
+  const { get5LogPending: _pending, unverifiedObservationFiles, ...evidence } = saved ?? { version: 1 as const, matchId };
+  const directory = path.dirname(competMatchStatsPath(serverRoot, matchId));
+  const unverified = new Set(unverifiedObservationFiles);
+  const readObservation: ShutdownObservationReader = async (filename, schema) => {
+    const result = await readMatchObservation(directory, filename, matchId, schema).catch(async (error: unknown) => {
+      unverified.add(filename);
+      await collection?.saveObservation({ ...evidence, unverifiedObservationFiles: [...unverified] });
+      throw error;
+    });
+    if (result === "invalid") unverified.add(filename);
+    if (result === "missing" && unverified.has(filename)) {
+      diagnostic(matchId, "missing after an unverified read: " + filename);
+      return "invalid";
+    }
+    return result;
+  };
+
+  const quit = saved?.quit ?? (!saved || unverifiedObservationFiles
+    ? await readObservation("shutdown-observation.json", quitObservationSchema) : undefined);
+  if (quit && typeof quit !== "string") evidence.quit = quit;
+  const hasExternalQuit = evidence.quit?.kind === "external";
+  if (hasExternalQuit && !saved?.quit) {
+    // Keep the verified quit even if reading a Get5 marker fails.
+    await collection?.saveObservation({ ...evidence, get5LogPending: true, unverifiedObservationFiles });
+  }
+  if (includeGet5Flow && evidence.get5FlowAtExit === undefined && (typeof quit === "string" || hasExternalQuit)) {
+    evidence.get5FlowAtExit = await readGet5Flow(readObservation, quit);
+    if (hasExternalQuit) {
+      await collection?.saveObservation({ ...evidence, get5LogPending: true });
+    }
+  }
+  if (!hasExternalQuit) return evidence;
   if (typeof baseline === "function") baseline = await baseline();
   if (!baseline) {
     diagnostic(matchId, "no pre-launch log baseline for external quit");
@@ -415,7 +507,8 @@ export function classifyFailureCause(matchId: string, evidence: ShutdownEvidence
   if (normalResult || !evidence || evidence.matchId !== matchId || !shutdownEvidenceSchema.safeParse(evidence).success) return "other";
   const quit = evidence.quit;
   if (!quit || quit.kind === "controlled") return "other";
-  if (exitInfo.signal || exitInfo.signalNumber !== undefined || (exitInfo.code !== null && exitInfo.code !== 0)) {
+  if (exitInfo.startupFailure === "before_engine_exec" || exitInfo.signal || exitInfo.signalNumber !== undefined ||
+      (exitInfo.code !== null && exitInfo.code !== 0)) {
     if (quit.kind === "compet_empty_server" || evidence.get5) diagnostic(matchId, "quit evidence conflicts with the exit status");
     return "other";
   }
