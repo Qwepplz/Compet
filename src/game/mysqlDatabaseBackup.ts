@@ -51,10 +51,18 @@ export class MysqlDatabaseBackup {
     }
   }
 
-  async restore(matchId: string, options: { preserveBackup?: boolean } = {}): Promise<void> {
+  async restore(
+    matchId: string,
+    options: { preserveBackup?: boolean } = {},
+    beforeImport?: () => Promise<boolean>,
+  ): Promise<void | "deferred"> {
     const filePath = mysqlBackupFilePath(this.options.backupDir, matchId);
     if (!existsSync(filePath)) throw new Error(`mysql backup not found: ${matchId}`);
-    await (await this.resolveProcess()).restore(await this.resolveDatabase(), filePath);
+    const backupProcess = await this.resolveProcess();
+    const database = await this.resolveDatabase();
+    // A restore decision must cover both asynchronous prerequisites.
+    if (beforeImport && !await beforeImport()) return "deferred";
+    await backupProcess.restore(database, filePath);
     if (options.preserveBackup !== true) {
       await this.discard(matchId);
     }

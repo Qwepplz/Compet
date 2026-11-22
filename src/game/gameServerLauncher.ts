@@ -7,7 +7,8 @@ export interface GameServerExitInfo {
   signal: NodeJS.Signals | null;
   signalNumber?: number;
   wrapperExitUnconfirmed?: true;
-  startupFailure?: "before_engine_exec";
+  startupFailure?: "before_engine_exec" | "invalid_configuration";
+  get5TakeoverLogged?: boolean;
   output: string[];
 }
 

@@ -2,6 +2,7 @@ import path from "node:path";
 import { createHash } from "node:crypto";
 import { lstat, readFile } from "node:fs/promises";
 import { constants } from "node:os";
+import { stripVTControlCharacters } from "node:util";
 import { delay } from "../shared/async.js";
 import { assertPlainPath, sameFingerprint } from "../shared/managedFiles.js";
 import { gameServerAttemptSchema } from "./gameServerAttempt.js";
@@ -13,11 +14,23 @@ import {
 } from "./linuxProcess.js";
 
 const WRAPPER_EXIT_GRACE_MS = 1_000;
+const MAX_TAKEOVER_LINE_CHARS = 4096;
 const signalNames = new Map(Object.entries(constants.signals).map(
   ([name, number]) => [number, name as NodeJS.Signals],
 ));
 
 function fail(code: string): never { throw Object.assign(new Error(code), { code }); }
+
+function isGet5TakeoverLine(text: string, attemptId: string | undefined): boolean {
+  const line = stripVTControlCharacters(text).trim()
+    .replace(/^L \d{2}\/\d{2}\/\d{4} - \d{2}:\d{2}:\d{2}: /, "");
+  if (line === "[Get5] Loaded match config." ||
+      line === "[get5.smx] Match configuration was loaded via get5_autoload_config.") return true;
+  return attemptId !== undefined && (
+    line === "[Compet] get5 knife round started; pre-get5 team lock disabled for match " + attemptId + "." ||
+    line === "[Compet] get5 going live; pre-get5 team lock disabled for match " + attemptId + "."
+  );
+}
 
 type StartupProbe = { attemptId: string; inspect(): Promise<GameServerStartupState> };
 
@@ -114,9 +127,26 @@ export class LinuxGameServerLauncher implements GameServerLauncher {
       throw error;
     }
     const output: string[] = [];
+    let get5TakeoverLogged = false;
+    // Undefined means the current line is too long and must be skipped through its newline.
+    let pendingLine: string | undefined = "";
     let wrapperExit: { exitCode: number; signal?: number } | undefined;
     const dataListener = child.onData(text => {
       output.push(text); if (output.length > 200) output.shift();
+      let start = 0;
+      while (!get5TakeoverLogged && start < text.length) {
+        const newline = text.indexOf("\n", start);
+        const end = newline === -1 ? text.length : newline;
+        if (pendingLine !== undefined) {
+          pendingLine = pendingLine.length + end - start <= MAX_TAKEOVER_LINE_CHARS
+            ? pendingLine + text.slice(start, end)
+            : undefined;
+        }
+        if (newline === -1) break;
+        get5TakeoverLogged = pendingLine !== undefined && isGet5TakeoverLine(pendingLine, attemptId);
+        pendingLine = "";
+        start = newline + 1;
+      }
       this.options.onStdout?.(text);
     });
     let notifyWrapperExit!: () => void;
@@ -129,11 +159,13 @@ export class LinuxGameServerLauncher implements GameServerLauncher {
     const readExitInfo = (requestedSignal: NodeJS.Signals | null = null): GameServerExitInfo => {
       const signalNumber = wrapperExit?.signal;
       const signal = signalNumber ? signalNames.get(signalNumber) : undefined;
+      const takeover = get5TakeoverLogged || (pendingLine !== undefined && isGet5TakeoverLine(pendingLine, attemptId));
       return {
         code: wrapperExit?.exitCode ?? null,
         signal: signal ?? requestedSignal,
         ...(signalNumber && !signal ? { signalNumber } : {}),
         ...(!wrapperExit ? { wrapperExitUnconfirmed: true as const } : {}),
+        ...(takeover ? { get5TakeoverLogged: true } : {}),
         output: [...output],
       };
     };
@@ -167,9 +199,12 @@ export class LinuxGameServerLauncher implements GameServerLauncher {
         const result = readExitInfo();
         const abnormal = (result.code !== null && result.code !== 0) || result.signal !== null || result.signalNumber !== undefined;
         const marker = wrapper.marker;
-        // Deterministic configuration and marker errors keep the existing failure path.
-        const invalidConfig = /game_(?:entry_invalid|map_invalid|port_invalid|engine_exec_marker_)|must not be empty/.test(result.output.join(""));
-        if (marker && !lastIdentity && abnormal && !invalidConfig && await markerMissing(marker.path) &&
+        const startupOutput = result.output.join("");
+        const invalidConfig = /(?:^|\n)game_(?:entry_invalid|map_invalid|port_invalid|engine_exec_marker_)/
+          .test(startupOutput) || /\bCOMPET_GAME_(?:MAP|PORT|CLIENT_PORT) must not be empty\b/.test(startupOutput);
+        if (!lastIdentity && result.code === 1 && invalidConfig) {
+          result.startupFailure = "invalid_configuration";
+        } else if (marker && !lastIdentity && abnormal && !invalidConfig && await markerMissing(marker.path) &&
             await markerParentIdentity(marker.path).catch(error => {
               if (["ENOENT", "managed_path_linked", "managed_path_type_conflict", "game_engine_exec_marker_conflict"]
                 .includes((error as NodeJS.ErrnoException).code ?? "")) return undefined;

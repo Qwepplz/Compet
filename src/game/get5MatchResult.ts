@@ -1,4 +1,3 @@
-import { readFile } from "node:fs/promises";
 import fs from "node:fs/promises";
 import { constants } from "node:fs";
 import { assertPlainPath } from "../shared/managedFiles.js";
@@ -41,23 +40,10 @@ export function get5MatchStatsPath(serverRoot: string, matchId: string): string 
 
 export async function readGet5DemoEvidence(serverRoot: string, matchId: string, completedAt: string):
   Promise<{ get5Result: Get5MatchResultClassification; demoFiles: string[] }> {
-  const file = get5MatchStatsPath(serverRoot, matchId);
-  await assertPlainPath(file);
-  let before;
-  try { before = await fs.lstat(file, { bigint: true }); } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { get5Result: { status: "abnormal", reason: "missing_get5_stats" }, demoFiles: [] };
-    throw error;
-  }
-  if (!before.isFile() || before.nlink !== 1n) throw new Error("demo_evidence_invalid");
-  const handle = await fs.open(file, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW | constants.O_NONBLOCK : 0));
-  let raw: string;
-  try {
-    const same = (info: typeof before) => info.dev === before.dev && info.ino === before.ino && info.size === before.size &&
-      info.mtimeNs === before.mtimeNs && info.ctimeNs === before.ctimeNs && info.nlink === 1n;
-    if (!same(await handle.stat({ bigint: true }))) throw new Error("demo_evidence_changed");
-    raw = await handle.readFile("utf8");
-    if (!same(await handle.stat({ bigint: true })) || !same(await fs.lstat(file, { bigint: true }))) throw new Error("demo_evidence_changed");
-  } finally { await handle.close(); }
+  const snapshot = await readStatsFileSnapshot(get5MatchStatsPath(serverRoot, matchId));
+  if (snapshot.status === "missing") return { get5Result: { status: "abnormal", reason: "missing_get5_stats" }, demoFiles: [] };
+  if (snapshot.status !== "read") throw new Error("demo_evidence_" + snapshot.status);
+  const raw = snapshot.raw;
   let parsed: unknown;
   try { parsed = raw.trimStart().startsWith("{") ? JSON.parse(raw) : parseStatsFile(raw); } catch (error) { throw new Error("demo_evidence_invalid", { cause: error }); }
   if (!isRecord(parsed)) throw new Error("demo_evidence_invalid");
@@ -70,38 +56,64 @@ export async function readGet5DemoEvidence(serverRoot: string, matchId: string, 
   return { get5Result: classifyGet5MatchStats(parsed, completedAt), demoFiles: [...new Set(demoFiles)] };
 }
 
+type StatsFileSnapshot =
+  | { status: "read"; raw: string }
+  | { status: "missing" | "invalid" | "changed" };
+
+async function readStatsFileSnapshot(file: string): Promise<StatsFileSnapshot> {
+  await assertPlainPath(file);
+  let before;
+  try {
+    before = await fs.lstat(file, { bigint: true });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { status: "missing" };
+    throw error;
+  }
+  if (!before.isFile() || before.nlink !== 1n) return { status: "invalid" };
+  const handle = await fs.open(file, constants.O_RDONLY | (process.platform === "linux" ? constants.O_NOFOLLOW | constants.O_NONBLOCK : 0));
+  try {
+    const same = (info: typeof before) => info.isFile() && info.nlink === 1n &&
+      info.dev === before.dev && info.ino === before.ino && info.size === before.size &&
+      info.mtimeNs === before.mtimeNs && info.ctimeNs === before.ctimeNs;
+    if (!same(await handle.stat({ bigint: true }))) return { status: "changed" };
+    const raw = await handle.readFile("utf8");
+    if (!same(await handle.stat({ bigint: true })) || !same(await fs.lstat(file, { bigint: true }))) return { status: "changed" };
+    return { status: "read", raw };
+  } finally {
+    await handle.close();
+  }
+}
+
 export async function readGet5MatchResult(
   serverRoot: string,
   matchId: string,
   completedAt: string,
+  { allowManualFallback = true }: { allowManualFallback?: boolean } = {},
 ): Promise<Get5MatchResultClassification> {
+  const root = path.resolve(serverRoot);
   const candidates = [
-    get5MatchStatsPath(serverRoot, matchId),
-    path.join(serverRoot, "csgo", `get5_matchstats_${matchId}.cfg`),
-    path.join(serverRoot, "csgo", "get5_matchstats_manual.cfg"),
+    get5MatchStatsPath(root, matchId),
+    path.join(root, "csgo", `get5_matchstats_${matchId}.cfg`),
   ];
+  if (allowManualFallback) candidates.push(path.join(root, "csgo", "get5_matchstats_manual.cfg"));
   let sawStatsFile = false;
 
   for (const candidate of candidates) {
-    const raw = await readStatsFile(candidate);
-    if (raw === null) continue;
+    const snapshot = await readStatsFileSnapshot(candidate).catch((error: unknown): StatsFileSnapshot => {
+      if ((error as NodeJS.ErrnoException | undefined)?.code === "managed_path_linked") return { status: "invalid" };
+      throw error;
+    });
+    if (snapshot.status === "missing") continue;
+    if (snapshot.status === "changed") throw Object.assign(new Error("get5_stats_changed"), { code: "EAGAIN" });
     sawStatsFile = true;
-    const parsed = parseStatsFile(raw);
+    if (snapshot.status !== "read") continue;
+    const parsed = parseStatsFile(snapshot.raw);
     if (parsed !== null) {
       return classifyGet5MatchStats(parsed, completedAt);
     }
   }
 
   return { status: "abnormal", reason: sawStatsFile ? "invalid_get5_stats" : "missing_get5_stats" };
-}
-
-async function readStatsFile(filePath: string): Promise<string | null> {
-  try {
-    return await readFile(filePath, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
 }
 
 function parseStatsFile(raw: string): unknown | null {
@@ -122,8 +134,8 @@ export function classifyGet5MatchStats(stats: unknown, completedAt: string): Get
   const team2 = isRecord(map.team2) ? map.team2 : null;
   if (!team1 || !team2) return { status: "abnormal", reason: "missing_team_scores" };
 
-  const team1Score = numberValue(team1.score);
-  const team2Score = numberValue(team2.score);
+  const team1Score = parseGet5Score(team1.score);
+  const team2Score = parseGet5Score(team2.score);
   if (!isValidMr12FinalScore(team1Score, team2Score, winner)) {
     return { status: "abnormal", reason: "invalid_mr12_score" };
   }
@@ -231,8 +243,15 @@ function tokenizeKeyValues(raw: string): string[] {
   return tokens;
 }
 
+function parseGet5Score(value: unknown): number {
+  if (typeof value === "number") return value;
+  if (typeof value === "string" && /^\d+$/.test(value.trim())) return Number(value);
+  return Number.NaN;
+}
+
 export function isValidMr12FinalScore(team1Score: number, team2Score: number, winner: TeamSide): boolean {
-  if (!Number.isInteger(team1Score) || !Number.isInteger(team2Score) || team1Score === team2Score) return false;
+  if (!Number.isSafeInteger(team1Score) || !Number.isSafeInteger(team2Score) ||
+      team1Score < 0 || team2Score < 0 || team1Score === team2Score) return false;
   const winnerScore = winner === "teamA" ? team1Score : team2Score;
   const loserScore = winner === "teamA" ? team2Score : team1Score;
   if (winnerScore <= loserScore) return false;

@@ -24,7 +24,7 @@ import { GameServerStartupExitError, type GameServerExitInfo, type GameServerLau
 import { gameServerRecordKey, type GameServerAttempt } from "./gameServerAttempt.js";
 import { inspectLinuxGameProcessIdentity, isGameProcessIdentity, type GameProcessIdentity } from "./linuxProcess.js";
 import { installRunCsgoAssets, type RunCsgoSource } from "./runCsgoAssets.js";
-import { captureShutdownLogBaseline, collectShutdownEvidence, readGet5FlowAtExit, type Get5FlowAtExit, type ShutdownEvidence, type ShutdownEvidenceCollection, type ShutdownLogHistoryCache } from "./shutdownEvidence.js";
+import { collectShutdownEvidence, type ShutdownEvidence } from "./shutdownEvidence.js";
 import type { RunCsgoAssetTransaction } from "./runCsgoAssetState.js";
 import { legacyRunCsgoFiles } from "./legacyRunCsgoFiles.js";
 import { buildRunCsgoLaunchSpec, type RunCsgoLaunchSpec } from "./runCsgoLaunchSpec.js";
@@ -45,7 +45,7 @@ export interface MatchExecutorOptions {
   demos?: import("./matchDemoLifecycle.js").MatchDemoLifecycle;
   assets?: () => Promise<RunCsgoSource>;
   launcher: GameServerLauncher;
-  records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent"> & Partial<Pick<MatchRecordStore, "readServer" | "readShutdownLogBaseline" | "saveShutdownLogBaseline" | "readServerExitObservation" | "saveServerExitObservation" | "gameServerEngineExecPath" | "listGameServerAttemptIds">>;
+  records?: Pick<MatchRecordStore, "saveServer" | "saveStatus" | "appendEvent"> & Partial<Pick<MatchRecordStore, "readServer" | "readServerExitObservation" | "saveServerExitObservation" | "gameServerEngineExecPath" | "listGameServerAttemptIds">>;
   events?: Pick<RealtimeEventBus, "publish">;
   config: GameServerConfig;
   onServerExit?: (matchId: string, report: MatchServerExitReport, attempt?: GameServerAttempt) => Promise<void> | void;
@@ -131,7 +131,6 @@ export class MatchExecutor {
   private readonly serverExitHandoffs = new Map<string, Promise<void>>();
   private readonly pendingServerExitObservations = new Map<string, PendingServerExitObservation>();
   private readonly pendingControlledShutdowns = new Map<string, { identity: GameProcessIdentity; error: unknown }>();
-  private readonly shutdownLogHistory: ShutdownLogHistoryCache = new Map();
 
   constructor(private readonly options: MatchExecutorOptions) {}
 
@@ -145,7 +144,16 @@ export class MatchExecutor {
     activeAssetRoots.set(assetRoot, gameKey);
     let launchedGame = false;
     try {
-      await this.prepareShutdownEvidence(matchId, signal, attempt);
+      if (process.platform === "linux") {
+        const { inspectLinuxGameRoot } = await import("./linuxProcess.js");
+        if (await inspectLinuxGameRoot(serverRoot) !== "gone") throw new Error("shutdown_log_game_root_busy");
+      }
+      const marker = attempt && this.options.records?.gameServerEngineExecPath?.(matchId, attempt);
+      if (attempt) {
+        if (!marker) throw new Error("game_attempt_launch_assets_unavailable");
+        await assertPlainPath(marker);
+        await mkdir(path.dirname(marker), { recursive: true });
+      }
       signal?.throwIfAborted();
       await this.options.demos?.prepare({ matchId: gameKey, dev: matchPlan.dev === true });
       const launchScriptFingerprint = await this.writeMatchFiles(matchPlan, gameKey, ACTIVE_MATCH_RUNTIME_CFG_PATH);
@@ -153,8 +161,7 @@ export class MatchExecutor {
       await this.options.records?.appendEvent(matchId, { type: "server_preparing", at: new Date().toISOString() });
       this.options.events?.publish({ type: "server_preparing", matchId, accountIds: humanAudience(matchPlan) });
 
-      const marker = attempt && this.options.records?.gameServerEngineExecPath?.(matchId, attempt);
-      if (attempt && (!marker || !launchScriptFingerprint)) throw new Error("game_attempt_launch_assets_unavailable");
+      if (attempt && !launchScriptFingerprint) throw new Error("game_attempt_launch_assets_unavailable");
       const spec = buildRunCsgoLaunchSpec({
         serverRoot, map: matchPlan.map, port: portRange.start, clientPort: portRange.start + 1,
         ...(attempt && marker ? { engineExecMarker: { path: marker, attemptId: gameKey }, launchScriptFingerprint } : {}),
@@ -340,31 +347,8 @@ export class MatchExecutor {
     }
   }
 
-  async readGet5FlowAtExit(matchId: string, attempt: GameServerAttempt): Promise<Get5FlowAtExit> {
-    return retryTemporaryServerIo(() =>
-      readGet5FlowAtExit(this.options.config.serverRoot, gameServerRecordKey(matchId, attempt)));
-  }
-
-  async collectShutdownEvidence(
-    matchId: string, attempt?: GameServerAttempt, includeGet5Flow = false, collection?: ShutdownEvidenceCollection,
-  ): Promise<ShutdownEvidence> {
-    return collectShutdownEvidence(this.options.config.serverRoot, gameServerRecordKey(matchId, attempt),
-      async () => this.options.records?.readShutdownLogBaseline?.(matchId, attempt), includeGet5Flow, collection);
-  }
-
-  private async prepareShutdownEvidence(matchId: string, signal?: AbortSignal, attempt?: GameServerAttempt): Promise<void> {
-    const records = this.options.records;
-    if (!records?.readShutdownLogBaseline || !records.saveShutdownLogBaseline) return;
-    if (await records.readShutdownLogBaseline(matchId, attempt)) throw new Error("shutdown_log_baseline_already_exists");
-    const { serverRoot } = this.options.config;
-    if (process.platform === "linux") {
-      const { inspectLinuxGameRoot } = await import("./linuxProcess.js");
-      if (await inspectLinuxGameRoot(serverRoot) !== "gone") throw new Error("shutdown_log_game_root_busy");
-    }
-    const gameKey = gameServerRecordKey(matchId, attempt);
-    const baseline = await captureShutdownLogBaseline(serverRoot, gameKey, { signal, historyCache: this.shutdownLogHistory });
-    signal?.throwIfAborted();
-    await records.saveShutdownLogBaseline(matchId, baseline, attempt);
+  async collectShutdownEvidence(matchId: string, attempt?: GameServerAttempt): Promise<ShutdownEvidence> {
+    return collectShutdownEvidence(this.options.config.serverRoot, gameServerRecordKey(matchId, attempt));
   }
 
   private async writeMatchFiles(matchPlan: MatchPlan, safeMatchId: string, matchCfgPath: string): Promise<FileFingerprint | undefined> {
@@ -531,6 +515,23 @@ export class MatchExecutor {
     const { matchId, observedAt, exitInfo } = observation;
     const get5Result = await retryTemporaryServerIo(() =>
       readGet5MatchResult(this.options.config.serverRoot, matchId, observedAt));
+    return this.assembleServerExitReport(matchId, exitInfo, get5Result);
+  }
+
+  async readUnreportedNormalServerExitReport(
+    matchId: string, completedAt: string, attempt?: GameServerAttempt,
+  ): Promise<MatchServerExitReport | undefined> {
+    const gameKey = gameServerRecordKey(matchId, attempt);
+    const get5Result = await retryTemporaryServerIo(() =>
+      readGet5MatchResult(this.options.config.serverRoot, gameKey, completedAt, { allowManualFallback: false }));
+    if (get5Result.status !== "normal") return undefined;
+    const exitInfo: GameServerExitInfo = { code: null, signal: null, wrapperExitUnconfirmed: true, output: [] };
+    return this.assembleServerExitReport(gameKey, exitInfo, get5Result);
+  }
+
+  private async assembleServerExitReport(
+    matchId: string, exitInfo: GameServerExitInfo, get5Result: Get5MatchResultClassification,
+  ): Promise<MatchServerExitReport> {
     const competReport = await readCompetMatchStatsReport(this.options.config.serverRoot, matchId);
     return {
       exitInfo, get5Result, competStats: competReport.players,

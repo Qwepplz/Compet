@@ -4,7 +4,7 @@ import type { MatchServerExitObservation, MatchServerExitReport } from "../game/
 import { gameServerAttemptSchema, gameServerRecordKey, type GameServerAttempt } from "../game/gameServerAttempt.js";
 import { z } from "zod";
 import { isValidMr12FinalScore } from "../game/get5MatchResult.js";
-import { shutdownEvidenceSchema, shutdownLogBaselineSchema, type ShutdownEvidence, type ShutdownLogBaseline } from "../game/shutdownEvidence.js";
+import { shutdownEvidenceSchema, type ShutdownEvidence } from "../game/shutdownEvidence.js";
 import { assertPlainPath } from "../shared/managedFiles.js";
 import type { DatabaseSync } from "node:sqlite";
 import type { MatchPlan, MatchSeriesResult } from "../matchmaking/types.js";
@@ -45,7 +45,8 @@ const exitInfoSchema = z.object({
   signal: z.custom<NodeJS.Signals>((value) => typeof value === "string" && /^SIG[A-Z0-9]+$/.test(value)).nullable(),
   signalNumber: z.number().int().positive().optional(),
   wrapperExitUnconfirmed: z.literal(true).optional(),
-  startupFailure: z.literal("before_engine_exec").optional(),
+  startupFailure: z.enum(["before_engine_exec", "invalid_configuration"]).optional(),
+  get5TakeoverLogged: z.boolean().optional(),
   output: z.array(z.string()),
 });
 const serverExitObservationSchema = z.strictObject({
@@ -280,14 +281,6 @@ export class MatchRecordStore {
     await this.saveShutdownCheckpoint(matchId, "server-exit-observed.json", serverExitObservationSchema, observation, attempt);
   }
 
-  async readShutdownLogBaseline(matchId: string, attempt?: GameServerAttempt): Promise<ShutdownLogBaseline | undefined> {
-    return this.readShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema, attempt);
-  }
-
-  async saveShutdownLogBaseline(matchId: string, baseline: ShutdownLogBaseline, attempt?: GameServerAttempt): Promise<void> {
-    await this.saveShutdownCheckpoint(matchId, "shutdown-log-baseline.json", shutdownLogBaselineSchema, baseline, attempt);
-  }
-
   async readShutdownEvidence(matchId: string, attempt?: GameServerAttempt): Promise<ShutdownEvidence | undefined> {
     return this.readShutdownCheckpoint(matchId, "shutdown-evidence.json", shutdownEvidenceSchema, attempt);
   }
@@ -392,7 +385,7 @@ export class MatchRecordStore {
     if (checkpoint.matchId !== gameServerRecordKey(matchId, attempt)) {
       throw new Error("Invalid matchId for " + fileName + ": " + matchId);
     }
-    const options = { pretty: false, durable: true, createParent: fileName === "shutdown-log-baseline.json" };
+    const options = { pretty: false, durable: true, createParent: fileName === "shutdown-evidence.json" };
     if (attempt && fileName === "server-exit-observed.json") {
       await this.saveFirstAttemptExit(matchId, fileName, attempt, options, checkpoint,
         () => this.readShutdownCheckpoint(matchId, fileName, schema, attempt));
