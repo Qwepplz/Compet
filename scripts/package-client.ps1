@@ -115,6 +115,7 @@ foreach ($tool in @($rcedit, $repoLocal7z)) {
 }
 Resolve-CSharpCompiler | Out-Null
 Initialize-ExecutableIconVerifier
+$electronSourceHash = (Get-FileHash -LiteralPath (Join-Path $electronDist "electron.exe") -Algorithm SHA256).Hash
 [CompetExecutableIcon]::ValidateIconSource($iconSource)
 
 if (Test-Path -LiteralPath $stage) {
@@ -154,7 +155,6 @@ Set-ExeVersionInfo `
   -OriginalFilename "Compet Updater.exe" `
   -InternalName "Compet Updater"
 Set-ExeIcon -ExePath $clientExePath -IconPath $iconSource
-Set-ExeIcon -ExePath $electronExePath -IconPath $iconSource
 Set-ExeIcon -ExePath $updaterExePath -IconPath $iconSource
 New-Item -ItemType Directory -Path $appRoot -Force | Out-Null
 
@@ -189,6 +189,9 @@ $forbiddenArchiveEntryPatterns = @(
   "*.map",
   "*.tmp"
 )
+$electronStagedHash = (Get-FileHash -LiteralPath $electronExePath -Algorithm SHA256).Hash
+if ($electronStagedHash -ne $electronSourceHash) { throw "client_electron_runtime_hash_mismatch" }
+
 New-Validated7zArchive -SourceDir $stage -SevenZipPath $repoLocal7z -ArchivePath $archive -RequiredEntries $requiredArchiveEntries -ForbiddenEntryPatterns $forbiddenArchiveEntryPatterns
 $updateBaseUrl = if ($env:COMPET_CLIENT_UPDATE_BASE_URL) { $env:COMPET_CLIENT_UPDATE_BASE_URL } else { "https://qwepplz111.site/update/client" }
 & pwsh -NoProfile -File (Join-Path $repo "scripts\create-update-manifest.ps1") `
